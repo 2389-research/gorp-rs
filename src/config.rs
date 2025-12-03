@@ -1,3 +1,5 @@
+// ABOUTME: Configuration parsing from environment variables for Matrix-Claude bridge
+// ABOUTME: Validates required fields and provides sensible defaults for optional ones
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 
