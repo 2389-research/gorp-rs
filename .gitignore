@@ -2,6 +2,7 @@
 .env
 crypto_store/
 sessions_db/
+.scratch/
 *.swp
 *.swo
 *~
