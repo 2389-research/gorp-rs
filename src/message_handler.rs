@@ -32,7 +32,11 @@ pub async fn handle_message(
     let body = &event.content.body();
 
     // Ignore bot's own messages
-    if sender == client.user_id().unwrap().as_str() {
+    let Some(bot_user_id) = client.user_id() else {
+        tracing::warn!("Bot user_id not available, skipping message");
+        return Ok(());
+    };
+    if sender == bot_user_id.as_str() {
         return Ok(());
     }
 
@@ -42,7 +46,9 @@ pub async fn handle_message(
         return Ok(());
     }
 
-    tracing::info!(sender, room_id = %room.room_id(), message_preview = &body[..body.len().min(50)], "Processing message");
+    // Safe preview generation (respects UTF-8 boundaries)
+    let message_preview: String = body.chars().take(50).collect();
+    tracing::info!(sender, room_id = %room.room_id(), message_preview, "Processing message");
 
     // Load session
     let session = session_store.get_or_create(room.room_id().as_str())?;

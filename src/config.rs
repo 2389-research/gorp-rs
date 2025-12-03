@@ -37,6 +37,11 @@ impl Config {
             .filter(|s| !s.is_empty())
             .collect();
 
+        // Validate that we have at least one allowed user
+        if allowed_users.is_empty() {
+            anyhow::bail!("ALLOWED_USERS must contain at least one valid user ID");
+        }
+
         let claude_binary_path = std::env::var("CLAUDE_BINARY_PATH")
             .unwrap_or_else(|_| "claude".to_string());
         let claude_sdk_url = std::env::var("CLAUDE_SDK_URL").ok();

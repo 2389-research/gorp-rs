@@ -38,6 +38,11 @@ pub async fn invoke_claude(
     session_args: Vec<&str>,
     prompt: &str,
 ) -> Result<String> {
+    // Validate binary path doesn't contain suspicious characters
+    if binary_path.contains("..") || binary_path.contains('\0') {
+        anyhow::bail!("Invalid claude binary path");
+    }
+
     let mut args = vec!["--print", "--output-format", "json"];
     args.extend(session_args);
 

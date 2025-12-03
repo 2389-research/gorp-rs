@@ -55,7 +55,11 @@ pub async fn login(
         anyhow::bail!("Either MATRIX_PASSWORD or MATRIX_ACCESS_TOKEN is required");
     }
 
-    tracing::info!(user_id = %client.user_id().unwrap(), "Logged in successfully");
+    if let Some(user_id) = client.user_id() {
+        tracing::info!(user_id = %user_id, "Logged in successfully");
+    } else {
+        tracing::warn!("Login succeeded but user_id not available");
+    }
 
     Ok(())
 }
