@@ -1,0 +1,13 @@
+{
+  "name": "claude-simple-tui",
+  "version": "0.1.0",
+  "description": "Minimal terminal UI that proxies to the Claude Code CLI",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0"
+  }
+}

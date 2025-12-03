@@ -1,0 +1,10 @@
+[project]
+name = "matrix-bridge"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matrix-nio>=0.24.0",
+    "python-dotenv>=1.2.1",
+]
