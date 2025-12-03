@@ -3,4 +3,5 @@
 pub mod claude;
 pub mod config;
 pub mod matrix_client;
+pub mod message_handler;
 pub mod session;
