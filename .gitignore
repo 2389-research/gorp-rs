@@ -1,0 +1,8 @@
+/target
+.env
+crypto_store/
+sessions_db/
+*.swp
+*.swo
+*~
+.DS_Store
