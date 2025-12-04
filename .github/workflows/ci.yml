@@ -1,3 +1,6 @@
+# ABOUTME: GitHub Actions CI workflow for format checks, clippy linting, and test execution
+# ABOUTME: Runs on all pushes and pull requests with aggressive Cargo.lock-based caching
+
 name: CI
 
 on:
@@ -18,6 +21,18 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: rust-cache-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-cache-${{ runner.os }}-
 
       - name: Run rustfmt check
         run: cargo fmt --all -- --check
