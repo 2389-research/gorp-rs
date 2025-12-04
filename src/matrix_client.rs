@@ -2,10 +2,7 @@
 // ABOUTME: Handles client creation with crypto store and login via password or token
 
 use anyhow::{Context, Result};
-use matrix_sdk::{
-    ruma::OwnedUserId,
-    Client,
-};
+use matrix_sdk::{ruma::OwnedUserId, Client};
 use std::path::Path;
 
 pub async fn create_client(homeserver: &str, _user_id: &str) -> Result<Client> {

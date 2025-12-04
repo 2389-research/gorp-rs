@@ -18,19 +18,19 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let matrix_home_server = std::env::var("MATRIX_HOME_SERVER")
-            .context("MATRIX_HOME_SERVER is required")?;
-        let matrix_user_id = std::env::var("MATRIX_USER_ID")
-            .context("MATRIX_USER_ID is required")?;
-        let matrix_room_id = std::env::var("MATRIX_ROOM_ID")
-            .context("MATRIX_ROOM_ID is required")?;
+        let matrix_home_server =
+            std::env::var("MATRIX_HOME_SERVER").context("MATRIX_HOME_SERVER is required")?;
+        let matrix_user_id =
+            std::env::var("MATRIX_USER_ID").context("MATRIX_USER_ID is required")?;
+        let matrix_room_id =
+            std::env::var("MATRIX_ROOM_ID").context("MATRIX_ROOM_ID is required")?;
         let matrix_password = std::env::var("MATRIX_PASSWORD").ok();
         let matrix_access_token = std::env::var("MATRIX_ACCESS_TOKEN").ok();
         let matrix_device_name = std::env::var("MATRIX_DEVICE_NAME")
             .unwrap_or_else(|_| "claude-matrix-bridge".to_string());
 
-        let allowed_users_str = std::env::var("ALLOWED_USERS")
-            .context("ALLOWED_USERS is required")?;
+        let allowed_users_str =
+            std::env::var("ALLOWED_USERS").context("ALLOWED_USERS is required")?;
         let allowed_users: HashSet<String> = allowed_users_str
             .split(',')
             .map(|s| s.trim().to_string())
@@ -42,8 +42,8 @@ impl Config {
             anyhow::bail!("ALLOWED_USERS must contain at least one valid user ID");
         }
 
-        let claude_binary_path = std::env::var("CLAUDE_BINARY_PATH")
-            .unwrap_or_else(|_| "claude".to_string());
+        let claude_binary_path =
+            std::env::var("CLAUDE_BINARY_PATH").unwrap_or_else(|_| "claude".to_string());
         let claude_sdk_url = std::env::var("CLAUDE_SDK_URL").ok();
 
         Ok(Config {

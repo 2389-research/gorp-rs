@@ -3,10 +3,7 @@
 
 use anyhow::Result;
 use matrix_sdk::{
-    room::Room,
-    ruma::events::room::message::RoomMessageEventContent,
-    Client,
-    RoomState,
+    room::Room, ruma::events::room::message::RoomMessageEventContent, Client, RoomState,
 };
 
 use crate::{claude, config::Config, session::SessionStore};
@@ -63,7 +60,9 @@ pub async fn handle_message(
         config.claude_sdk_url.as_deref(),
         session_args,
         body,
-    ).await {
+    )
+    .await
+    {
         Ok(resp) => {
             tracing::info!(response_length = resp.len(), "Claude responded");
             resp
@@ -72,7 +71,8 @@ pub async fn handle_message(
             tracing::error!(error = %e, "Claude invocation failed");
             let error_msg = format!("⚠️ Claude error: {}", e);
             room.typing_notice(false).await?;
-            room.send(RoomMessageEventContent::text_plain(&error_msg)).await?;
+            room.send(RoomMessageEventContent::text_plain(&error_msg))
+                .await?;
             return Ok(());
         }
     };
@@ -81,7 +81,8 @@ pub async fn handle_message(
     room.typing_notice(false).await?;
 
     // Send response
-    room.send(RoomMessageEventContent::text_plain(&response)).await?;
+    room.send(RoomMessageEventContent::text_plain(&response))
+        .await?;
 
     // Mark session as started
     session_store.mark_started(room.room_id().as_str())?;

@@ -19,8 +19,8 @@ struct ContentBlock {
 }
 
 pub fn parse_response(json: &str) -> Result<String> {
-    let response: ClaudeResponse = serde_json::from_str(json)
-        .context("Failed to parse Claude JSON response")?;
+    let response: ClaudeResponse =
+        serde_json::from_str(json).context("Failed to parse Claude JSON response")?;
 
     let text = response
         .content
@@ -62,11 +62,14 @@ pub async fn invoke_claude(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Claude CLI failed with exit code {:?}: {}", output.status.code(), stderr);
+        anyhow::bail!(
+            "Claude CLI failed with exit code {:?}: {}",
+            output.status.code(),
+            stderr
+        );
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("Claude output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Claude output is not valid UTF-8")?;
 
     parse_response(&stdout)
 }

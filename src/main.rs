@@ -3,10 +3,7 @@
 
 use anyhow::Result;
 use matrix_bridge::{config::Config, matrix_client, message_handler, session::SessionStore};
-use matrix_sdk::{
-    config::SyncSettings,
-    ruma::events::room::message::SyncRoomMessageEvent,
-};
+use matrix_sdk::{config::SyncSettings, ruma::events::room::message::SyncRoomMessageEvent};
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -15,8 +12,7 @@ async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -40,10 +36,8 @@ async fn main() -> Result<()> {
     tracing::info!("Session store initialized");
 
     // Create Matrix client
-    let client = matrix_client::create_client(
-        &config.matrix_home_server,
-        &config.matrix_user_id,
-    ).await?;
+    let client =
+        matrix_client::create_client(&config.matrix_home_server, &config.matrix_user_id).await?;
 
     // Login
     matrix_client::login(
@@ -52,7 +46,8 @@ async fn main() -> Result<()> {
         config.matrix_password.as_deref(),
         config.matrix_access_token.as_deref(),
         &config.matrix_device_name,
-    ).await?;
+    )
+    .await?;
 
     // Join room
     let room_id: matrix_sdk::ruma::OwnedRoomId = config.matrix_room_id.parse()?;
@@ -63,28 +58,28 @@ async fn main() -> Result<()> {
     let config_clone = Arc::new(config);
     let session_store_clone = Arc::new(session_store);
 
-    client.add_event_handler(
-        move |event: SyncRoomMessageEvent, room, client| {
-            let config = Arc::clone(&config_clone);
-            let session_store = Arc::clone(&session_store_clone);
-            async move {
-                // Extract original message event
-                let Some(original_event) = event.as_original() else {
-                    return;
-                };
+    client.add_event_handler(move |event: SyncRoomMessageEvent, room, client| {
+        let config = Arc::clone(&config_clone);
+        let session_store = Arc::clone(&session_store_clone);
+        async move {
+            // Extract original message event
+            let Some(original_event) = event.as_original() else {
+                return;
+            };
 
-                if let Err(e) = message_handler::handle_message(
-                    room,
-                    original_event.clone(),
-                    client,
-                    (*config).clone(),
-                    (*session_store).clone(),
-                ).await {
-                    tracing::error!(error = %e, "Error handling message");
-                }
+            if let Err(e) = message_handler::handle_message(
+                room,
+                original_event.clone(),
+                client,
+                (*config).clone(),
+                (*session_store).clone(),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "Error handling message");
             }
-        },
-    );
+        }
+    });
 
     tracing::info!("Message handler registered, starting sync loop");
 
