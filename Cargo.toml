@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-matrix-sdk = { version = "0.7", features = ["e2e-encryption"] }
+matrix-sdk = { version = "0.14", features = ["e2e-encryption"] }
 sled = "0.34"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
