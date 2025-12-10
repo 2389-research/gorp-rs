@@ -105,11 +105,24 @@ async fn main() -> Result<()> {
                         "Auto-joining room invite from allowed user"
                     );
 
-                    if let Err(e) = room.join().await {
-                        tracing::error!(error = %e, "Failed to join room");
-                    } else {
-                        tracing::info!(room_id = %room.room_id(), "Successfully joined room");
+                    tracing::debug!("About to call room.join().await");
+                    match room.join().await {
+                        Ok(response) => {
+                            tracing::info!(
+                                room_id = %room.room_id(),
+                                "Successfully joined room - join response received"
+                            );
+                            tracing::debug!("Join response: {:?}", response);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                room_id = %room.room_id(),
+                                "Failed to join room - error returned"
+                            );
+                        }
                     }
+                    tracing::debug!("room.join().await completed without panic");
                 } else {
                     tracing::warn!(
                         room_id = %room.room_id(),
