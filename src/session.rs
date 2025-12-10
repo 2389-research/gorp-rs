@@ -1,16 +1,48 @@
-// ABOUTME: Persistent session storage for Matrix room conversations using sled database.
-// ABOUTME: Each room has a unique Claude session ID that survives bot restarts.
-use anyhow::Result;
+// ABOUTME: Persistent session storage for Matrix room conversations using SQLite database.
+// ABOUTME: Maps channel names to Claude sessions backed by workspace directories.
+use anyhow::{Context, Result};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub session_id: String,
-    pub started: bool,
+/// Recursively copy all contents from source directory to destination
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(src).context("Failed to read template directory")? {
+        let entry = entry.context("Failed to read directory entry")?;
+        let file_type = entry.file_type().context("Failed to get file type")?;
+        let src_path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = dst.join(&file_name);
+
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&dst_path)
+                .with_context(|| format!("Failed to create directory: {}", dst_path.display()))?;
+            copy_dir_contents(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path).with_context(|| {
+                format!(
+                    "Failed to copy file from {} to {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
-impl Session {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Channel {
+    pub channel_name: String,
+    pub room_id: String,
+    pub session_id: String,
+    pub directory: String,
+    pub started: bool,
+    pub created_at: String,
+}
+
+impl Channel {
     pub fn cli_args(&self) -> Vec<&str> {
         if self.started {
             vec!["--resume", &self.session_id]
@@ -22,39 +54,252 @@ impl Session {
 
 #[derive(Clone)]
 pub struct SessionStore {
-    db: sled::Db,
+    db: Arc<Mutex<Connection>>,
+    workspace_path: PathBuf,
 }
 
 impl SessionStore {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let db = sled::open(path)?;
-        Ok(SessionStore { db })
+    pub fn new<P: AsRef<Path>>(workspace_path: P) -> Result<Self> {
+        let workspace_path = workspace_path.as_ref().to_path_buf();
+
+        // Create workspace directory if it doesn't exist
+        std::fs::create_dir_all(&workspace_path).context("Failed to create workspace directory")?;
+
+        let db_path = workspace_path.join("sessions.db");
+        let conn = Connection::open(&db_path).context("Failed to open SQLite database")?;
+
+        // Create channels table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS channels (
+                channel_name TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL UNIQUE,
+                session_id TEXT NOT NULL,
+                directory TEXT NOT NULL,
+                started INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        tracing::info!(
+            workspace = %workspace_path.display(),
+            db = %db_path.display(),
+            "SessionStore initialized"
+        );
+
+        Ok(SessionStore {
+            db: Arc::new(Mutex::new(conn)),
+            workspace_path,
+        })
     }
 
-    pub fn get_or_create(&self, room_id: &str) -> Result<Session> {
-        if let Some(data) = self.db.get(room_id)? {
-            let session: Session = serde_json::from_slice(&data)?;
-            Ok(session)
-        } else {
-            let session = Session {
-                session_id: uuid::Uuid::new_v4().to_string(),
-                started: false,
-            };
-            self.save(room_id, &session)?;
-            Ok(session)
+    /// Get channel by room ID
+    pub fn get_by_room(&self, room_id: &str) -> Result<Option<Channel>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT channel_name, room_id, session_id, directory, started, created_at
+             FROM channels WHERE room_id = ?1",
+        )?;
+
+        let channel = stmt.query_row(params![room_id], |row| {
+            Ok(Channel {
+                channel_name: row.get(0)?,
+                room_id: row.get(1)?,
+                session_id: row.get(2)?,
+                directory: row.get(3)?,
+                started: row.get::<_, i32>(4)? != 0,
+                created_at: row.get(5)?,
+            })
+        });
+
+        match channel {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
-    pub fn mark_started(&self, room_id: &str) -> Result<()> {
-        let mut session = self.get_or_create(room_id)?;
-        session.started = true;
-        self.save(room_id, &session)?;
+    /// Get channel by name
+    pub fn get_by_name(&self, channel_name: &str) -> Result<Option<Channel>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT channel_name, room_id, session_id, directory, started, created_at
+             FROM channels WHERE channel_name = ?1",
+        )?;
+
+        let channel = stmt.query_row(params![channel_name], |row| {
+            Ok(Channel {
+                channel_name: row.get(0)?,
+                room_id: row.get(1)?,
+                session_id: row.get(2)?,
+                directory: row.get(3)?,
+                started: row.get::<_, i32>(4)? != 0,
+                created_at: row.get(5)?,
+            })
+        });
+
+        match channel {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Create a new channel with auto-generated session ID and directory
+    pub fn create_channel(&self, channel_name: &str, room_id: &str) -> Result<Channel> {
+        // Validate channel_name
+        if !channel_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            anyhow::bail!("Invalid channel name: must be alphanumeric with dashes/underscores");
+        }
+        if channel_name.is_empty() || channel_name.len() > 64 {
+            anyhow::bail!("Channel name must be 1-64 characters");
+        }
+        if channel_name.starts_with('.') || channel_name.starts_with('-') {
+            anyhow::bail!("Channel name cannot start with . or -");
+        }
+
+        let channel_dir = self.workspace_path.join(channel_name);
+
+        let channel = Channel {
+            channel_name: channel_name.to_string(),
+            room_id: room_id.to_string(),
+            session_id: uuid::Uuid::new_v4().to_string(),
+            directory: channel_dir.to_string_lossy().to_string(),
+            started: false,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        // Try database insert first (prevents race condition)
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
+
+        match db.execute(
+            "INSERT INTO channels (channel_name, room_id, session_id, directory, started, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &channel.channel_name,
+                &channel.room_id,
+                &channel.session_id,
+                &channel.directory,
+                if channel.started { 1 } else { 0 },
+                &channel.created_at,
+            ],
+        ) {
+            Ok(_) => {
+                // Release lock before file I/O
+                drop(db);
+
+                // Create directory only after successful DB insert
+                std::fs::create_dir_all(&channel_dir)
+                    .context("Failed to create channel directory")?;
+
+                // Copy template directory if it exists
+                let template_dir = self.workspace_path.join("template");
+                if template_dir.exists() && template_dir.is_dir() {
+                    copy_dir_contents(&template_dir, &channel_dir)
+                        .context("Failed to copy template directory contents")?;
+                    tracing::info!(
+                        template = %template_dir.display(),
+                        destination = %channel_dir.display(),
+                        "Copied template to new channel"
+                    );
+                }
+
+                tracing::info!(
+                    channel_name = %channel_name,
+                    room_id = %room_id,
+                    session_id = %channel.session_id,
+                    directory = %channel.directory,
+                    "Channel created"
+                );
+
+                Ok(channel)
+            }
+            Err(e) => {
+                if let rusqlite::Error::SqliteFailure(sqlite_err, _) = &e {
+                    if sqlite_err.code == rusqlite::ErrorCode::ConstraintViolation {
+                        anyhow::bail!("Channel name or room already exists");
+                    }
+                }
+                Err(e.into())
+            }
+        }
+    }
+
+    /// List all channels
+    pub fn list_all(&self) -> Result<Vec<Channel>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT channel_name, room_id, session_id, directory, started, created_at
+             FROM channels ORDER BY created_at DESC",
+        )?;
+
+        let channels = stmt
+            .query_map([], |row| {
+                Ok(Channel {
+                    channel_name: row.get(0)?,
+                    room_id: row.get(1)?,
+                    session_id: row.get(2)?,
+                    directory: row.get(3)?,
+                    started: row.get::<_, i32>(4)? != 0,
+                    created_at: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(channels)
+    }
+
+    /// Delete a channel by name
+    pub fn delete_channel(&self, channel_name: &str) -> Result<()> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "DELETE FROM channels WHERE channel_name = ?1",
+            params![channel_name],
+        )?;
+
+        tracing::info!(channel_name = %channel_name, "Channel deleted");
         Ok(())
     }
 
-    fn save(&self, room_id: &str, session: &Session) -> Result<()> {
-        let data = serde_json::to_vec(session)?;
-        self.db.insert(room_id, data)?;
+    /// Mark channel as started
+    pub fn mark_started(&self, room_id: &str) -> Result<()> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "UPDATE channels SET started = 1 WHERE room_id = ?1",
+            params![room_id],
+        )?;
         Ok(())
+    }
+
+    /// Get channel by session ID (for webhook lookups)
+    pub fn get_by_session_id(&self, session_id: &str) -> Result<Option<Channel>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT channel_name, room_id, session_id, directory, started, created_at
+             FROM channels WHERE session_id = ?1",
+        )?;
+
+        let channel = stmt.query_row(params![session_id], |row| {
+            Ok(Channel {
+                channel_name: row.get(0)?,
+                room_id: row.get(1)?,
+                session_id: row.get(2)?,
+                directory: row.get(3)?,
+                started: row.get::<_, i32>(4)? != 0,
+                created_at: row.get(5)?,
+            })
+        });
+
+        match channel {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 }

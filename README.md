@@ -1,14 +1,15 @@
 # Matrix-Claude Bridge
 
-Rust bot that bridges Matrix room messages to Claude Code CLI with E2E encryption and persistent sessions.
+Rust bot that creates dedicated Claude Code channels via Matrix, each backed by persistent workspace directories and webhook automation support.
 
 ## Features
 
+- **Channel-Based Architecture**: Each channel = dedicated Matrix room + Claude session + workspace directory
+- **Smart Session Persistence**: Channels automatically reuse the same Claude conversation every time
+- **Webhook Integration**: External triggers (cron, CI/CD) can inject prompts into channels via HTTP
 - **E2E Encryption**: Full support for encrypted Matrix rooms
 - **Whitelist Auth**: Only respond to approved users
-- **Persistent Sessions**: Conversation context survives restarts
-- **Structured Logging**: Trace message flow with tracing
-- **Zero Prefix**: Responds to all messages (no `!command` needed)
+- **Workspace Management**: Organized directory structure for all channels
 
 ## Prerequisites
 
@@ -21,11 +22,31 @@ Rust bot that bridges Matrix room messages to Claude Code CLI with E2E encryptio
 
 ### 1. Configure
 
-Copy `.env.example` to `.env` and edit with your credentials:
+Create a `config.toml` file in the project root:
 
 ```bash
-cp .env.example .env
-# Edit .env with your Matrix and Claude settings
+cp config.toml.example config.toml
+# Edit config.toml with your Matrix credentials
+```
+
+Example `config.toml`:
+
+```toml
+[matrix]
+home_server = "https://matrix.org"
+user_id = "@yourbot:matrix.org"
+password = "your-password"  # or use access_token
+device_name = "claude-matrix-bridge"
+allowed_users = ["@you:matrix.org"]
+
+[claude]
+binary_path = "claude"
+
+[webhook]
+port = 3000
+
+[workspace]
+path = "./workspace"
 ```
 
 ### 2. Build and Run
@@ -45,18 +66,80 @@ The bot creates a new Matrix device on first login. Verify it from another clien
 
 ## Usage
 
-Send any message in the configured room (as a whitelisted user). The bot responds with Claude's output. Conversation context persists across messages and bot restarts.
+### Creating a Channel
+
+1. DM the bot: `!create PA` (creates a "PA" channel)
+2. Bot creates:
+   - `workspace/PA/` directory
+   - Matrix room "Claude: PA"
+   - Persistent Claude session
+3. Join the room and start chatting!
+
+### Channel Template (Optional)
+
+Populate `workspace/template/` with files you want in every new channel:
+
+```bash
+workspace/template/
+├── CLAUDE.md              # Project-specific instructions
+├── .mcp-servers.json      # MCP server configs
+└── .gitignore             # Channel gitignore
+```
+
+When you create a new channel, all template contents are automatically copied to the new channel's directory. Perfect for:
+- Standardized CLAUDE.md instructions
+- Pre-configured MCP servers
+- Project boilerplate files
+- Shared tooling configs
+
+### Channel Commands
+
+**DM Commands (Orchestrator):**
+- `!create <name>` - Create a new channel
+- `!list` - Show all your channels
+- `!help` - Show help
+
+**Room Commands:**
+- `!status` - Show channel info (includes webhook URL and session ID)
+- `!help` - Show help
+
+### Webhook Integration
+
+Each channel has a webhook for automation:
+
+```bash
+# Example: Daily news at 5am
+0 5 * * * curl -X POST http://localhost:3000/webhook/session/<session-id> \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "send me today'\''s tech news"}'
+```
+
+Get your session ID with `!status` in the channel room.
 
 ## Configuration
 
-See `.env.example` for all available options:
+Configuration is loaded from `config.toml` with optional environment variable overrides:
 
-- **MATRIX_HOME_SERVER**: Your Matrix homeserver URL
-- **MATRIX_USER_ID**: Bot's Matrix user ID
-- **MATRIX_ROOM_ID**: Room ID to monitor
-- **MATRIX_PASSWORD**: Bot password (or use MATRIX_ACCESS_TOKEN)
-- **ALLOWED_USERS**: Comma-separated list of authorized user IDs
-- **CLAUDE_BINARY_PATH**: Path to claude binary (defaults to `claude`)
+**Matrix Settings:**
+- `matrix.home_server` (required) - Your Matrix homeserver URL
+- `matrix.user_id` (required) - Bot's Matrix user ID
+- `matrix.password` - Bot password (or use `access_token`)
+- `matrix.access_token` - Bot access token (alternative to password)
+- `matrix.device_name` - Device name (default: "claude-matrix-bridge")
+- `matrix.allowed_users` - Array of authorized user IDs
+
+**Claude Settings:**
+- `claude.binary_path` - Path to claude binary (default: "claude")
+- `claude.sdk_url` - Optional custom Claude SDK URL
+
+**Webhook Settings:**
+- `webhook.port` - HTTP server port (default: 3000)
+
+**Workspace Settings:**
+- `workspace.path` - Directory for channel workspaces (default: "./workspace")
+
+Environment variables override config file values:
+- `MATRIX_HOME_SERVER`, `MATRIX_USER_ID`, `MATRIX_PASSWORD`, etc.
 
 ## Troubleshooting
 
@@ -75,12 +158,22 @@ See `.env.example` for all available options:
 
 ## Architecture
 
-- `src/config.rs` - Environment variable parsing
-- `src/session.rs` - Persistent session storage (sled)
+```
+workspace/
+├── sessions.db          # SQLite: channel_name ↔ room_id ↔ session_id ↔ directory
+├── PA/                  # Channel workspace directories
+├── dev-help/
+└── news-bot/
+```
+
+**Code Structure:**
+- `src/config.rs` - TOML config loading with env var overrides
+- `src/session.rs` - SQLite-backed channel management
+- `src/webhook.rs` - HTTP server for external triggers
 - `src/claude.rs` - CLI spawning and JSON parsing
 - `src/matrix_client.rs` - Matrix login and crypto setup
-- `src/message_handler.rs` - Auth checks and orchestration
-- `src/main.rs` - Entry point and sync loop
+- `src/message_handler.rs` - Auth checks, channel commands, orchestration
+- `src/main.rs` - Entry point, sync loop, webhook server spawn
 
 ## License
 

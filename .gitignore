@@ -1,7 +1,10 @@
 /target
 .env
+config.toml
 crypto_store/
 sessions_db/
+workspace/
+!workspace/template/
 .scratch/
 *.swp
 *.swo

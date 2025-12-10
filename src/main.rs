@@ -16,8 +16,8 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                // Default to info, but suppress backup key warnings
-                "info,matrix_sdk::crypto::store=error".into()
+                // Default to info, but suppress backup and crypto warnings
+                "info,matrix_sdk_crypto::backups=error,matrix_sdk_crypto::session_manager::sessions=error".into()
             }),
         )
         .with(tracing_subscriber::fmt::layer())
