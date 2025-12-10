@@ -1,12 +1,16 @@
 /target
 .env
 config.toml
+config.toml.backup
 crypto_store/
 sessions_db/
 workspace/
 !workspace/template/
+test-workspace/
+test-bot*.log
 .scratch/
 *.swp
 *.swo
 *~
 .DS_Store
+test-accounts.txt

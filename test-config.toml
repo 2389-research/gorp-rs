@@ -1,0 +1,20 @@
+# Test Configuration for Encryption Testing
+# Copy this to config.toml and fill in with test account credentials
+
+[matrix]
+home_server = "https://matrix.org"
+user_id = "@harpertest1:matrix.org"
+password = "ndg@VQA0ajr@drt5pqz"
+device_name = "test-bot-encryption"
+allowed_users = ["@harpertest1:matrix.org"]  # Add test user account here
+room_prefix = "TestBot"
+
+[claude]
+binary_path = "claude"
+
+[webhook]
+port = 3000
+host = "localhost"
+
+[workspace]
+path = "./test-workspace"
