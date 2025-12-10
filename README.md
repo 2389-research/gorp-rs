@@ -43,7 +43,7 @@ allowed_users = ["@you:matrix.org"]
 binary_path = "claude"
 
 [webhook]
-port = 3000
+port = 13000
 
 [workspace]
 path = "./workspace"
@@ -109,7 +109,7 @@ Each channel has a webhook for automation:
 
 ```bash
 # Example: Daily news at 5am
-0 5 * * * curl -X POST http://localhost:3000/webhook/session/<session-id> \
+0 5 * * * curl -X POST http://localhost:13000/webhook/session/<session-id> \
   -H "Content-Type: application/json" \
   -d '{"prompt": "send me today'\''s tech news"}'
 ```
@@ -133,7 +133,7 @@ Configuration is loaded from `config.toml` with optional environment variable ov
 - `claude.sdk_url` - Optional custom Claude SDK URL
 
 **Webhook Settings:**
-- `webhook.port` - HTTP server port (default: 3000)
+- `webhook.port` - HTTP server port (default: 13000)
 
 **Workspace Settings:**
 - `workspace.path` - Directory for channel workspaces (default: "./workspace")

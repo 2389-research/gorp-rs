@@ -61,7 +61,7 @@ fn default_claude_binary() -> String {
 }
 
 fn default_webhook_port() -> u16 {
-    3000
+    13000
 }
 
 fn default_webhook_host() -> String {

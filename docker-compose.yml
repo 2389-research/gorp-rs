@@ -1,0 +1,28 @@
+# ABOUTME: Docker Compose configuration for Matrix-Claude bridge
+# ABOUTME: Manages volumes, environment variables, and restart policy
+version: '3.8'
+
+services:
+  matrix-bridge:
+    build: .
+    image: matrix-claude-bridge:latest
+    container_name: matrix-claude-bridge
+    restart: unless-stopped
+
+    # Environment variables from .env file
+    env_file:
+      - .env
+
+    # Persistent volumes for session and crypto data
+    volumes:
+      - ./sessions_db:/app/sessions_db
+      - ./crypto_store:/app/crypto_store
+      # Mount claude binary from host (optional - comment out if claude is in PATH)
+      # - /usr/local/bin/claude:/usr/local/bin/claude:ro
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

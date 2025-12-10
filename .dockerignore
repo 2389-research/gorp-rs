@@ -1,0 +1,8 @@
+target/
+sessions_db/
+crypto_store/
+.env
+.git/
+.gitignore
+README.md
+*.md

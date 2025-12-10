@@ -32,8 +32,8 @@ binary_path = "claude"
 # sdk_url = "https://your-custom-sdk.com"
 
 [webhook]
-# Port for the webhook HTTP server (default: 3000)
-port = 3000
+# Port for the webhook HTTP server (default: 13000)
+port = 13000
 
 # Host for webhook URLs (default: "localhost")
 # This is used when displaying webhook URLs to users
