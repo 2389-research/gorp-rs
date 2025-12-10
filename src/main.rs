@@ -62,13 +62,59 @@ async fn main() -> Result<()> {
     let config_arc = Arc::new(config);
     let session_store_arc = Arc::new(session_store);
 
-    // Clone Arcs for webhook server
+    // Clone Arcs for all handlers
     let webhook_config = Arc::clone(&config_arc);
     let webhook_session_store = Arc::clone(&session_store_arc);
+    let config_for_invite = Arc::clone(&config_arc);
+    let config_for_messages = Arc::clone(&config_arc);
+    let session_store_for_messages = Arc::clone(&session_store_arc);
 
+    // Auto-join room invites from allowed users
+    client.add_event_handler(
+        move |ev: matrix_sdk::ruma::events::room::member::StrippedRoomMemberEvent,
+              client: Client,
+              room: matrix_sdk::room::Room| {
+            let config = Arc::clone(&config_for_invite);
+            async move {
+                if ev.state_key != client.user_id().unwrap() {
+                    return; // Not an invite for us
+                }
+
+                if room.state() != matrix_sdk::RoomState::Invited {
+                    return; // Not an invite
+                }
+
+                // Check if inviter is in allowed_users
+                let allowed_users = config.allowed_users_set();
+                let inviter = ev.sender.as_str();
+
+                if allowed_users.contains(inviter) {
+                    tracing::info!(
+                        room_id = %room.room_id(),
+                        inviter = %inviter,
+                        "Auto-joining room invite from allowed user"
+                    );
+
+                    if let Err(e) = room.join().await {
+                        tracing::error!(error = %e, "Failed to join room");
+                    } else {
+                        tracing::info!(room_id = %room.room_id(), "Successfully joined room");
+                    }
+                } else {
+                    tracing::warn!(
+                        room_id = %room.room_id(),
+                        inviter = %inviter,
+                        "Ignoring room invite from unauthorized user"
+                    );
+                }
+            }
+        },
+    );
+
+    // Register message handler
     client.add_event_handler(move |event: SyncRoomMessageEvent, room, client| {
-        let config = Arc::clone(&config_arc);
-        let session_store = Arc::clone(&session_store_arc);
+        let config = Arc::clone(&config_for_messages);
+        let session_store = Arc::clone(&session_store_for_messages);
         async move {
             // Extract original message event
             let Some(original_event) = event.as_original() else {
