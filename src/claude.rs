@@ -6,6 +6,15 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct PermissionDenial {
+    tool_name: Option<String>,
+    tool_use_id: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ClaudeResponse {
     #[serde(default)]
     result: Option<String>,
@@ -17,6 +26,8 @@ struct ClaudeResponse {
     error: Option<String>,
     #[serde(default)]
     message: Option<String>,
+    #[serde(default)]
+    permission_denials: Vec<PermissionDenial>,
 }
 
 pub fn parse_response(json: &str) -> Result<String> {
@@ -26,6 +37,27 @@ pub fn parse_response(json: &str) -> Result<String> {
     // If there's a result field, return it
     if let Some(result) = response.result {
         return Ok(result);
+    }
+
+    // Handle error_during_execution - this happens when Claude hits permission denials or other runtime errors
+    if response.subtype.as_deref() == Some("error_during_execution") {
+        let mut error_msg = String::from("Claude encountered an error during execution");
+
+        // Check for permission denials (MCP tools that were blocked)
+        if !response.permission_denials.is_empty() {
+            error_msg.push_str(":\n\nPermission Denials:");
+            for denial in &response.permission_denials {
+                if let Some(tool) = &denial.tool_name {
+                    error_msg.push_str(&format!("\n- Tool: {}", tool));
+                    if let Some(reason) = &denial.reason {
+                        error_msg.push_str(&format!(" ({})", reason));
+                    }
+                }
+            }
+            error_msg.push_str("\n\nPlease approve the tool permissions and try again.");
+        }
+
+        anyhow::bail!("{}", error_msg);
     }
 
     // If no result but there's an error indicator, provide helpful message
@@ -41,7 +73,11 @@ pub fn parse_response(json: &str) -> Result<String> {
         );
     }
 
-    // If no result field at all, show what we got
+    // If no result field at all, show what we got (log full JSON for debugging)
+    tracing::error!(
+        full_json = %json,
+        "Claude response missing 'result' field - full JSON logged"
+    );
     let error_details = response
         .error
         .or(response.message)
@@ -110,11 +146,6 @@ pub async fn invoke_claude(
 
     tracing::debug!(stdout_preview = %stdout.chars().take(500).collect::<String>(), "Claude raw output");
 
-    parse_response(&stdout).inspect_err(|e| {
-        tracing::error!(
-            error = %e,
-            stdout_sample = %stdout.chars().take(1000).collect::<String>(),
-            "Failed to parse Claude response"
-        );
-    })
+    // parse_response now handles its own error logging with full JSON
+    parse_response(&stdout)
 }

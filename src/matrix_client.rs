@@ -2,7 +2,15 @@
 // ABOUTME: Handles client creation with crypto store and login via password or token
 
 use anyhow::{Context, Result};
-use matrix_sdk::{ruma::OwnedUserId, Client};
+use matrix_sdk::{
+    ruma::{
+        api::client::room::create_room::v3::Request as CreateRoomRequest,
+        assign,
+        events::{room::encryption::RoomEncryptionEventContent, EmptyStateKey, InitialStateEvent},
+        OwnedRoomId, OwnedUserId,
+    },
+    Client,
+};
 use std::path::Path;
 
 pub async fn create_client(homeserver: &str, _user_id: &str) -> Result<Client> {
@@ -57,6 +65,70 @@ pub async fn login(
     } else {
         tracing::warn!("Login succeeded but user_id not available");
     }
+
+    Ok(())
+}
+
+/// Create a new private encrypted room and return its ID
+pub async fn create_room(client: &Client, room_name: &str) -> Result<OwnedRoomId> {
+    tracing::info!(room_name, "Creating new private encrypted room");
+
+    // Enable E2E encryption by default (uses MegolmV1AesSha2)
+    let encryption_event = InitialStateEvent {
+        content: RoomEncryptionEventContent::with_recommended_defaults(),
+        state_key: EmptyStateKey,
+    };
+
+    let request = assign!(CreateRoomRequest::new(), {
+        name: Some(room_name.to_string()),
+        is_direct: true,
+        visibility: matrix_sdk::ruma::api::client::room::Visibility::Private,
+        preset: Some(matrix_sdk::ruma::api::client::room::create_room::v3::RoomPreset::TrustedPrivateChat),
+        initial_state: vec![encryption_event.to_raw_any()],
+    });
+
+    let room = client
+        .create_room(request)
+        .await
+        .context("Failed to create room")?;
+
+    let room_id = room.room_id().to_owned();
+    tracing::info!(%room_id, "Encrypted room created successfully");
+
+    Ok(room_id)
+}
+
+/// Invite a user to a room
+pub async fn invite_user(client: &Client, room_id: &OwnedRoomId, user_id: &str) -> Result<()> {
+    tracing::info!(%room_id, user_id, "Inviting user to room");
+
+    let user_id_parsed: OwnedUserId = user_id.parse()?;
+    let room = client.get_room(room_id).context("Room not found")?;
+
+    room.invite_user_by_id(&user_id_parsed)
+        .await
+        .context("Failed to invite user")?;
+
+    tracing::info!(%room_id, user_id, "User invited successfully");
+
+    Ok(())
+}
+
+/// Request verification with a user
+pub async fn request_verification(_client: &Client, user_id: &str) -> Result<()> {
+    tracing::info!(
+        user_id,
+        "Requesting verification with user (automatic after sync)"
+    );
+
+    // In matrix-sdk 0.7, verification is typically initiated by the other user
+    // or happens automatically when they message us. We'll log that we're ready
+    // for verification but won't force it.
+
+    tracing::info!(
+        user_id,
+        "Bot is ready to accept verification requests from this user"
+    );
 
     Ok(())
 }
