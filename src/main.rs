@@ -8,7 +8,11 @@ use matrix_bridge::{
 };
 use matrix_sdk::{config::SyncSettings, ruma::events::room::message::SyncRoomMessageEvent, Client};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Timeout for initial sync operation (uploading device keys, receiving room state)
+const INITIAL_SYNC_TIMEOUT_SECS: u64 = 60;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -66,18 +70,67 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    tracing::info!("Bot ready - DM me to create Claude rooms!");
-
-    // Register message handler
+    // Wrap config and session store in Arc for sharing across handlers
     let config_arc = Arc::new(config);
     let session_store_arc = Arc::new(session_store);
 
-    // Clone Arcs for all handlers
-    let webhook_config = Arc::clone(&config_arc);
-    let webhook_session_store = Arc::clone(&session_store_arc);
-    let config_for_invite = Arc::clone(&config_arc);
-    let config_for_messages = Arc::clone(&config_arc);
-    let session_store_for_messages = Arc::clone(&session_store_arc);
+    // Start webhook server in background (can run before initial sync)
+    let webhook_port = config_arc.webhook.port;
+    let webhook_store = (*session_store_arc).clone();
+    let webhook_client = client.clone();
+    let webhook_config_arc = Arc::clone(&config_arc);
+    tokio::spawn(async move {
+        if let Err(e) = webhook::start_webhook_server(
+            webhook_port,
+            webhook_store,
+            webhook_client,
+            webhook_config_arc,
+        )
+        .await
+        {
+            tracing::error!(error = %e, "Webhook server failed");
+        }
+    });
+
+    // Perform initial sync BEFORE registering event handlers
+    // This ensures device encryption keys are uploaded and room keys are received
+    // before any events are processed. Prevents race conditions with encrypted rooms.
+    tracing::info!("Performing initial sync to set up encryption...");
+    let response = tokio::time::timeout(
+        Duration::from_secs(INITIAL_SYNC_TIMEOUT_SECS),
+        client.sync_once(SyncSettings::default()),
+    )
+    .await
+    .context("Initial sync timed out - homeserver may be unresponsive")?
+    .context("Initial sync failed - unable to establish encryption keys with homeserver")?;
+
+    tracing::info!("Initial sync complete - encryption keys exchanged");
+
+    // NOW register event handlers after encryption is established
+    // This prevents handlers from firing before the client is ready
+    register_event_handlers(&client, &config_arc, &session_store_arc);
+    tracing::info!("Event handlers registered");
+
+    tracing::info!("Bot ready - DM me to create Claude rooms!");
+
+    // Start continuous sync loop with the sync token from initial sync
+    let settings = SyncSettings::default().token(response.next_batch);
+    tracing::info!("Starting continuous sync loop");
+    client.sync(settings).await?;
+
+    Ok(())
+}
+
+/// Registers all event handlers for the Matrix client.
+/// Called AFTER initial sync to ensure encryption is established before processing events.
+fn register_event_handlers(
+    client: &Client,
+    config_arc: &Arc<Config>,
+    session_store_arc: &Arc<SessionStore>,
+) {
+    let config_for_invite = Arc::clone(config_arc);
+    let config_for_messages = Arc::clone(config_arc);
+    let session_store_for_messages = Arc::clone(session_store_arc);
 
     // Auto-join room invites from allowed users
     client.add_event_handler(
@@ -105,24 +158,21 @@ async fn main() -> Result<()> {
                         "Auto-joining room invite from allowed user"
                     );
 
-                    tracing::debug!("About to call room.join().await");
                     match room.join().await {
-                        Ok(response) => {
+                        Ok(_) => {
                             tracing::info!(
                                 room_id = %room.room_id(),
-                                "Successfully joined room - join response received"
+                                "Successfully joined room"
                             );
-                            tracing::debug!("Join response: {:?}", response);
                         }
                         Err(e) => {
                             tracing::error!(
                                 error = %e,
                                 room_id = %room.room_id(),
-                                "Failed to join room - error returned"
+                                "Failed to join room"
                             );
                         }
                     }
-                    tracing::debug!("room.join().await completed without panic");
                 } else {
                     tracing::warn!(
                         room_id = %room.room_id(),
@@ -158,126 +208,120 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Register verification event handler
+    // Register verification event handler with proper error handling
     client.add_event_handler(
         |ev: matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent,
          client: Client| async move {
-            let request = client
+            let Some(request) = client
                 .encryption()
                 .get_verification_request(&ev.sender, &ev.content.transaction_id)
                 .await
-                .expect("Request object must exist");
+            else {
+                tracing::warn!(
+                    sender = %ev.sender,
+                    "Verification request not found"
+                );
+                return;
+            };
 
-            request
-                .accept()
-                .await
-                .expect("Can't accept verification request");
-        },
-    );
-
-    // Register SAS verification handler (emoji verification)
-    client.add_event_handler(
-        |ev: matrix_sdk::ruma::events::key::verification::start::ToDeviceKeyVerificationStartEvent,
-         client: Client| async move {
-            if let Some(verification) = client
-                .encryption()
-                .get_verification(&ev.sender, ev.content.transaction_id.as_str())
-                .await
-            {
-                if let matrix_sdk::encryption::verification::Verification::SasV1(sas) = verification
-                {
-                    tracing::info!(
-                        sender = %ev.sender,
-                        "Accepting SAS verification request"
-                    );
-
-                    sas.accept().await.expect("Can't accept SAS verification");
-
-                    // Auto-confirm emojis (for bot use - in production you'd want manual confirmation)
-                    tokio::spawn(async move {
-                        let mut stream = sas.changes();
-                        while let Some(state) = stream.next().await {
-                            use matrix_sdk::encryption::verification::SasState;
-
-                            match state {
-                                SasState::KeysExchanged { emojis, .. } => {
-                                    if let Some(emoji_list) = emojis {
-                                        tracing::warn!(
-                                            "🔐 Emoji verification - Please verify these emojis match on the other device:"
-                                        );
-                                        for emoji in emoji_list.emojis.iter() {
-                                            tracing::warn!(
-                                                emoji = emoji.symbol,
-                                                description = emoji.description,
-                                                "Emoji"
-                                            );
-                                        }
-                                        tracing::warn!("Auto-confirming in 5 seconds...");
-                                        tokio::time::sleep(tokio::time::Duration::from_secs(5))
-                                            .await;
-                                        sas.confirm()
-                                            .await
-                                            .expect("Can't confirm SAS verification");
-                                    }
-                                }
-                                SasState::Done { .. } => {
-                                    let device = sas.other_device();
-                                    tracing::info!(
-                                        user_id = %device.user_id(),
-                                        device_id = %device.device_id(),
-                                        "✅ Successfully verified device"
-                                    );
-                                    break;
-                                }
-                                SasState::Cancelled(cancel_info) => {
-                                    tracing::warn!(
-                                        reason = cancel_info.reason(),
-                                        "❌ Verification cancelled"
-                                    );
-                                    break;
-                                }
-                                _ => (),
-                            }
-                        }
-                    });
-                }
+            if let Err(e) = request.accept().await {
+                tracing::error!(
+                    error = %e,
+                    sender = %ev.sender,
+                    "Failed to accept verification request"
+                );
             }
         },
     );
 
-    tracing::info!("Message and verification handlers registered");
+    // Register SAS verification handler (emoji verification)
+    // WARNING: Auto-confirmation is a security risk in production environments.
+    // For production, implement manual verification via admin interface.
+    client.add_event_handler(
+        |ev: matrix_sdk::ruma::events::key::verification::start::ToDeviceKeyVerificationStartEvent,
+         client: Client| async move {
+            let Some(verification) = client
+                .encryption()
+                .get_verification(&ev.sender, ev.content.transaction_id.as_str())
+                .await
+            else {
+                tracing::warn!(
+                    sender = %ev.sender,
+                    "Verification not found for SAS start event"
+                );
+                return;
+            };
 
-    // Start webhook server in background
-    let webhook_port = webhook_config.webhook.port;
-    let webhook_store = (*webhook_session_store).clone();
-    let webhook_client = client.clone();
-    let webhook_config_arc = Arc::clone(&webhook_config);
-    tokio::spawn(async move {
-        if let Err(e) = webhook::start_webhook_server(
-            webhook_port,
-            webhook_store,
-            webhook_client,
-            webhook_config_arc,
-        )
-        .await
-        {
-            tracing::error!(error = %e, "Webhook server failed");
-        }
-    });
+            if let matrix_sdk::encryption::verification::Verification::SasV1(sas) = verification {
+                tracing::info!(
+                    sender = %ev.sender,
+                    "Accepting SAS verification request"
+                );
 
-    // Perform initial sync to upload device keys and establish encryption
-    tracing::info!("Performing initial sync to set up encryption...");
-    let response = client
-        .sync_once(SyncSettings::default())
-        .await
-        .context("Initial sync failed")?;
+                if let Err(e) = sas.accept().await {
+                    tracing::error!(
+                        error = %e,
+                        sender = %ev.sender,
+                        "Failed to accept SAS verification"
+                    );
+                    return;
+                }
 
-    tracing::info!("Initial sync complete - encryption keys exchanged");
+                // Handle verification state changes in background task
+                tokio::spawn(async move {
+                    let mut stream = sas.changes();
+                    while let Some(state) = stream.next().await {
+                        use matrix_sdk::encryption::verification::SasState;
 
-    // Start continuous sync loop with the sync token from initial sync
-    let settings = SyncSettings::default().token(response.next_batch);
-    tracing::info!("Starting continuous sync loop");
-    client.sync(settings).await?;
-
-    Ok(())
+                        match state {
+                            SasState::KeysExchanged { emojis, .. } => {
+                                if let Some(emoji_list) = emojis {
+                                    // Log emojis for manual verification if needed
+                                    tracing::warn!(
+                                        "Emoji verification required - emojis displayed below"
+                                    );
+                                    for emoji in emoji_list.emojis.iter() {
+                                        tracing::warn!(
+                                            emoji = emoji.symbol,
+                                            description = emoji.description,
+                                            "Verification emoji"
+                                        );
+                                    }
+                                    // WARNING: Auto-confirm is insecure - allows MITM attacks
+                                    // TODO: Implement proper verification for production
+                                    tracing::warn!(
+                                        "Auto-confirming verification (INSECURE - for testing only)"
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(5)).await;
+                                    if let Err(e) = sas.confirm().await {
+                                        tracing::error!(
+                                            error = %e,
+                                            "Failed to confirm SAS verification"
+                                        );
+                                    }
+                                }
+                            }
+                            SasState::Done { .. } => {
+                                let device = sas.other_device();
+                                tracing::info!(
+                                    user_id = %device.user_id(),
+                                    device_id = %device.device_id(),
+                                    "Successfully verified device"
+                                );
+                                break;
+                            }
+                            SasState::Cancelled(cancel_info) => {
+                                tracing::warn!(
+                                    reason = cancel_info.reason(),
+                                    "Verification cancelled"
+                                );
+                                break;
+                            }
+                            _ => (),
+                        }
+                    }
+                });
+            }
+        },
+    );
 }

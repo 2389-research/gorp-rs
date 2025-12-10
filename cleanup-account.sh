@@ -1,5 +1,6 @@
 #!/bin/bash
-# Clean up Matrix account state - reject invites, leave rooms, delete devices
+# ABOUTME: Utility script to clean up Matrix account state for testing
+# ABOUTME: Rejects invites, leaves rooms, deletes old devices
 
 set -e
 
@@ -9,30 +10,60 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-MATRIX_HOME_SERVER="https://matrix.org"
+# Configuration
+MATRIX_HOME_SERVER="${MATRIX_HOME_SERVER:-https://matrix.org}"
+RATE_LIMIT_DELAY="${RATE_LIMIT_DELAY:-0.5}"
+
+# Create secure temporary file for credentials
+TEMP_CREDS=$(mktemp)
+chmod 600 "$TEMP_CREDS"
+trap 'rm -f "$TEMP_CREDS"' EXIT
 
 echo -e "${BLUE}=== Matrix Account Cleanup Tool ===${NC}\n"
+
+# Check for jq dependency
+if ! command -v jq &> /dev/null; then
+    echo -e "${RED}Error: jq is required but not installed${NC}"
+    echo "Install with: brew install jq (macOS) or apt install jq (Linux)"
+    exit 1
+fi
 
 # Prompt for credentials
 read -p "Matrix User ID (e.g., @user:matrix.org): " USER_ID
 read -sp "Password: " PASSWORD
 echo ""
 
+# Validate input
+if [[ -z "$USER_ID" || -z "$PASSWORD" ]]; then
+    echo -e "${RED}Error: User ID and password are required${NC}"
+    exit 1
+fi
+
 echo -e "\n${BLUE}Step 1: Login${NC}"
-LOGIN_RESPONSE=$(curl -s -X POST "${MATRIX_HOME_SERVER}/_matrix/client/r0/login" \
+
+# Write credentials to secure temp file instead of command line
+cat > "$TEMP_CREDS" <<EOF
+{
+  "type": "m.login.password",
+  "user": "$USER_ID",
+  "password": "$PASSWORD"
+}
+EOF
+
+# Use v3 API endpoint and read credentials from file
+LOGIN_RESPONSE=$(curl -s -X POST "${MATRIX_HOME_SERVER}/_matrix/client/v3/login" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"type\": \"m.login.password\",
-    \"user\": \"${USER_ID}\",
-    \"password\": \"${PASSWORD}\"
-  }")
+  --data-binary "@$TEMP_CREDS")
 
-ACCESS_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.access_token')
-DEVICE_ID=$(echo "$LOGIN_RESPONSE" | jq -r '.device_id')
+# Clear password from memory as soon as possible
+PASSWORD=""
 
-if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+ACCESS_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.access_token // empty')
+DEVICE_ID=$(echo "$LOGIN_RESPONSE" | jq -r '.device_id // empty')
+
+if [[ -z "$ACCESS_TOKEN" ]]; then
     echo -e "${RED}✗ Login failed${NC}"
-    echo "$LOGIN_RESPONSE" | jq .
+    echo "$LOGIN_RESPONSE" | jq . 2>/dev/null || echo "$LOGIN_RESPONSE"
     exit 1
 fi
 
@@ -43,12 +74,12 @@ echo -e "\n${BLUE}Step 2: Get account state${NC}"
 SYNC_RESPONSE=$(curl -s -X GET "${MATRIX_HOME_SERVER}/_matrix/client/v3/sync?timeout=0" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}")
 
-# Count invites
-INVITE_COUNT=$(echo "$SYNC_RESPONSE" | jq '.rooms.invite | length')
+# Count invites (handle null/empty cases)
+INVITE_COUNT=$(echo "$SYNC_RESPONSE" | jq '.rooms.invite | length // 0')
 echo "Pending invites: $INVITE_COUNT"
 
 # Count joined rooms
-JOINED_COUNT=$(echo "$SYNC_RESPONSE" | jq '.rooms.join | length')
+JOINED_COUNT=$(echo "$SYNC_RESPONSE" | jq '.rooms.join | length // 0')
 echo "Joined rooms: $JOINED_COUNT"
 
 echo -e "\n${BLUE}Step 3: Reject all pending invites${NC}"
@@ -65,7 +96,7 @@ if [[ $INVITE_COUNT -gt 0 ]]; then
         else
             echo -e "${GREEN}✓${NC}"
         fi
-        sleep 0.5
+        sleep "$RATE_LIMIT_DELAY"
     done
 else
     echo "No pending invites"
@@ -88,7 +119,7 @@ if [[ "$CONFIRM" == "y" || "$CONFIRM" == "Y" ]]; then
         else
             echo -e "${GREEN}✓${NC}"
         fi
-        sleep 0.5
+        sleep "$RATE_LIMIT_DELAY"
     done
 else
     echo "Skipping room leave"
@@ -98,7 +129,7 @@ echo -e "\n${BLUE}Step 5: Delete old devices${NC}"
 DEVICES_RESPONSE=$(curl -s -X GET "${MATRIX_HOME_SERVER}/_matrix/client/v3/devices" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}")
 
-DEVICE_COUNT=$(echo "$DEVICES_RESPONSE" | jq '.devices | length')
+DEVICE_COUNT=$(echo "$DEVICES_RESPONSE" | jq '.devices | length // 0')
 echo "Total devices: $DEVICE_COUNT"
 echo "Current device: $DEVICE_ID"
 
@@ -118,17 +149,29 @@ if [[ "$CONFIRM_DEV" == "y" || "$CONFIRM_DEV" == "Y" ]]; then
         DEVICE_IDS_JSON=$(echo "$DEVICES_TO_DELETE" | jq -R . | jq -s .)
 
         echo -n "Deleting devices... "
+
+        # Device deletion requires re-authentication
+        # Prompt for password again since we cleared it
+        read -sp "Re-enter password to confirm device deletion: " DELETE_PASSWORD
+        echo ""
+
+        # Write auth to temp file
+        cat > "$TEMP_CREDS" <<EOF
+{
+  "devices": $DEVICE_IDS_JSON,
+  "auth": {
+    "type": "m.login.password",
+    "user": "$USER_ID",
+    "password": "$DELETE_PASSWORD"
+  }
+}
+EOF
+        DELETE_PASSWORD=""
+
         DELETE_RESPONSE=$(curl -s -X POST "${MATRIX_HOME_SERVER}/_matrix/client/v3/delete_devices" \
           -H "Authorization: Bearer ${ACCESS_TOKEN}" \
           -H "Content-Type: application/json" \
-          -d "{
-            \"devices\": $DEVICE_IDS_JSON,
-            \"auth\": {
-              \"type\": \"m.login.password\",
-              \"user\": \"${USER_ID}\",
-              \"password\": \"${PASSWORD}\"
-            }
-          }")
+          --data-binary "@$TEMP_CREDS")
 
         if echo "$DELETE_RESPONSE" | jq -e '.errcode' > /dev/null 2>&1; then
             echo -e "${YELLOW}⚠ $(echo "$DELETE_RESPONSE" | jq -r '.error')${NC}"
