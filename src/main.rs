@@ -1,7 +1,7 @@
 // ABOUTME: Main entry point for Matrix-Claude bridge with sync loop
 // ABOUTME: Initializes logging, config, session store, Matrix client, and message handlers
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use matrix_bridge::{
     config::Config, matrix_client, message_handler, session::SessionStore, webhook,
@@ -252,10 +252,19 @@ async fn main() -> Result<()> {
         }
     });
 
-    tracing::info!("Starting sync loop");
+    // Perform initial sync to upload device keys and establish encryption
+    tracing::info!("Performing initial sync to set up encryption...");
+    let response = client
+        .sync_once(SyncSettings::default())
+        .await
+        .context("Initial sync failed")?;
 
-    // Sync forever
-    client.sync(SyncSettings::default()).await?;
+    tracing::info!("Initial sync complete - encryption keys exchanged");
+
+    // Start continuous sync loop with the sync token from initial sync
+    let settings = SyncSettings::default().token(response.next_batch);
+    tracing::info!("Starting continuous sync loop");
+    client.sync(settings).await?;
 
     Ok(())
 }
