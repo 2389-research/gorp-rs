@@ -1,0 +1,48 @@
+# Matrix-Claude Bridge Configuration
+
+[matrix]
+# Matrix homeserver URL (required)
+home_server = "https://matrix.org"
+
+# Full Matrix user ID for the bot (required)
+user_id = "@bot:matrix.org"
+
+# Matrix password (optional if access_token is provided)
+password = "your-password-here"
+
+# Matrix access token (optional if password is provided)
+# access_token = "syt_..."
+
+# Device name for this bot instance
+device_name = "claude-matrix-bridge"
+
+# Comma-separated list of allowed user IDs (required)
+allowed_users = ["@user1:matrix.org", "@user2:matrix.org"]
+
+# Prefix for room names (default: "Claude")
+# Room names will be formatted as "PREFIX: channel-name"
+# Example: "Work: PA" or "Personal: dev-help"
+room_prefix = "Claude"
+
+[claude]
+# Path to the Claude binary (default: "claude")
+binary_path = "claude"
+
+# Optional: Custom Claude SDK URL
+# sdk_url = "https://your-custom-sdk.com"
+
+[webhook]
+# Port for the webhook HTTP server (default: 3000)
+port = 3000
+
+# Host for webhook URLs (default: "localhost")
+# This is used when displaying webhook URLs to users
+host = "localhost"
+
+# Optional: API key for webhook authentication
+# If set, all webhook requests must include this key
+# api_key = "your-secret-key-here"
+
+[workspace]
+# Directory where channel workspaces are stored (default: "./workspace")
+path = "./workspace"
