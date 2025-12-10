@@ -119,8 +119,11 @@ impl SessionStore {
         }
     }
 
-    /// Get channel by name
+    /// Get channel by name (case-insensitive)
     pub fn get_by_name(&self, channel_name: &str) -> Result<Option<Channel>> {
+        // Normalize to lowercase for case-insensitive lookup
+        let channel_name = channel_name.to_lowercase();
+
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT channel_name, room_id, session_id, directory, started, created_at
@@ -147,6 +150,9 @@ impl SessionStore {
 
     /// Create a new channel with auto-generated session ID and directory
     pub fn create_channel(&self, channel_name: &str, room_id: &str) -> Result<Channel> {
+        // Normalize to lowercase for case-insensitive matching
+        let channel_name = channel_name.to_lowercase();
+
         // Validate channel_name
         if !channel_name
             .chars()
@@ -161,10 +167,10 @@ impl SessionStore {
             anyhow::bail!("Channel name cannot start with . or -");
         }
 
-        let channel_dir = self.workspace_path.join(channel_name);
+        let channel_dir = self.workspace_path.join(&channel_name);
 
         let channel = Channel {
-            channel_name: channel_name.to_string(),
+            channel_name: channel_name.clone(),
             room_id: room_id.to_string(),
             session_id: uuid::Uuid::new_v4().to_string(),
             directory: channel_dir.to_string_lossy().to_string(),

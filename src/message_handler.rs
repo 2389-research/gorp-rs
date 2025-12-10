@@ -286,7 +286,8 @@ async fn handle_command(
                 return Ok(());
             }
 
-            let channel_name = command_parts[1].to_string();
+            // Normalize channel name to lowercase for consistency
+            let channel_name = command_parts[1].to_lowercase();
 
             // Validate channel name (alphanumeric, dashes, underscores only)
             if !channel_name
@@ -301,7 +302,7 @@ async fn handle_command(
                 return Ok(());
             }
 
-            // Check if channel already exists
+            // Check if channel already exists (case-insensitive)
             if session_store.get_by_name(&channel_name)?.is_some() {
                 room.send(RoomMessageEventContent::text_plain(&format!(
                     "❌ Channel '{}' already exists.\n\nUse !list to see all channels.",
