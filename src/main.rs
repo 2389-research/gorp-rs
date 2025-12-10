@@ -12,6 +12,16 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Set up panic hook to log panics before they crash the process
+    std::panic::set_hook(Box::new(|panic_info| {
+        eprintln!("\n╔══════════════════════════════════════════════════════════╗");
+        eprintln!("║ PANIC! Bot crashed with the following error:            ║");
+        eprintln!("╚══════════════════════════════════════════════════════════╝\n");
+        eprintln!("{}", panic_info);
+        eprintln!("\nBacktrace:");
+        eprintln!("{:?}", std::backtrace::Backtrace::force_capture());
+    }));
+
     // Initialize logging
     tracing_subscriber::registry()
         .with(
