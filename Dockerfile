@@ -27,21 +27,26 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user with home directory
 RUN useradd --create-home --shell /bin/bash gorp
 
+# Copy binary from builder
+COPY --from=builder /app/target/release/gorp /usr/local/bin/gorp
+
+# Copy example config and entrypoint
+COPY config.toml.example /app/config.toml.example
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Set up XDG directory structure for gorp user
 RUN mkdir -p /home/gorp/.config/gorp \
              /home/gorp/.local/share/gorp/crypto_store \
              /home/gorp/.local/share/gorp/logs \
              /home/gorp/workspace && \
-    chown -R gorp:gorp /home/gorp
-
-# Copy binary from builder
-COPY --from=builder /app/target/release/gorp /usr/local/bin/gorp
+    chown -R gorp:gorp /home/gorp /app
 
 # Switch to non-root user
 USER gorp
 WORKDIR /home/gorp
 
-# Environment variables for XDG compliance
+# Environment variables
 ENV HOME=/home/gorp
 
 # Volumes for persistent data (XDG-compliant paths)
@@ -50,5 +55,6 @@ VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.local/share/gorp", "/home/gorp/w
 # Expose webhook port
 EXPOSE 13000
 
-# Run the bot
-CMD ["gorp", "start"]
+# Use entrypoint script for setup
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["start"]
