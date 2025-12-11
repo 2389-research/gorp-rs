@@ -4,9 +4,11 @@
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use gorp::{
-    config::Config, matrix_client, message_handler, paths,
-    scheduler::{SchedulerStore, start_scheduler},
-    session::SessionStore, webhook,
+    config::Config,
+    matrix_client, message_handler, paths,
+    scheduler::{start_scheduler, SchedulerStore},
+    session::SessionStore,
+    webhook,
 };
 use matrix_sdk::{
     config::SyncSettings,
@@ -38,9 +40,9 @@ fn is_valid_recovery_key_format(key: &str) -> bool {
     }
 
     // Base58 alphabet excludes 0, O, I, l to avoid ambiguity
-    cleaned.chars().all(|c| {
-        c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l'
-    })
+    cleaned
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
 }
 
 /// Notify allowed users that the bot is ready
@@ -85,7 +87,10 @@ async fn notify_ready(client: &Client, config: &Config) {
         }
 
         if let Some(room) = dm_room {
-            match room.send(RoomMessageEventContent::text_plain(message)).await {
+            match room
+                .send(RoomMessageEventContent::text_plain(message))
+                .await
+            {
                 Ok(_) => {
                     tracing::info!(user = %user_id, "Sent ready notification");
                 }
@@ -132,14 +137,13 @@ async fn main() -> Result<()> {
 
     // Console layer - pretty output filtered to warn+
     // Suppress noisy SDK warnings (still logged to file)
-    let console_layer = fmt::layer()
-        .pretty()
-        .with_target(true)
-        .with_filter(
-            tracing_subscriber::EnvFilter::new(
+    let console_layer =
+        fmt::layer()
+            .pretty()
+            .with_target(true)
+            .with_filter(tracing_subscriber::EnvFilter::new(
                 "warn,matrix_bridge=info,matrix_sdk_crypto=error,matrix_sdk::encryption=error",
-            ),
-        );
+            ));
 
     tracing_subscriber::registry()
         .with(file_layer)
@@ -171,8 +175,12 @@ async fn main() -> Result<()> {
     tracing::info!("Scheduler store initialized");
 
     // Create Matrix client
-    let client =
-        matrix_client::create_client(&config.matrix.home_server, &config.matrix.user_id, &config.matrix.device_name).await?;
+    let client = matrix_client::create_client(
+        &config.matrix.home_server,
+        &config.matrix.user_id,
+        &config.matrix.device_name,
+    )
+    .await?;
 
     // Login
     matrix_client::login(
@@ -249,7 +257,9 @@ async fn main() -> Result<()> {
         } else if !is_valid_recovery_key_format(cleaned_key) {
             tracing::error!("Recovery key format appears invalid");
             tracing::error!("Expected format: 'EsTR mwqJ JoXZ 8dKN ...' (4-letter groups)");
-            tracing::error!("Get the correct key from Element: Settings > Security > Secure Backup");
+            tracing::error!(
+                "Get the correct key from Element: Settings > Security > Secure Backup"
+            );
             false
         } else {
             tracing::info!("Attempting to recover secrets using recovery key...");
@@ -285,7 +295,9 @@ async fn main() -> Result<()> {
                 Err(e) => {
                     tracing::error!(error = %e, "Recovery key was rejected by server");
                     tracing::error!("This usually means the key is incorrect or was reset");
-                    tracing::error!("Get the correct key from Element: Settings > Security > Secure Backup");
+                    tracing::error!(
+                        "Get the correct key from Element: Settings > Security > Secure Backup"
+                    );
                     false
                 }
             }
@@ -293,7 +305,9 @@ async fn main() -> Result<()> {
     } else {
         tracing::info!("No recovery key configured - device will be unverified");
         tracing::info!("To verify this device, either:");
-        tracing::info!("  1. Add recovery_key to config.toml (from Element > Security > Secure Backup)");
+        tracing::info!(
+            "  1. Add recovery_key to config.toml (from Element > Security > Secure Backup)"
+        );
         tracing::info!("  2. Or manually verify from Element's Security settings");
         false
     };
@@ -305,7 +319,12 @@ async fn main() -> Result<()> {
 
     // NOW register event handlers after encryption is established
     // This prevents handlers from firing before the client is ready
-    register_event_handlers(&client, &config_arc, &session_store_arc, scheduler_store_for_handler);
+    register_event_handlers(
+        &client,
+        &config_arc,
+        &session_store_arc,
+        scheduler_store_for_handler,
+    );
     tracing::info!("Event handlers registered");
 
     tracing::info!("Bot ready - DM me to create Claude rooms!");

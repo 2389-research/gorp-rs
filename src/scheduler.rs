@@ -74,7 +74,9 @@ pub enum ParsedSchedule {
 /// Parse relative time expressions like "in 5 minutes", "in 2 hours"
 fn parse_relative_time(input: &str) -> Option<Result<ParsedSchedule>> {
     // Match patterns like "in X minutes", "in X hours", "in X days"
-    let re = regex::Regex::new(r"^in\s+(\d+)\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days)$").ok()?;
+    let re =
+        regex::Regex::new(r"^in\s+(\d+)\s+(minute|minutes|min|mins|hour|hours|hr|hrs|day|days)$")
+            .ok()?;
 
     let caps = re.captures(input)?;
     let amount: i64 = caps.get(1)?.as_str().parse().ok()?;
@@ -223,7 +225,11 @@ fn parse_time_of_day(input: &str) -> Result<(u32, u32)> {
         let (hour, minute) = if time_str.contains(':') {
             let parts: Vec<&str> = time_str.split(':').collect();
             let h: u32 = parts[0].parse().context("Invalid hour")?;
-            let m: u32 = parts.get(1).unwrap_or(&"0").parse().context("Invalid minute")?;
+            let m: u32 = parts
+                .get(1)
+                .unwrap_or(&"0")
+                .parse()
+                .context("Invalid minute")?;
             (h, m)
         } else {
             let h: u32 = time_str.parse().context("Invalid hour")?;
@@ -247,7 +253,11 @@ fn parse_time_of_day(input: &str) -> Result<(u32, u32)> {
         // Try 24-hour format "14:30"
         let parts: Vec<&str> = input.split(':').collect();
         let hour: u32 = parts[0].parse().context("Invalid hour")?;
-        let minute: u32 = parts.get(1).unwrap_or(&"0").parse().context("Invalid minute")?;
+        let minute: u32 = parts
+            .get(1)
+            .unwrap_or(&"0")
+            .parse()
+            .context("Invalid minute")?;
 
         if hour > 23 || minute > 59 {
             anyhow::bail!("Invalid time: hour must be 0-23, minute must be 0-59");
@@ -340,7 +350,10 @@ impl SchedulerStore {
 
     /// Initialize the database schema
     pub fn initialize_schema(&self) -> Result<()> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS scheduled_prompts (
                 id TEXT PRIMARY KEY,
@@ -381,7 +394,10 @@ impl SchedulerStore {
 
     /// Create a new scheduled prompt
     pub fn create_schedule(&self, schedule: &ScheduledPrompt) -> Result<()> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "INSERT INTO scheduled_prompts (
                 id, channel_name, room_id, prompt, created_by, created_at,
@@ -411,7 +427,10 @@ impl SchedulerStore {
     /// Uses a claim token to ensure we only fetch schedules this call claimed,
     /// preventing race conditions with concurrent executions or crashed instances.
     pub fn claim_due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<ScheduledPrompt>> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let now_str = now.to_rfc3339();
 
         // Use now timestamp as claim token to identify schedules claimed by this call
@@ -457,12 +476,11 @@ impl SchedulerStore {
 
     /// Mark a schedule as executed and update next execution time
     /// Resets status from 'executing' back to 'active' for recurring schedules
-    pub fn mark_executed(
-        &self,
-        id: &str,
-        next_execution: Option<DateTime<Utc>>,
-    ) -> Result<()> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+    pub fn mark_executed(&self, id: &str, next_execution: Option<DateTime<Utc>>) -> Result<()> {
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let now = Utc::now().to_rfc3339();
 
         if let Some(next) = next_execution {
@@ -495,7 +513,10 @@ impl SchedulerStore {
 
     /// Mark a schedule as failed
     pub fn mark_failed(&self, id: &str, error: &str) -> Result<()> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "UPDATE scheduled_prompts
              SET status = 'failed', error_message = ?1
@@ -507,7 +528,10 @@ impl SchedulerStore {
 
     /// List schedules for a specific room
     pub fn list_by_room(&self, room_id: &str) -> Result<Vec<ScheduledPrompt>> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
 
         let mut stmt = conn.prepare(
             "SELECT id, channel_name, room_id, prompt, created_by, created_at,
@@ -546,14 +570,20 @@ impl SchedulerStore {
 
     /// Delete a schedule by ID
     pub fn delete_schedule(&self, id: &str) -> Result<bool> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let rows = conn.execute("DELETE FROM scheduled_prompts WHERE id = ?1", params![id])?;
         Ok(rows > 0)
     }
 
     /// Pause a schedule
     pub fn pause_schedule(&self, id: &str) -> Result<bool> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let rows = conn.execute(
             "UPDATE scheduled_prompts SET status = 'paused' WHERE id = ?1 AND status = 'active'",
             params![id],
@@ -563,7 +593,10 @@ impl SchedulerStore {
 
     /// Resume a paused schedule
     pub fn resume_schedule(&self, id: &str) -> Result<bool> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let rows = conn.execute(
             "UPDATE scheduled_prompts SET status = 'active' WHERE id = ?1 AND status = 'paused'",
             params![id],
@@ -573,7 +606,10 @@ impl SchedulerStore {
 
     /// Get a schedule by ID
     pub fn get_by_id(&self, id: &str) -> Result<Option<ScheduledPrompt>> {
-        let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
 
         let mut stmt = conn.prepare(
             "SELECT id, channel_name, room_id, prompt, created_by, created_at,
@@ -606,11 +642,15 @@ impl SchedulerStore {
             None => Ok(None),
         }
     }
-
 }
 
 // Background scheduler execution module
-use crate::{claude, config::Config, session::SessionStore, utils::{chunk_message, markdown_to_html, log_matrix_message, MAX_CHUNK_SIZE}};
+use crate::{
+    claude,
+    config::Config,
+    session::SessionStore,
+    utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+};
 use matrix_sdk::{ruma::events::room::message::RoomMessageEventContent, Client};
 use std::time::Duration as StdDuration;
 use tokio::time::interval;
@@ -639,7 +679,10 @@ pub async fn start_scheduler(
         match scheduler_store.claim_due_schedules(now) {
             Ok(schedules) => {
                 if !schedules.is_empty() {
-                    tracing::info!(count = schedules.len(), "Claimed due schedules for execution");
+                    tracing::info!(
+                        count = schedules.len(),
+                        "Claimed due schedules for execution"
+                    );
                 }
 
                 for schedule in schedules {
@@ -733,7 +776,10 @@ async fn execute_schedule(
     );
     let notification_html = markdown_to_html(&notification);
     if let Err(e) = room
-        .send(RoomMessageEventContent::text_html(&notification, &notification_html))
+        .send(RoomMessageEventContent::text_html(
+            &notification,
+            &notification_html,
+        ))
         .await
     {
         tracing::warn!(error = %e, "Failed to send schedule notification");
@@ -792,7 +838,11 @@ async fn execute_schedule(
                     &chunk,
                     Some(&html),
                     if chunk_count > 1 { Some(i) } else { None },
-                    if chunk_count > 1 { Some(chunk_count) } else { None },
+                    if chunk_count > 1 {
+                        Some(chunk_count)
+                    } else {
+                        None
+                    },
                 )
                 .await;
 

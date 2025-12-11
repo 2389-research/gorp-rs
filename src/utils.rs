@@ -1,9 +1,9 @@
 // ABOUTME: Shared utility functions for text processing and Matrix message formatting
 // ABOUTME: Includes markdown-to-HTML conversion, long message chunking, and JSONL logging
 
-use pulldown_cmark::{Parser, html};
+use pulldown_cmark::{html, Parser};
 use serde::Serialize;
-use tokio::fs::{OpenOptions, create_dir_all};
+use tokio::fs::{create_dir_all, OpenOptions};
 use tokio::io::AsyncWriteExt;
 
 /// Convert markdown to HTML for Matrix message formatting

@@ -17,7 +17,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
-use crate::{claude, config::Config, session::SessionStore, utils::{markdown_to_html, chunk_message, log_matrix_message, MAX_CHUNK_SIZE}};
+use crate::{
+    claude,
+    config::Config,
+    session::SessionStore,
+    utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+};
 
 #[derive(Clone)]
 pub struct WebhookState {
@@ -232,8 +237,13 @@ async fn webhook_handler(
             chunk,
             Some(&html),
             if chunk_count > 1 { Some(i) } else { None },
-            if chunk_count > 1 { Some(chunk_count) } else { None },
-        ).await;
+            if chunk_count > 1 {
+                Some(chunk_count)
+            } else {
+                None
+            },
+        )
+        .await;
 
         // Small delay between chunks for ordering
         if i < chunks.len() - 1 {

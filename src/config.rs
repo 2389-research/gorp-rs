@@ -41,11 +41,17 @@ impl std::fmt::Debug for MatrixConfig {
             .field("home_server", &self.home_server)
             .field("user_id", &self.user_id)
             .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
-            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "access_token",
+                &self.access_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("device_name", &self.device_name)
             .field("allowed_users", &self.allowed_users)
             .field("room_prefix", &self.room_prefix)
-            .field("recovery_key", &self.recovery_key.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "recovery_key",
+                &self.recovery_key.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -172,9 +178,7 @@ impl Config {
             toml::from_str::<Config>(&content)
                 .with_context(|| format!("Failed to parse {}", config_path.display()))?
         } else {
-            tracing::info!(
-                "No config file found, using environment variables and defaults"
-            );
+            tracing::info!("No config file found, using environment variables and defaults");
             // If no config file, create default config
             Config {
                 matrix: MatrixConfig {

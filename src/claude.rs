@@ -115,7 +115,12 @@ pub async fn invoke_claude(
         anyhow::bail!("Invalid claude binary path");
     }
 
-    let mut args = vec!["--print", "--output-format", "json", "--dangerously-skip-permissions"];
+    let mut args = vec![
+        "--print",
+        "--output-format",
+        "json",
+        "--dangerously-skip-permissions",
+    ];
     args.extend(session_args);
 
     if let Some(url) = sdk_url {
@@ -179,7 +184,13 @@ pub async fn invoke_claude_streaming(
     }
 
     // Use stream-json for real-time events
-    let mut args = vec!["--print", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
+    let mut args = vec![
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+    ];
     args.extend(session_args);
 
     if let Some(url) = sdk_url {
@@ -241,7 +252,10 @@ pub async fn invoke_claude_streaming(
                 // Log to file with STDERR prefix
                 if let Some(ref mut file) = log_file {
                     use tokio::io::AsyncWriteExt;
-                    let log_line = format!("{{\"type\":\"stderr\",\"message\":\"{}\"}}\n", line.replace('\"', "\\\""));
+                    let log_line = format!(
+                        "{{\"type\":\"stderr\",\"message\":\"{}\"}}\n",
+                        line.replace('\"', "\\\"")
+                    );
                     let _ = file.write_all(log_line.as_bytes()).await;
                 }
             }
@@ -323,7 +337,12 @@ pub async fn invoke_claude_streaming(
                                     };
 
                                     tracing::info!(tool = %name, preview = %input_preview, "Tool use detected");
-                                    let _ = tx.send(ClaudeEvent::ToolUse { name, input_preview }).await;
+                                    let _ = tx
+                                        .send(ClaudeEvent::ToolUse {
+                                            name,
+                                            input_preview,
+                                        })
+                                        .await;
                                 } else if item_type == Some("text") {
                                     // Accumulate text content for the response
                                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
@@ -345,7 +364,10 @@ pub async fn invoke_claude_streaming(
                     }
                 }
                 Some("result") => {
-                    let is_error = json.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let is_error = json
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     if is_error {
                         let error = json
                             .get("error")
@@ -407,13 +429,11 @@ fn get_input_preview(input: &Value, tool_name: &str) -> String {
     };
 
     match tool_name {
-        "Read" => {
-            input
-                .get("file_path")
-                .and_then(|p| p.as_str())
-                .map(|p| short_path(p))
-                .unwrap_or_default()
-        }
+        "Read" => input
+            .get("file_path")
+            .and_then(|p| p.as_str())
+            .map(|p| short_path(p))
+            .unwrap_or_default(),
         "Edit" => {
             let file = input
                 .get("file_path")
@@ -431,25 +451,18 @@ fn get_input_preview(input: &Value, tool_name: &str) -> String {
                 format!("{} → {}", file, old_str)
             }
         }
-        "Write" => {
-            input
-                .get("file_path")
-                .and_then(|p| p.as_str())
-                .map(|p| short_path(p))
-                .unwrap_or_default()
-        }
-        "Bash" => {
-            input
-                .get("command")
-                .and_then(|c| c.as_str())
-                .map(|c| truncate(c.lines().next().unwrap_or(""), 60))
-                .unwrap_or_default()
-        }
+        "Write" => input
+            .get("file_path")
+            .and_then(|p| p.as_str())
+            .map(|p| short_path(p))
+            .unwrap_or_default(),
+        "Bash" => input
+            .get("command")
+            .and_then(|c| c.as_str())
+            .map(|c| truncate(c.lines().next().unwrap_or(""), 60))
+            .unwrap_or_default(),
         "Grep" => {
-            let pattern = input
-                .get("pattern")
-                .and_then(|p| p.as_str())
-                .unwrap_or("");
+            let pattern = input.get("pattern").and_then(|p| p.as_str()).unwrap_or("");
             let path = input
                 .get("path")
                 .and_then(|p| p.as_str())
@@ -459,13 +472,11 @@ fn get_input_preview(input: &Value, tool_name: &str) -> String {
                 None => format!("/{}/", truncate(pattern, 40)),
             }
         }
-        "Glob" => {
-            input
-                .get("pattern")
-                .and_then(|p| p.as_str())
-                .map(|p| truncate(p, 50))
-                .unwrap_or_default()
-        }
+        "Glob" => input
+            .get("pattern")
+            .and_then(|p| p.as_str())
+            .map(|p| truncate(p, 50))
+            .unwrap_or_default(),
         "Task" => {
             let desc = input
                 .get("description")
@@ -482,59 +493,56 @@ fn get_input_preview(input: &Value, tool_name: &str) -> String {
                 format!("[{}] {}", agent, desc)
             }
         }
-        "WebFetch" | "WebSearch" => {
-            input
-                .get("url")
-                .or_else(|| input.get("query"))
-                .and_then(|u| u.as_str())
-                .map(|u| truncate(u, 60))
-                .unwrap_or_default()
-        }
-        "TodoWrite" => {
-            input
-                .get("todos")
-                .and_then(|t| t.as_array())
-                .map(|arr| format!("{} items", arr.len()))
-                .unwrap_or_default()
-        }
+        "WebFetch" | "WebSearch" => input
+            .get("url")
+            .or_else(|| input.get("query"))
+            .and_then(|u| u.as_str())
+            .map(|u| truncate(u, 60))
+            .unwrap_or_default(),
+        "TodoWrite" => input
+            .get("todos")
+            .and_then(|t| t.as_array())
+            .map(|arr| format!("{} items", arr.len()))
+            .unwrap_or_default(),
         // GSuite Gmail tools - show meaningful context
-        _ if tool_name.starts_with("mcp__gsuite__gmail") => {
-            match tool_name {
-                "mcp__gsuite__gmail_create_draft" | "mcp__gsuite__gmail_send_message" => {
-                    let to = input.get("to").and_then(|v| v.as_str()).unwrap_or("");
-                    let subject = input.get("subject").and_then(|v| v.as_str()).unwrap_or("");
-                    if !to.is_empty() && !subject.is_empty() {
-                        format!("to:{} · {}", truncate(to, 25), truncate(subject, 35))
-                    } else if !to.is_empty() {
-                        format!("to:{}", truncate(to, 50))
-                    } else if !subject.is_empty() {
-                        truncate(subject, 50)
-                    } else {
-                        String::new()
-                    }
+        _ if tool_name.starts_with("mcp__gsuite__gmail") => match tool_name {
+            "mcp__gsuite__gmail_create_draft" | "mcp__gsuite__gmail_send_message" => {
+                let to = input.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                let subject = input.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+                if !to.is_empty() && !subject.is_empty() {
+                    format!("to:{} · {}", truncate(to, 25), truncate(subject, 35))
+                } else if !to.is_empty() {
+                    format!("to:{}", truncate(to, 50))
+                } else if !subject.is_empty() {
+                    truncate(subject, 50)
+                } else {
+                    String::new()
                 }
-                "mcp__gsuite__gmail_list_messages" => {
-                    input.get("query").and_then(|v| v.as_str())
-                        .map(|s| truncate(s, 60))
-                        .unwrap_or_default()
-                }
-                "mcp__gsuite__gmail_get_message" | "mcp__gsuite__gmail_trash_message"
-                | "mcp__gsuite__gmail_delete_message" => {
-                    input.get("message_id").and_then(|v| v.as_str())
-                        .map(|s| truncate(s, 20))
-                        .unwrap_or_default()
-                }
-                "mcp__gsuite__gmail_send_draft" => {
-                    input.get("draft_id").and_then(|v| v.as_str())
-                        .map(|s| truncate(s, 20))
-                        .unwrap_or_default()
-                }
-                _ => input.get("query").or_else(|| input.get("message_id"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| truncate(s, 50))
-                    .unwrap_or_default()
             }
-        }
+            "mcp__gsuite__gmail_list_messages" => input
+                .get("query")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate(s, 60))
+                .unwrap_or_default(),
+            "mcp__gsuite__gmail_get_message"
+            | "mcp__gsuite__gmail_trash_message"
+            | "mcp__gsuite__gmail_delete_message" => input
+                .get("message_id")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate(s, 20))
+                .unwrap_or_default(),
+            "mcp__gsuite__gmail_send_draft" => input
+                .get("draft_id")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate(s, 20))
+                .unwrap_or_default(),
+            _ => input
+                .get("query")
+                .or_else(|| input.get("message_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| truncate(s, 50))
+                .unwrap_or_default(),
+        },
         // GSuite Calendar tools
         _ if tool_name.starts_with("mcp__gsuite__calendar") => {
             let summary = input.get("summary").and_then(|v| v.as_str());
@@ -544,7 +552,9 @@ fn get_input_preview(input: &Value, tool_name: &str) -> String {
             if let Some(s) = summary {
                 if let Some(t) = start {
                     // Extract just date/time portion
-                    let time_short = t.split('T').nth(1)
+                    let time_short = t
+                        .split('T')
+                        .nth(1)
                         .and_then(|t| t.split(':').take(2).collect::<Vec<_>>().join(":").into())
                         .unwrap_or_else(|| t.chars().take(10).collect());
                     format!("{} @ {}", truncate(s, 35), time_short)
@@ -558,51 +568,46 @@ fn get_input_preview(input: &Value, tool_name: &str) -> String {
             }
         }
         // GSuite People/Contacts tools
-        _ if tool_name.starts_with("mcp__gsuite__people") => {
-            input.get("query")
-                .or_else(|| input.get("name"))
-                .or_else(|| input.get("email"))
-                .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 50))
-                .unwrap_or_default()
-        }
+        _ if tool_name.starts_with("mcp__gsuite__people") => input
+            .get("query")
+            .or_else(|| input.get("name"))
+            .or_else(|| input.get("email"))
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 50))
+            .unwrap_or_default(),
         // Pagen CRM tools
-        _ if tool_name.starts_with("mcp__pagen") => {
-            input.get("query")
-                .or_else(|| input.get("name"))
-                .or_else(|| input.get("contact_id"))
-                .or_else(|| input.get("company_id"))
-                .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 50))
-                .unwrap_or_default()
-        }
+        _ if tool_name.starts_with("mcp__pagen") => input
+            .get("query")
+            .or_else(|| input.get("name"))
+            .or_else(|| input.get("contact_id"))
+            .or_else(|| input.get("company_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 50))
+            .unwrap_or_default(),
         // Chronicle tools
-        _ if tool_name.starts_with("mcp__chronicle") => {
-            input.get("message")
-                .or_else(|| input.get("activity"))
-                .or_else(|| input.get("what"))
-                .or_else(|| input.get("text"))
-                .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 50))
-                .unwrap_or_default()
-        }
+        _ if tool_name.starts_with("mcp__chronicle") => input
+            .get("message")
+            .or_else(|| input.get("activity"))
+            .or_else(|| input.get("what"))
+            .or_else(|| input.get("text"))
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 50))
+            .unwrap_or_default(),
         // Toki task tools
-        _ if tool_name.starts_with("mcp__toki") => {
-            input.get("description")
-                .or_else(|| input.get("name"))
-                .or_else(|| input.get("todo_id"))
-                .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 50))
-                .unwrap_or_default()
-        }
+        _ if tool_name.starts_with("mcp__toki") => input
+            .get("description")
+            .or_else(|| input.get("name"))
+            .or_else(|| input.get("todo_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 50))
+            .unwrap_or_default(),
         // Social media tools
-        _ if tool_name.starts_with("mcp__socialmedia") => {
-            input.get("content")
-                .or_else(|| input.get("agent_name"))
-                .and_then(|v| v.as_str())
-                .map(|s| truncate(s, 50))
-                .unwrap_or_default()
-        }
+        _ if tool_name.starts_with("mcp__socialmedia") => input
+            .get("content")
+            .or_else(|| input.get("agent_name"))
+            .and_then(|v| v.as_str())
+            .map(|s| truncate(s, 50))
+            .unwrap_or_default(),
         // Other MCP tools - generic fallback
         _ if tool_name.starts_with("mcp__") => {
             // Try common field names in order of specificity

@@ -26,7 +26,8 @@ pub async fn create_client(homeserver: &str, user_id: &str, device_name: &str) -
     // Include both user and device in path for full isolation
     let user_slug = slugify(user_id);
     let device_slug = slugify(device_name);
-    let crypto_store_path = paths::crypto_store_dir().join(format!("{}_{}", user_slug, device_slug));
+    let crypto_store_path =
+        paths::crypto_store_dir().join(format!("{}_{}", user_slug, device_slug));
 
     // Ensure the crypto store directory exists
     std::fs::create_dir_all(&crypto_store_path)

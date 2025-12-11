@@ -10,9 +10,11 @@ use crate::{
     claude::{self, ClaudeEvent},
     config::Config,
     matrix_client,
-    scheduler::{parse_time_expression, ParsedSchedule, ScheduledPrompt, ScheduleStatus, SchedulerStore},
+    scheduler::{
+        parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
+    },
     session::SessionStore,
-    utils::{markdown_to_html, chunk_message, log_matrix_message, MAX_CHUNK_SIZE},
+    utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
 };
 use chrono::Utc;
 
@@ -63,7 +65,17 @@ pub async fn handle_message(
             && body.chars().nth(1).map_or(false, |c| c.is_alphabetic()));
 
     if is_command {
-        return handle_command(room, body, &session_store, &scheduler_store, &client, sender, is_dm, &config).await;
+        return handle_command(
+            room,
+            body,
+            &session_store,
+            &scheduler_store,
+            &client,
+            sender,
+            is_dm,
+            &config,
+        )
+        .await;
     }
 
     // Check if channel is attached
@@ -142,13 +154,13 @@ pub async fn handle_message(
 
     while let Some(event) = event_rx.recv().await {
         match event {
-            ClaudeEvent::ToolUse { name, input_preview } => {
+            ClaudeEvent::ToolUse {
+                name,
+                input_preview,
+            } => {
                 // Build tool message with plain and HTML versions
                 let (plain, html) = if input_preview.is_empty() {
-                    (
-                        format!("🔧 {}", name),
-                        format!("🔧 <code>{}</code>", name),
-                    )
+                    (format!("🔧 {}", name), format!("🔧 <code>{}</code>", name))
                 } else {
                     (
                         format!("🔧 {} · {}", name, input_preview),
@@ -171,7 +183,8 @@ pub async fn handle_message(
                         Some(&html),
                         None,
                         None,
-                    ).await;
+                    )
+                    .await;
                 }
                 tools_used.push(name);
             }
@@ -193,7 +206,11 @@ pub async fn handle_message(
 
     let response = match final_response {
         Some(r) => {
-            tracing::info!(response_length = r.len(), tools_count = tools_used.len(), "Claude responded");
+            tracing::info!(
+                response_length = r.len(),
+                tools_count = tools_used.len(),
+                "Claude responded"
+            );
             r
         }
         None => {
@@ -235,8 +252,13 @@ pub async fn handle_message(
             &chunk,
             Some(&html),
             if chunk_count > 1 { Some(i) } else { None },
-            if chunk_count > 1 { Some(chunk_count) } else { None },
-        ).await;
+            if chunk_count > 1 {
+                Some(chunk_count)
+            } else {
+                None
+            },
+        )
+        .await;
 
         // Small delay between chunks to maintain order
         if i < chunk_count - 1 {
@@ -523,7 +545,9 @@ async fn handle_command(
                 Err(e) => {
                     // Check if already in room
                     let err_str = e.to_string();
-                    if err_str.contains("already in the room") || err_str.contains("is already joined") {
+                    if err_str.contains("already in the room")
+                        || err_str.contains("is already joined")
+                    {
                         room.send(RoomMessageEventContent::text_plain(&format!(
                             "ℹ️ You're already in channel '{}'!",
                             channel_name
@@ -608,7 +632,10 @@ async fn handle_command(
             let channel_name = session_store.delete_by_room(&room_id)?;
 
             let goodbye = if let Some(name) = &channel_name {
-                format!("👋 Leaving channel '{}'. Workspace preserved. Goodbye!", name)
+                format!(
+                    "👋 Leaving channel '{}'. Workspace preserved. Goodbye!",
+                    name
+                )
             } else {
                 "👋 Goodbye!".to_string()
             };
@@ -693,7 +720,8 @@ async fn handle_command(
                 }
             }
 
-            let response = if cleaned_rooms.is_empty() && cleaned_db.is_empty() && errors.is_empty() {
+            let response = if cleaned_rooms.is_empty() && cleaned_db.is_empty() && errors.is_empty()
+            {
                 "✅ No orphaned rooms or stale entries found. Everything is clean!".to_string()
             } else {
                 let mut msg = String::new();
@@ -832,8 +860,7 @@ async fn handle_command(
                             ));
                         }
                         msg.push_str("Commands: !schedule delete <id>, !schedule pause <id>, !schedule resume <id>");
-                        room.send(RoomMessageEventContent::text_plain(&msg))
-                            .await?;
+                        room.send(RoomMessageEventContent::text_plain(&msg)).await?;
                     }
                 }
                 Some("delete") => {
@@ -841,11 +868,10 @@ async fn handle_command(
                     match schedule_id {
                         Some(id) => {
                             // Find schedule by partial ID match
-                            let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
-                            let matching: Vec<_> = schedules
-                                .iter()
-                                .filter(|s| s.id.starts_with(*id))
-                                .collect();
+                            let schedules =
+                                scheduler_store.list_by_room(room.room_id().as_str())?;
+                            let matching: Vec<_> =
+                                schedules.iter().filter(|s| s.id.starts_with(*id)).collect();
                             match matching.len() {
                                 0 => {
                                     room.send(RoomMessageEventContent::text_plain(&format!(
@@ -883,10 +909,13 @@ async fn handle_command(
                     let schedule_id = args.get(1);
                     match schedule_id {
                         Some(id) => {
-                            let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
+                            let schedules =
+                                scheduler_store.list_by_room(room.room_id().as_str())?;
                             let matching: Vec<_> = schedules
                                 .iter()
-                                .filter(|s| s.id.starts_with(*id) && s.status == ScheduleStatus::Active)
+                                .filter(|s| {
+                                    s.id.starts_with(*id) && s.status == ScheduleStatus::Active
+                                })
                                 .collect();
                             match matching.len() {
                                 0 => {
@@ -925,10 +954,13 @@ async fn handle_command(
                     let schedule_id = args.get(1);
                     match schedule_id {
                         Some(id) => {
-                            let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
+                            let schedules =
+                                scheduler_store.list_by_room(room.room_id().as_str())?;
                             let matching: Vec<_> = schedules
                                 .iter()
-                                .filter(|s| s.id.starts_with(*id) && s.status == ScheduleStatus::Paused)
+                                .filter(|s| {
+                                    s.id.starts_with(*id) && s.status == ScheduleStatus::Paused
+                                })
                                 .collect();
                             match matching.len() {
                                 0 => {
@@ -976,7 +1008,8 @@ async fn handle_command(
 
                     // Try to parse time expression greedily from start
                     let full_args = args.join(" ");
-                    let (parsed_schedule, prompt) = parse_schedule_input(&full_args, &config.scheduler.timezone)?;
+                    let (parsed_schedule, prompt) =
+                        parse_schedule_input(&full_args, &config.scheduler.timezone)?;
 
                     if prompt.is_empty() {
                         room.send(RoomMessageEventContent::text_plain(
@@ -991,7 +1024,9 @@ async fn handle_command(
                     let now = Utc::now().to_rfc3339();
 
                     let (execute_at, cron_expr, next_exec) = match &parsed_schedule {
-                        ParsedSchedule::OneTime(dt) => (Some(dt.to_rfc3339()), None, dt.to_rfc3339()),
+                        ParsedSchedule::OneTime(dt) => {
+                            (Some(dt.to_rfc3339()), None, dt.to_rfc3339())
+                        }
                         ParsedSchedule::Recurring { cron, next } => {
                             (None, Some(cron.clone()), next.to_rfc3339())
                         }
