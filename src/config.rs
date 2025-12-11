@@ -146,6 +146,24 @@ fn default_room_prefix() -> String {
     "Claude".to_string()
 }
 
+/// Expand tilde (~) to home directory in paths
+fn expand_tilde(path: &str) -> String {
+    if path.starts_with("~/") {
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            return base_dirs
+                .home_dir()
+                .join(&path[2..])
+                .to_string_lossy()
+                .to_string();
+        }
+    } else if path == "~" {
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            return base_dirs.home_dir().to_string_lossy().to_string();
+        }
+    }
+    path.to_string()
+}
+
 impl Config {
     /// Find the config file, checking multiple locations in order:
     /// 1. ./config.toml (current directory - for development)
@@ -261,6 +279,9 @@ impl Config {
         if let Ok(val) = std::env::var("SCHEDULER_TIMEZONE") {
             config.scheduler.timezone = val;
         }
+
+        // Expand tilde in workspace path
+        config.workspace.path = expand_tilde(&config.workspace.path);
 
         // Validate timezone is a valid IANA timezone
         if config.scheduler.timezone.parse::<chrono_tz::Tz>().is_err() {
