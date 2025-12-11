@@ -18,3 +18,4 @@ runtime.log
 *.log
 output.txt
 test-config.toml
+workspace
