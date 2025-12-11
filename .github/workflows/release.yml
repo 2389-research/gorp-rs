@@ -1,16 +1,90 @@
-# ABOUTME: GitHub Actions release workflow for cross-platform binary builds and GitHub releases
-# ABOUTME: Builds Linux and macOS binaries on v* tags, generates changelog from commits, creates release
+# ABOUTME: GitHub Actions release workflow - bump version, tag, build, release
+# ABOUTME: Triggered manually with version bump type (patch/minor/major)
 
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 jobs:
+  bump-and-tag:
+    name: Bump Version & Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version in Cargo.toml
+        id: bump
+        run: |
+          # Get current version
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Current version: $CURRENT"
+
+          # Parse semver
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          # Bump based on input
+          case "${{ inputs.bump }}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+
+          # Update Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+
+          # Output for other jobs
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update Cargo.lock
+        run: cargo update --workspace
+
+      - name: Commit and tag
+        run: |
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
+          git tag -a "${{ steps.bump.outputs.tag }}" -m "Release ${{ steps.bump.outputs.tag }}"
+          git push origin main --follow-tags
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: bump-and-tag
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -23,12 +97,16 @@ jobs:
             target: x86_64-apple-darwin
             platform: macOS x86_64
             artifact_name: gorp-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macOS ARM64
+            artifact_name: gorp-macos-arm64
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ needs.bump-and-tag.outputs.tag }}
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -44,9 +122,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: rust-cache-${{ matrix.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: rust-cache-${{ matrix.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            rust-cache-${{ matrix.os }}-
+            rust-cache-${{ matrix.os }}-${{ matrix.target }}-
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
@@ -60,8 +138,7 @@ jobs:
         run: strip target/${{ matrix.target }}/release/gorp
 
       - name: Rename binary
-        run: |
-          cp target/${{ matrix.target }}/release/gorp ${{ matrix.artifact_name }}
+        run: cp target/${{ matrix.target }}/release/gorp ${{ matrix.artifact_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -72,7 +149,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [bump-and-tag, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,72 +158,54 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.bump-and-tag.outputs.tag }}
           fetch-depth: 0
 
-      - name: Download Linux artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: gorp-linux-x86_64
-          path: ./artifacts
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: gorp-macos-x86_64
           path: ./artifacts
 
       - name: Generate changelog
         id: changelog
         run: |
-          # Get previous tag
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -n 1)
+          TAG="${{ needs.bump-and-tag.outputs.tag }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -n 1)
 
           if [ -z "$PREV_TAG" ]; then
-            echo "No previous tag found, using all commits"
-            COMMITS=$(git log --pretty=format:"- %s" $GITHUB_REF_NAME)
+            COMMITS=$(git log --pretty=format:"- %s" $TAG)
           else
-            echo "Generating changelog from $PREV_TAG to $GITHUB_REF_NAME"
-            COMMITS=$(git log --pretty=format:"- %s" $PREV_TAG..$GITHUB_REF_NAME)
+            COMMITS=$(git log --pretty=format:"- %s" $PREV_TAG..$TAG)
           fi
 
-          # Group by conventional commit type
           FEATURES=$(echo "$COMMITS" | grep "^- feat:" || true)
           FIXES=$(echo "$COMMITS" | grep "^- fix:" || true)
           DOCS=$(echo "$COMMITS" | grep "^- docs:" || true)
           CHORES=$(echo "$COMMITS" | grep "^- chore:" || true)
 
-          # Build changelog
-          CHANGELOG="## Changes in $GITHUB_REF_NAME"
+          CHANGELOG="## Changes in $TAG"
+          [ -n "$FEATURES" ] && CHANGELOG="$CHANGELOG\n\n### Features\n$FEATURES"
+          [ -n "$FIXES" ] && CHANGELOG="$CHANGELOG\n\n### Bug Fixes\n$FIXES"
+          [ -n "$DOCS" ] && CHANGELOG="$CHANGELOG\n\n### Documentation\n$DOCS"
+          [ -n "$CHORES" ] && CHANGELOG="$CHANGELOG\n\n### Chores\n$CHORES"
 
-          if [ -n "$FEATURES" ]; then
-            CHANGELOG="$CHANGELOG\n\n### Features\n$FEATURES"
-          fi
-
-          if [ -n "$FIXES" ]; then
-            CHANGELOG="$CHANGELOG\n\n### Bug Fixes\n$FIXES"
-          fi
-
-          if [ -n "$DOCS" ]; then
-            CHANGELOG="$CHANGELOG\n\n### Documentation\n$DOCS"
-          fi
-
-          if [ -n "$CHORES" ]; then
-            CHANGELOG="$CHANGELOG\n\n### Chores\n$CHORES"
-          fi
-
-          # Save to file and output
           echo -e "$CHANGELOG" > changelog.md
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          cat changelog.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "changelog<<EOF"
+            cat changelog.md
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ needs.bump-and-tag.outputs.tag }}
+          name: ${{ needs.bump-and-tag.outputs.tag }}
           body: ${{ steps.changelog.outputs.changelog }}
           files: |
-            ./artifacts/gorp-linux-x86_64
-            ./artifacts/gorp-macos-x86_64
+            ./artifacts/gorp-linux-x86_64/gorp-linux-x86_64
+            ./artifacts/gorp-macos-x86_64/gorp-macos-x86_64
+            ./artifacts/gorp-macos-arm64/gorp-macos-arm64
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
