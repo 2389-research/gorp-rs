@@ -67,6 +67,45 @@ pub struct ChannelDetailTemplate {
     pub created_at: String,
 }
 
+#[derive(Template)]
+#[template(path = "admin/health.html")]
+pub struct HealthTemplate {
+    pub title: String,
+    pub homeserver: String,
+    pub bot_user_id: String,
+    pub device_name: String,
+    pub webhook_port: u16,
+    pub webhook_host: String,
+    pub timezone: String,
+    pub total_channels: usize,
+    pub active_channels: usize,
+    pub total_schedules: usize,
+    pub active_schedules: usize,
+}
+
+/// Schedule row data for list view
+#[derive(Clone)]
+pub struct ScheduleRow {
+    pub id: String,
+    pub channel_name: String,
+    pub prompt_preview: String,
+    pub schedule_type: String,
+    pub cron_expression: Option<String>,
+    pub next_execution: String,
+    pub status: String,
+    pub status_icon: String,
+    pub execution_count: i32,
+    pub created_at: String,
+    pub error_message: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "admin/schedules.html")]
+pub struct SchedulesTemplate {
+    pub title: String,
+    pub schedules: Vec<ScheduleRow>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

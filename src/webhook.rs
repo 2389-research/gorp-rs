@@ -65,9 +65,13 @@ pub async fn start_webhook_server(
         .route("/webhook/session/:session_id", post(webhook_handler))
         .with_state(Arc::new(state.clone()));
 
+    // Create scheduler store for admin and MCP routes
+    let scheduler_store = SchedulerStore::new(state.session_store.db_connection());
+
     let admin_state = AdminState {
         config: Arc::clone(&state.config),
         session_store: state.session_store.clone(),
+        scheduler_store: scheduler_store.clone(),
     };
 
     let admin_routes = admin_router()
@@ -78,7 +82,6 @@ pub async fn start_webhook_server(
         .with_state(admin_state);
 
     // Create MCP state with scheduler store and Matrix client
-    let scheduler_store = SchedulerStore::new(state.session_store.db_connection());
     let mcp_state = McpState {
         session_store: state.session_store.clone(),
         scheduler_store,

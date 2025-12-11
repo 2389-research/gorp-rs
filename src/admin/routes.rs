@@ -13,16 +13,18 @@ use std::sync::Arc;
 
 use crate::admin::templates::{
     ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate, DashboardTemplate,
-    ToastTemplate,
+    HealthTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
+use crate::scheduler::{ScheduleStatus, SchedulerStore};
 use crate::session::SessionStore;
 
 #[derive(Clone)]
 pub struct AdminState {
     pub config: Arc<Config>,
     pub session_store: SessionStore,
+    pub scheduler_store: SchedulerStore,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +51,11 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/channels/{name}", get(channel_detail))
         .route("/channels/{name}/delete", post(channel_delete))
         .route("/channels/{name}/debug", post(channel_toggle_debug))
+        .route("/health", get(health_view))
+        .route("/schedules", get(schedules_list))
+        .route("/schedules/{id}/cancel", post(schedule_cancel))
+        .route("/schedules/{id}/pause", post(schedule_pause))
+        .route("/schedules/{id}/resume", post(schedule_resume))
 }
 
 async fn dashboard() -> DashboardTemplate {
@@ -385,4 +392,134 @@ fn is_debug_enabled(channel: &crate::session::Channel) -> bool {
         .join(".matrix")
         .join("enable-debug");
     debug_path.exists()
+}
+
+// ============================================================================
+// Health & Monitoring Handlers
+// ============================================================================
+
+async fn health_view(State(state): State<AdminState>) -> HealthTemplate {
+    let channels = state.session_store.list_all().unwrap_or_default();
+    let active_channels = channels.iter().filter(|c| c.started).count();
+
+    let schedules = state.scheduler_store.list_all().unwrap_or_default();
+    let active_schedules = schedules
+        .iter()
+        .filter(|s| s.status == ScheduleStatus::Active)
+        .count();
+
+    HealthTemplate {
+        title: "Health - gorp Admin".to_string(),
+        homeserver: state.config.matrix.home_server.clone(),
+        bot_user_id: state.config.matrix.user_id.clone(),
+        device_name: state.config.matrix.device_name.clone(),
+        webhook_port: state.config.webhook.port,
+        webhook_host: state.config.webhook.host.clone(),
+        timezone: state.config.scheduler.timezone.clone(),
+        total_channels: channels.len(),
+        active_channels,
+        total_schedules: schedules.len(),
+        active_schedules,
+    }
+}
+
+async fn schedules_list(State(state): State<AdminState>) -> SchedulesTemplate {
+    let schedules = state.scheduler_store.list_all().unwrap_or_default();
+
+    let schedule_rows: Vec<ScheduleRow> = schedules
+        .iter()
+        .map(|s| {
+            let status_icon = match s.status {
+                ScheduleStatus::Active => "🟢",
+                ScheduleStatus::Paused => "⏸️",
+                ScheduleStatus::Completed => "✅",
+                ScheduleStatus::Failed => "❌",
+                ScheduleStatus::Executing => "⏳",
+                ScheduleStatus::Cancelled => "🚫",
+            };
+            let schedule_type = if s.cron_expression.is_some() {
+                "Recurring"
+            } else {
+                "One-time"
+            };
+            ScheduleRow {
+                id: s.id.clone(),
+                channel_name: s.channel_name.clone(),
+                prompt_preview: s.prompt.chars().take(50).collect(),
+                schedule_type: schedule_type.to_string(),
+                cron_expression: s.cron_expression.clone(),
+                next_execution: s.next_execution_at.chars().take(19).collect(),
+                status: format!("{:?}", s.status),
+                status_icon: status_icon.to_string(),
+                execution_count: s.execution_count,
+                created_at: s.created_at.clone(),
+                error_message: s.error_message.clone(),
+            }
+        })
+        .collect();
+
+    SchedulesTemplate {
+        title: "Schedules - gorp Admin".to_string(),
+        schedules: schedule_rows,
+    }
+}
+
+async fn schedule_cancel(
+    State(state): State<AdminState>,
+    AxumPath(id): AxumPath<String>,
+) -> ToastTemplate {
+    match state.scheduler_store.cancel_schedule(&id) {
+        Ok(true) => ToastTemplate {
+            message: format!("Schedule {} cancelled", id),
+            is_error: false,
+        },
+        Ok(false) => ToastTemplate {
+            message: format!("Schedule not found: {}", id),
+            is_error: true,
+        },
+        Err(e) => ToastTemplate {
+            message: format!("Failed to cancel schedule: {}", e),
+            is_error: true,
+        },
+    }
+}
+
+async fn schedule_pause(
+    State(state): State<AdminState>,
+    AxumPath(id): AxumPath<String>,
+) -> ToastTemplate {
+    match state.scheduler_store.pause_schedule(&id) {
+        Ok(true) => ToastTemplate {
+            message: format!("Schedule {} paused", id),
+            is_error: false,
+        },
+        Ok(false) => ToastTemplate {
+            message: format!("Schedule not found: {}", id),
+            is_error: true,
+        },
+        Err(e) => ToastTemplate {
+            message: format!("Failed to pause schedule: {}", e),
+            is_error: true,
+        },
+    }
+}
+
+async fn schedule_resume(
+    State(state): State<AdminState>,
+    AxumPath(id): AxumPath<String>,
+) -> ToastTemplate {
+    match state.scheduler_store.resume_schedule(&id) {
+        Ok(true) => ToastTemplate {
+            message: format!("Schedule {} resumed", id),
+            is_error: false,
+        },
+        Ok(false) => ToastTemplate {
+            message: format!("Schedule not found: {}", id),
+            is_error: true,
+        },
+        Err(e) => ToastTemplate {
+            message: format!("Failed to resume schedule: {}", e),
+            is_error: true,
+        },
+    }
 }

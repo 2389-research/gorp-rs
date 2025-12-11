@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">System Health</h1>
+        <div hx-get="/admin/health" hx-trigger="every 30s" hx-select=".health-stats" hx-swap="outerHTML">
+            <span class="text-sm text-gray-500">Auto-refreshes every 30s</span>
+        </div>
+    </div>
+
+    <div class="health-stats grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div class="bg-blue-50 rounded-lg p-4">
+            <div class="text-3xl font-bold text-blue-700">{{ total_channels }}</div>
+            <div class="text-sm text-blue-600">Total Channels</div>
+            <div class="text-xs text-blue-500 mt-1">{{ active_channels }} active</div>
+        </div>
+        <div class="bg-green-50 rounded-lg p-4">
+            <div class="text-3xl font-bold text-green-700">{{ total_schedules }}</div>
+            <div class="text-sm text-green-600">Total Schedules</div>
+            <div class="text-xs text-green-500 mt-1">{{ active_schedules }} active</div>
+        </div>
+        <div class="bg-purple-50 rounded-lg p-4">
+            <div class="text-3xl font-bold text-purple-700">{{ webhook_port }}</div>
+            <div class="text-sm text-purple-600">Webhook Port</div>
+            <div class="text-xs text-purple-500 mt-1">{{ webhook_host }}</div>
+        </div>
+        <div class="bg-orange-50 rounded-lg p-4">
+            <div class="text-2xl font-bold text-orange-700 truncate" title="{{ timezone }}">{{ timezone }}</div>
+            <div class="text-sm text-orange-600">Timezone</div>
+            <div class="text-xs text-orange-500 mt-1">Scheduler TZ</div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="space-y-4">
+            <h2 class="text-lg font-semibold text-gray-700">Matrix Connection</h2>
+
+            <div class="bg-gray-50 rounded-lg p-4 space-y-3">
+                <div>
+                    <label class="block text-sm font-medium text-gray-500">Homeserver</label>
+                    <p class="font-mono text-sm">{{ homeserver }}</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500">Bot User ID</label>
+                    <p class="font-mono text-sm">{{ bot_user_id }}</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-500">Device Name</label>
+                    <p class="font-mono text-sm">{{ device_name }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="space-y-4">
+            <h2 class="text-lg font-semibold text-gray-700">Quick Links</h2>
+
+            <div class="space-y-2">
+                <a href="/admin/channels" class="block p-3 bg-green-50 rounded-lg hover:bg-green-100">
+                    <div class="font-semibold text-green-800">Channels ({{ total_channels }})</div>
+                    <div class="text-sm text-green-600">View and manage channels</div>
+                </a>
+                <a href="/admin/schedules" class="block p-3 bg-blue-50 rounded-lg hover:bg-blue-100">
+                    <div class="font-semibold text-blue-800">Schedules ({{ total_schedules }})</div>
+                    <div class="text-sm text-blue-600">View scheduled prompts</div>
+                </a>
+                <a href="/admin/config" class="block p-3 bg-gray-50 rounded-lg hover:bg-gray-100">
+                    <div class="font-semibold text-gray-800">Configuration</div>
+                    <div class="text-sm text-gray-600">Edit system settings</div>
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
