@@ -67,6 +67,7 @@ pub async fn start_webhook_server(
 
     let admin_state = AdminState {
         config: Arc::clone(&state.config),
+        session_store: state.session_store.clone(),
     };
 
     let admin_routes = admin_router()

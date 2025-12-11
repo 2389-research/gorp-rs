@@ -35,6 +35,38 @@ pub struct ToastTemplate {
     pub is_error: bool,
 }
 
+/// Channel row data for list view
+#[derive(Clone)]
+pub struct ChannelRow {
+    pub name: String,
+    pub room_id: String,
+    pub started: bool,
+    pub debug_enabled: bool,
+    pub directory: String,
+    pub created_at: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin/channels/list.html")]
+pub struct ChannelListTemplate {
+    pub title: String,
+    pub channels: Vec<ChannelRow>,
+}
+
+#[derive(Template)]
+#[template(path = "admin/channels/detail.html")]
+pub struct ChannelDetailTemplate {
+    pub title: String,
+    pub name: String,
+    pub room_id: String,
+    pub session_id: String,
+    pub directory: String,
+    pub started: bool,
+    pub debug_enabled: bool,
+    pub webhook_url: String,
+    pub created_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
