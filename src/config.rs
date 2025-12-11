@@ -148,8 +148,8 @@ fn default_room_prefix() -> String {
 
 impl Config {
     /// Find the config file, checking multiple locations in order:
-    /// 1. ./config.toml (current directory)
-    /// 2. ~/.config/matrix-bridge/config.toml (XDG config dir)
+    /// 1. ./config.toml (current directory - for development)
+    /// 2. ~/.config/gorp/config.toml (XDG config dir)
     fn find_config_file() -> Option<PathBuf> {
         let local_config = PathBuf::from("config.toml");
         if local_config.exists() {
@@ -165,7 +165,7 @@ impl Config {
     }
 
     /// Load configuration from config.toml with environment variable overrides
-    /// Searches: ./config.toml, then ~/.config/matrix-bridge/config.toml
+    /// Searches: ./config.toml, then ~/.config/gorp/config.toml
     pub fn load() -> Result<Self> {
         // Try to find and load config file
         let mut config = if let Some(config_path) = Self::find_config_file() {

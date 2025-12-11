@@ -27,3 +27,4 @@ two_timer = "2.2"
 cron = "0.15"
 regex = "1.12.2"
 chrono-tz = "0.10.4"
+clap = { version = "4.5.53", features = ["derive"] }

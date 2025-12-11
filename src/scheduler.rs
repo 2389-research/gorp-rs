@@ -526,6 +526,47 @@ impl SchedulerStore {
         Ok(())
     }
 
+    /// List all schedules
+    pub fn list_all(&self) -> Result<Vec<ScheduledPrompt>> {
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_name, room_id, prompt, created_by, created_at,
+                    execute_at, cron_expression, last_executed_at, next_execution_at,
+                    status, error_message, execution_count
+             FROM scheduled_prompts
+             ORDER BY next_execution_at ASC",
+        )?;
+
+        let schedules = stmt
+            .query_map([], |row| {
+                Ok(ScheduledPrompt {
+                    id: row.get(0)?,
+                    channel_name: row.get(1)?,
+                    room_id: row.get(2)?,
+                    prompt: row.get(3)?,
+                    created_by: row.get(4)?,
+                    created_at: row.get(5)?,
+                    execute_at: row.get(6)?,
+                    cron_expression: row.get(7)?,
+                    last_executed_at: row.get(8)?,
+                    next_execution_at: row.get(9)?,
+                    status: row
+                        .get::<_, String>(10)?
+                        .parse()
+                        .unwrap_or(ScheduleStatus::Active),
+                    error_message: row.get(11)?,
+                    execution_count: row.get(12)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(schedules)
+    }
+
     /// List schedules for a specific room
     pub fn list_by_room(&self, room_id: &str) -> Result<Vec<ScheduledPrompt>> {
         let conn = self

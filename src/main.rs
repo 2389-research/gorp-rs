@@ -1,7 +1,8 @@
-// ABOUTME: Main entry point for Matrix-Claude bridge with sync loop
-// ABOUTME: Initializes logging, config, session store, Matrix client, and message handlers
+// ABOUTME: Main entry point for gorp - Matrix-Claude bridge
+// ABOUTME: CLI interface with subcommands for start, config, and schedule management
 
 use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use gorp::{
     config::Config,
@@ -26,6 +27,58 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
     Layer,
 };
+
+#[derive(Parser)]
+#[command(name = "gorp")]
+#[command(author, version, about = "Matrix-Claude bridge - connect Claude to Matrix rooms", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the Matrix-Claude bridge
+    Start,
+    /// Configuration management
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Schedule management
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Initialize config directory with example config
+    Init {
+        /// Overwrite existing config file
+        #[arg(short, long)]
+        force: bool,
+    },
+    /// Validate configuration file
+    Check,
+    /// Show current configuration (redacted secrets)
+    Show,
+    /// Show path to config file
+    Path,
+}
+
+#[derive(Subcommand)]
+enum ScheduleAction {
+    /// List all scheduled tasks
+    List,
+    /// Clear all scheduled tasks
+    Clear {
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
+}
 
 /// Timeout for initial sync operation (uploading device keys, receiving room state)
 const INITIAL_SYNC_TIMEOUT_SECS: u64 = 60;
@@ -106,6 +159,186 @@ async fn notify_ready(client: &Client, config: &Config) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Start) | None => run_start().await,
+        Some(Commands::Config { action }) => run_config(action),
+        Some(Commands::Schedule { action }) => run_schedule(action),
+    }
+}
+
+/// Handle config subcommands
+fn run_config(action: ConfigAction) -> Result<()> {
+    dotenvy::dotenv().ok();
+
+    match action {
+        ConfigAction::Init { force } => {
+            let config_dir = paths::config_dir();
+            let config_file = paths::config_file();
+
+            // Check if config already exists
+            if config_file.exists() && !force {
+                eprintln!("Config file already exists: {}", config_file.display());
+                eprintln!("Use --force to overwrite");
+                std::process::exit(1);
+            }
+
+            // Create config directory
+            std::fs::create_dir_all(&config_dir)?;
+
+            // Write example config
+            let example_config = include_str!("../config.toml.example");
+            std::fs::write(&config_file, example_config)?;
+
+            println!("✓ Created config directory: {}", config_dir.display());
+            println!("✓ Created config file: {}", config_file.display());
+            println!("\nEdit the config file to add your Matrix credentials.");
+            println!("Then run: gorp config check");
+            Ok(())
+        }
+        ConfigAction::Check => {
+            print!("Checking configuration... ");
+            match Config::load() {
+                Ok(config) => {
+                    println!("✓ Valid");
+                    println!("\nConfiguration summary:");
+                    println!("  Homeserver:    {}", config.matrix.home_server);
+                    println!("  User ID:       {}", config.matrix.user_id);
+                    println!("  Allowed users: {}", config.matrix.allowed_users.len());
+                    println!("  Workspace:     {}", config.workspace.path);
+                    println!("  Webhook port:  {}", config.webhook.port);
+                    println!("  Timezone:      {}", config.scheduler.timezone);
+                    Ok(())
+                }
+                Err(e) => {
+                    println!("✗ Invalid");
+                    eprintln!("\nError: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ConfigAction::Show => {
+            let config = Config::load()?;
+            println!("[matrix]");
+            println!("home_server = \"{}\"", config.matrix.home_server);
+            println!("user_id = \"{}\"", config.matrix.user_id);
+            println!("device_name = \"{}\"", config.matrix.device_name);
+            println!(
+                "password = \"{}\"",
+                if config.matrix.password.is_some() {
+                    "********"
+                } else {
+                    "<not set>"
+                }
+            );
+            println!(
+                "access_token = \"{}\"",
+                if config.matrix.access_token.is_some() {
+                    "********"
+                } else {
+                    "<not set>"
+                }
+            );
+            println!(
+                "recovery_key = \"{}\"",
+                if config.matrix.recovery_key.is_some() {
+                    "********"
+                } else {
+                    "<not set>"
+                }
+            );
+            println!("allowed_users = {:?}", config.matrix.allowed_users);
+            println!("\n[workspace]");
+            println!("path = \"{}\"", config.workspace.path);
+            println!("\n[claude]");
+            println!("binary_path = \"{}\"", config.claude.binary_path);
+            println!("\n[webhook]");
+            println!("port = {}", config.webhook.port);
+            println!("\n[scheduler]");
+            println!("timezone = \"{}\"", config.scheduler.timezone);
+            Ok(())
+        }
+        ConfigAction::Path => {
+            println!("{}", paths::config_file().display());
+            Ok(())
+        }
+    }
+}
+
+/// Handle schedule subcommands
+fn run_schedule(action: ScheduleAction) -> Result<()> {
+    dotenvy::dotenv().ok();
+    let config = Config::load()?;
+    let session_store = SessionStore::new(&config.workspace.path)?;
+    let scheduler_store = SchedulerStore::new(session_store.db_connection());
+    scheduler_store.initialize_schema()?;
+
+    match action {
+        ScheduleAction::List => {
+            let schedules = scheduler_store.list_all()?;
+            if schedules.is_empty() {
+                println!("No scheduled tasks.");
+            } else {
+                println!(
+                    "{:<8} {:<10} {:<20} {}",
+                    "ID", "Status", "Next Execution", "Prompt"
+                );
+                println!("{}", "-".repeat(70));
+                for s in schedules {
+                    let next = if s.next_execution_at.is_empty() {
+                        "-".to_string()
+                    } else {
+                        // Truncate to just date and time
+                        s.next_execution_at.chars().take(16).collect()
+                    };
+                    let prompt_preview: String = s.prompt.chars().take(30).collect();
+                    println!(
+                        "{:<8} {:<10} {:<20} {}{}",
+                        &s.id[..8],
+                        format!("{:?}", s.status),
+                        next,
+                        prompt_preview,
+                        if s.prompt.len() > 30 { "..." } else { "" }
+                    );
+                }
+            }
+            Ok(())
+        }
+        ScheduleAction::Clear { force } => {
+            let schedules = scheduler_store.list_all()?;
+            if schedules.is_empty() {
+                println!("No scheduled tasks to clear.");
+                return Ok(());
+            }
+
+            if !force {
+                print!(
+                    "This will delete {} scheduled task(s). Continue? [y/N] ",
+                    schedules.len()
+                );
+                use std::io::Write;
+                std::io::stdout().flush()?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Cancelled.");
+                    return Ok(());
+                }
+            }
+
+            for s in &schedules {
+                scheduler_store.delete_schedule(&s.id)?;
+            }
+            println!("Cleared {} scheduled task(s).", schedules.len());
+            Ok(())
+        }
+    }
+}
+
+/// Start the Matrix-Claude bridge
+async fn run_start() -> Result<()> {
     // Set up panic hook to log panics before they crash the process
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("\n╔══════════════════════════════════════════════════════════╗");
@@ -142,7 +375,7 @@ async fn main() -> Result<()> {
             .pretty()
             .with_target(true)
             .with_filter(tracing_subscriber::EnvFilter::new(
-                "warn,matrix_bridge=info,matrix_sdk_crypto=error,matrix_sdk::encryption=error",
+                "warn,gorp=info,matrix_sdk_crypto=error,matrix_sdk::encryption=error",
             ));
 
     tracing_subscriber::registry()
@@ -150,7 +383,7 @@ async fn main() -> Result<()> {
         .with(console_layer)
         .init();
 
-    tracing::info!("Starting Matrix-Claude Bridge");
+    tracing::info!("Starting gorp - Matrix-Claude Bridge");
 
     // Load configuration
     dotenvy::dotenv().ok();
