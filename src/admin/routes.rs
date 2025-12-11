@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crate::admin::templates::{
     ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate, DashboardTemplate,
-    HealthTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
+    ErrorEntry, HealthTemplate, LogViewerTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -49,6 +49,7 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/channels", get(channels_list))
         .route("/channels/create", post(channel_create))
         .route("/channels/{name}", get(channel_detail))
+        .route("/channels/{name}/logs", get(channel_logs))
         .route("/channels/{name}/delete", post(channel_delete))
         .route("/channels/{name}/debug", post(channel_toggle_debug))
         .route("/health", get(health_view))
@@ -237,6 +238,65 @@ async fn channel_detail(
     })
 }
 
+async fn channel_logs(
+    State(state): State<AdminState>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<LogViewerTemplate, ToastTemplate> {
+    let channel = state
+        .session_store
+        .get_by_name(&name)
+        .map_err(|e| ToastTemplate {
+            message: format!("Database error: {}", e),
+            is_error: true,
+        })?
+        .ok_or_else(|| ToastTemplate {
+            message: format!("Channel not found: {}", name),
+            is_error: true,
+        })?;
+
+    // Validate directory path for security
+    channel.validate_directory().map_err(|e| ToastTemplate {
+        message: format!("Invalid channel directory: {}", e),
+        is_error: true,
+    })?;
+
+    let log_path = Path::new(&channel.directory)
+        .join(".matrix")
+        .join("matrix_messages.log");
+
+    let log_lines = if log_path.exists() {
+        match std::fs::read_to_string(&log_path) {
+            Ok(content) => {
+                // Get last 100 lines
+                let lines: Vec<String> = content
+                    .lines()
+                    .rev()
+                    .take(100)
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                lines
+            }
+            Err(e) => {
+                return Err(ToastTemplate {
+                    message: format!("Failed to read log file: {}", e),
+                    is_error: true,
+                });
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    Ok(LogViewerTemplate {
+        title: format!("Logs: {} - gorp Admin", channel.channel_name),
+        channel_name: channel.channel_name,
+        log_lines,
+    })
+}
+
 async fn channel_create(
     State(_state): State<AdminState>,
     Form(form): Form<CreateChannelForm>,
@@ -408,6 +468,32 @@ async fn health_view(State(state): State<AdminState>) -> HealthTemplate {
         .filter(|s| s.status == ScheduleStatus::Active)
         .count();
 
+    // Get recent failed schedules (last 10)
+    let mut recent_errors: Vec<ErrorEntry> = schedules
+        .iter()
+        .filter(|s| s.status == ScheduleStatus::Failed && s.error_message.is_some())
+        .map(|s| {
+            let timestamp = s
+                .last_executed_at
+                .as_ref()
+                .unwrap_or(&s.created_at)
+                .chars()
+                .take(19)
+                .collect();
+            let source = format!("Schedule: {}", s.channel_name);
+            let message = s.error_message.clone().unwrap_or_default();
+            ErrorEntry {
+                timestamp,
+                source,
+                message,
+            }
+        })
+        .collect();
+
+    // Sort by timestamp descending (most recent first) and take 10
+    recent_errors.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    recent_errors.truncate(10);
+
     HealthTemplate {
         title: "Health - gorp Admin".to_string(),
         homeserver: state.config.matrix.home_server.clone(),
@@ -420,6 +506,7 @@ async fn health_view(State(state): State<AdminState>) -> HealthTemplate {
         active_channels,
         total_schedules: schedules.len(),
         active_schedules,
+        recent_errors,
     }
 }
 

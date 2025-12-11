@@ -10,6 +10,10 @@
             <h1 class="text-2xl font-bold mt-2">{{ name }}</h1>
         </div>
         <div class="flex gap-2">
+            <a href="/admin/channels/{{ name }}/logs"
+               class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                View Logs
+            </a>
             <button hx-post="/admin/channels/{{ name }}/debug"
                     hx-target="#toast"
                     hx-swap="innerHTML"

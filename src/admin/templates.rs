@@ -81,6 +81,15 @@ pub struct HealthTemplate {
     pub active_channels: usize,
     pub total_schedules: usize,
     pub active_schedules: usize,
+    pub recent_errors: Vec<ErrorEntry>,
+}
+
+/// Error entry data for health view
+#[derive(Clone)]
+pub struct ErrorEntry {
+    pub timestamp: String,
+    pub source: String,
+    pub message: String,
 }
 
 /// Schedule row data for list view
@@ -104,6 +113,14 @@ pub struct ScheduleRow {
 pub struct SchedulesTemplate {
     pub title: String,
     pub schedules: Vec<ScheduleRow>,
+}
+
+#[derive(Template)]
+#[template(path = "admin/channels/logs.html")]
+pub struct LogViewerTemplate {
+    pub title: String,
+    pub channel_name: String,
+    pub log_lines: Vec<String>,
 }
 
 #[cfg(test)]
@@ -166,5 +183,64 @@ mod tests {
         let rendered = template.render().unwrap();
         assert!(rendered.contains("Save failed"));
         assert!(rendered.contains("bg-red-500"));
+    }
+
+    #[test]
+    fn test_health_template_renders_no_errors() {
+        let template = HealthTemplate {
+            title: "Health Test".to_string(),
+            homeserver: "https://matrix.org".to_string(),
+            bot_user_id: "@bot:matrix.org".to_string(),
+            device_name: "test-device".to_string(),
+            webhook_port: 13000,
+            webhook_host: "localhost".to_string(),
+            timezone: "America/Chicago".to_string(),
+            total_channels: 5,
+            active_channels: 3,
+            total_schedules: 10,
+            active_schedules: 7,
+            recent_errors: vec![],
+        };
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Health Test"));
+        assert!(rendered.contains("No Recent Errors"));
+        assert!(rendered.contains("All systems operating normally"));
+        assert!(rendered.contains("bg-green-50"));
+    }
+
+    #[test]
+    fn test_health_template_renders_with_errors() {
+        let template = HealthTemplate {
+            title: "Health Test".to_string(),
+            homeserver: "https://matrix.org".to_string(),
+            bot_user_id: "@bot:matrix.org".to_string(),
+            device_name: "test-device".to_string(),
+            webhook_port: 13000,
+            webhook_host: "localhost".to_string(),
+            timezone: "America/Chicago".to_string(),
+            total_channels: 5,
+            active_channels: 3,
+            total_schedules: 10,
+            active_schedules: 7,
+            recent_errors: vec![
+                ErrorEntry {
+                    timestamp: "2025-12-11T10:00:00".to_string(),
+                    source: "Schedule: test-channel".to_string(),
+                    message: "Failed to execute prompt".to_string(),
+                },
+                ErrorEntry {
+                    timestamp: "2025-12-11T09:00:00".to_string(),
+                    source: "Schedule: another-channel".to_string(),
+                    message: "Channel no longer exists".to_string(),
+                },
+            ],
+        };
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Health Test"));
+        assert!(rendered.contains("Schedule: test-channel"));
+        assert!(rendered.contains("Failed to execute prompt"));
+        assert!(rendered.contains("2025-12-11T10:00:00"));
+        assert!(rendered.contains("bg-red-50"));
+        assert!(!rendered.contains("No Recent Errors"));
     }
 }

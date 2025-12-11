@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6" hx-get="/admin/channels/{{ channel_name }}/logs" hx-trigger="every 10s" hx-swap="outerHTML">
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <a href="/admin/channels/{{ channel_name }}" class="text-blue-600 hover:text-blue-800 text-sm">&larr; Back to Channel Detail</a>
+            <h1 class="text-2xl font-bold mt-2">Logs: {{ channel_name }}</h1>
+        </div>
+    </div>
+
+    <div class="bg-gray-900 text-green-400 rounded-lg p-4 font-mono text-sm overflow-auto" style="max-height: 600px;">
+        {% if log_lines.is_empty() %}
+        <p class="text-gray-500">No logs yet</p>
+        {% else %}
+        {% for line in log_lines %}
+        <div class="whitespace-pre-wrap break-all">{{ line }}</div>
+        {% endfor %}
+        {% endif %}
+    </div>
+
+    <div class="mt-4 text-sm text-gray-600">
+        <p>Auto-refreshes every 10 seconds. Showing last 100 lines.</p>
+    </div>
+</div>
+{% endblock %}
