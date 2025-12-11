@@ -9,8 +9,9 @@ WORKDIR /app
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy source code
+# Copy source code and templates (Askama compiles templates into binary)
 COPY src ./src
+COPY templates ./templates
 
 # Build release binary
 RUN cargo build --release
