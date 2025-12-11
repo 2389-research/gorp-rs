@@ -1233,6 +1233,7 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "matrix-sdk",
+ "mime_guess",
  "pulldown-cmark",
  "regex",
  "rusqlite",

@@ -22,6 +22,8 @@ use crate::{
     admin::{admin_router, auth_middleware, AdminState},
     claude,
     config::Config,
+    mcp::{mcp_handler, McpState},
+    scheduler::SchedulerStore,
     session::SessionStore,
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
 };
@@ -74,9 +76,23 @@ pub async fn start_webhook_server(
         ))
         .with_state(admin_state);
 
+    // Create MCP state with scheduler store and Matrix client
+    let scheduler_store = SchedulerStore::new(state.session_store.db_connection());
+    let mcp_state = McpState {
+        session_store: state.session_store.clone(),
+        scheduler_store,
+        matrix_client: state.matrix_client.clone(),
+        timezone: state.config.scheduler.timezone.clone(),
+    };
+
+    let mcp_routes = Router::new()
+        .route("/mcp", post(mcp_handler))
+        .with_state(Arc::new(mcp_state));
+
     let app = Router::new()
         .route("/", get(|| async { Redirect::permanent("/admin") }))
         .nest("/admin", admin_routes)
+        .merge(mcp_routes)
         .merge(webhook_routes)
         .layer(TraceLayer::new_for_http());
 

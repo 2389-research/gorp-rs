@@ -3,7 +3,12 @@
 
 use anyhow::Result;
 use matrix_sdk::{
-    room::Room, ruma::events::room::message::RoomMessageEventContent, Client, RoomState,
+    media::MediaRequest,
+    room::Room,
+    ruma::events::room::message::{
+        MessageType, RoomMessageEventContent,
+    },
+    Client, RoomState,
 };
 
 use crate::{
@@ -24,6 +29,79 @@ use std::path::Path;
 fn is_debug_enabled(channel_dir: &str) -> bool {
     let debug_path = Path::new(channel_dir).join(".matrix").join("enable-debug");
     debug_path.exists()
+}
+
+/// Write context file for MCP tools to read
+/// This tells tools like gorp_schedule_prompt which channel/room they're operating in
+async fn write_context_file(
+    channel_dir: &str,
+    room_id: &str,
+    channel_name: &str,
+    session_id: &str,
+) -> Result<()> {
+    let matrix_dir = Path::new(channel_dir).join(".matrix");
+    tokio::fs::create_dir_all(&matrix_dir).await?;
+
+    let context = serde_json::json!({
+        "room_id": room_id,
+        "channel_name": channel_name,
+        "session_id": session_id,
+        "updated_at": chrono::Utc::now().to_rfc3339()
+    });
+
+    let context_path = matrix_dir.join("context.json");
+    tokio::fs::write(&context_path, serde_json::to_string_pretty(&context)?).await?;
+
+    tracing::debug!(path = %context_path.display(), "Wrote MCP context file");
+    Ok(())
+}
+
+/// Download an attachment from Matrix and save it to the workspace
+/// Returns the relative path to the saved file
+async fn download_attachment(
+    client: &Client,
+    source: &matrix_sdk::ruma::events::room::MediaSource,
+    filename: &str,
+    workspace_dir: &str,
+) -> Result<String> {
+    use tokio::io::AsyncWriteExt;
+
+    // Create attachments directory
+    let attachments_dir = Path::new(workspace_dir).join("attachments");
+    tokio::fs::create_dir_all(&attachments_dir).await?;
+
+    // Generate unique filename to avoid collisions
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let safe_filename = filename
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect::<String>();
+    let unique_filename = format!("{}_{}", timestamp, safe_filename);
+    let file_path = attachments_dir.join(&unique_filename);
+
+    // Download the media
+    let request = MediaRequest {
+        source: source.clone(),
+        format: matrix_sdk::media::MediaFormat::File,
+    };
+
+    let data = client
+        .media()
+        .get_media_content(&request, true)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to download media: {}", e))?;
+
+    // Write to file
+    let mut file = tokio::fs::File::create(&file_path).await?;
+    file.write_all(&data).await?;
+
+    tracing::info!(
+        filename = %unique_filename,
+        size = data.len(),
+        "Downloaded attachment"
+    );
+
+    Ok(format!("attachments/{}", unique_filename))
 }
 
 pub async fn handle_message(
@@ -103,7 +181,81 @@ pub async fn handle_message(
         return Ok(());
     };
 
+    // Check for attachments (images, files) and build the prompt
+    let prompt = match &event.content.msgtype {
+        MessageType::Image(image_content) => {
+            // Download the image
+            let filename = image_content.body.clone();
+            match download_attachment(&client, &image_content.source, &filename, &channel.directory)
+                .await
+            {
+                Ok(rel_path) => {
+                    let abs_path = format!("{}/{}", channel.directory, rel_path);
+                    tracing::info!(path = %abs_path, "Image downloaded");
+                    // Include image path in prompt for Claude to read
+                    format!(
+                        "[Attached image: {}]\n\n{}",
+                        abs_path,
+                        image_content.body
+                    )
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to download image");
+                    room.send(RoomMessageEventContent::text_plain(&format!(
+                        "⚠️ Failed to download image: {}",
+                        e
+                    )))
+                    .await?;
+                    return Ok(());
+                }
+            }
+        }
+        MessageType::File(file_content) => {
+            // Download the file
+            let filename = file_content.body.clone();
+            match download_attachment(&client, &file_content.source, &filename, &channel.directory)
+                .await
+            {
+                Ok(rel_path) => {
+                    let abs_path = format!("{}/{}", channel.directory, rel_path);
+                    tracing::info!(path = %abs_path, "File downloaded");
+                    format!(
+                        "[Attached file: {}]\n\n{}",
+                        abs_path,
+                        file_content.body
+                    )
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to download file");
+                    room.send(RoomMessageEventContent::text_plain(&format!(
+                        "⚠️ Failed to download file: {}",
+                        e
+                    )))
+                    .await?;
+                    return Ok(());
+                }
+            }
+        }
+        _ => {
+            // Text message or other type - use body as-is
+            body.to_string()
+        }
+    };
+
     let channel_args = channel.cli_args();
+
+    // Write context file for MCP tools (before Claude invocation)
+    if let Err(e) = write_context_file(
+        &channel.directory,
+        room.room_id().as_str(),
+        &channel.channel_name,
+        &channel.session_id,
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "Failed to write MCP context file");
+        // Non-fatal - continue without context file
+    }
 
     // Start typing indicator and keep it alive
     room.typing_notice(true).await?;
@@ -136,7 +288,7 @@ pub async fn handle_message(
         &config.claude.binary_path,
         config.claude.sdk_url.as_deref(),
         channel_args,
-        body,
+        &prompt,
         Some(&channel.directory),
     )
     .await

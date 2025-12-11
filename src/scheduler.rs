@@ -689,12 +689,32 @@ impl SchedulerStore {
 use crate::{
     claude,
     config::Config,
-    session::SessionStore,
-    utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+    session::{Channel, SessionStore},
+    utils::{chunk_message, expand_slash_command, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
 };
 use matrix_sdk::{ruma::events::room::message::RoomMessageEventContent, Client};
+use std::path::Path;
 use std::time::Duration as StdDuration;
 use tokio::time::interval;
+
+/// Write context file for MCP tools (used by scheduler before Claude invocation)
+async fn write_context_file(channel: &Channel) -> Result<()> {
+    let matrix_dir = Path::new(&channel.directory).join(".matrix");
+    tokio::fs::create_dir_all(&matrix_dir).await?;
+
+    let context = serde_json::json!({
+        "room_id": channel.room_id,
+        "channel_name": channel.channel_name,
+        "session_id": channel.session_id,
+        "updated_at": Utc::now().to_rfc3339()
+    });
+
+    let context_path = matrix_dir.join("context.json");
+    tokio::fs::write(&context_path, serde_json::to_string_pretty(&context)?).await?;
+
+    tracing::debug!(path = %context_path.display(), "Wrote MCP context file for scheduled task");
+    Ok(())
+}
 
 /// Start the background scheduler task that checks for and executes due schedules
 pub async fn start_scheduler(
@@ -826,131 +846,194 @@ async fn execute_schedule(
         tracing::warn!(error = %e, "Failed to send schedule notification");
     }
 
-    // Start typing indicator
-    let _ = room.typing_notice(true).await;
+    // Write context file for MCP tools before invoking Claude
+    if let Err(e) = write_context_file(&channel).await {
+        tracing::warn!(error = %e, "Failed to write context file for scheduled task");
+        // Non-fatal - continue without context file
+    }
 
-    // Invoke Claude
-    match claude::invoke_claude(
-        &config.claude.binary_path,
-        config.claude.sdk_url.as_deref(),
-        channel.cli_args(),
-        &schedule.prompt,
-        Some(&channel.directory),
-    )
-    .await
-    {
-        Ok(response) => {
-            // Stop typing
-            let _ = room.typing_notice(false).await;
-
-            // Check for empty response - this is a failure case
-            if response.trim().is_empty() {
-                tracing::error!(
-                    schedule_id = %schedule.id,
-                    prompt = %schedule.prompt,
-                    "Claude returned empty response for scheduled task"
-                );
-                let error_msg = "⚠️ Scheduled task failed: Claude returned an empty response. This may indicate a session issue or prompt problem.";
-                let _ = room
-                    .send(RoomMessageEventContent::text_plain(error_msg))
-                    .await;
-                let _ = scheduler_store.mark_failed(&schedule.id, "Empty response from Claude");
-                return;
-            }
-
-            // Send response to room with chunking
-            let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
-            let chunk_count = chunks.len();
-
-            for (i, chunk) in chunks.into_iter().enumerate() {
-                let html = markdown_to_html(&chunk);
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_html(&chunk, &html))
-                    .await
-                {
-                    tracing::warn!(error = %e, chunk = i, "Failed to send response chunk");
-                }
-
-                // Log the Matrix message
-                log_matrix_message(
-                    &channel.directory,
-                    room.room_id().as_str(),
-                    "scheduled_response",
-                    &chunk,
-                    Some(&html),
-                    if chunk_count > 1 { Some(i) } else { None },
-                    if chunk_count > 1 {
-                        Some(chunk_count)
-                    } else {
-                        None
-                    },
-                )
-                .await;
-
-                // Small delay between chunks
-                if i < chunk_count - 1 {
-                    tokio::time::sleep(StdDuration::from_millis(100)).await;
-                }
-            }
-
-            // Calculate next execution for recurring schedules
-            let next_execution = if let Some(ref cron_expr) = schedule.cron_expression {
-                match compute_next_cron_execution_in_tz(cron_expr, &config.scheduler.timezone) {
-                    Ok(next) => Some(next),
-                    Err(e) => {
-                        // Log the error and mark schedule as failed instead of silently completing
-                        tracing::error!(
-                            schedule_id = %schedule.id,
-                            cron = %cron_expr,
-                            timezone = %config.scheduler.timezone,
-                            error = %e,
-                            "Failed to compute next execution time for recurring schedule"
-                        );
-                        let _ = scheduler_store.mark_failed(
-                            &schedule.id,
-                            &format!("Failed to compute next execution: {}", e),
-                        );
-                        return; // Exit early - don't mark as executed
-                    }
-                }
-            } else {
-                None // One-time schedule - will be marked completed
-            };
-
-            if let Err(e) = scheduler_store.mark_executed(&schedule.id, next_execution) {
-                tracing::error!(
-                    schedule_id = %schedule.id,
-                    error = %e,
-                    "Failed to mark schedule as executed"
-                );
-            } else {
-                let status = if next_execution.is_some() {
-                    "rescheduled"
-                } else {
-                    "completed"
-                };
-                tracing::info!(
-                    schedule_id = %schedule.id,
-                    status,
-                    "Schedule execution successful"
-                );
-            }
-        }
+    // Expand slash commands at execution time (so updates to commands are picked up)
+    let prompt = match expand_slash_command(&schedule.prompt, &channel.directory) {
+        Ok(p) => p,
         Err(e) => {
-            // Stop typing
-            let _ = room.typing_notice(false).await;
-
+            tracing::error!(
+                schedule_id = %schedule.id,
+                error = %e,
+                "Failed to expand slash command"
+            );
             let error_msg = format!("⚠️ Scheduled task failed: {}", e);
             let _ = room
                 .send(RoomMessageEventContent::text_plain(&error_msg))
                 .await;
+            let _ = scheduler_store.mark_failed(&schedule.id, &e);
+            return;
+        }
+    };
 
+    // Start typing indicator
+    let _ = room.typing_notice(true).await;
+
+    // Use streaming mode to capture actual response even if session ends with errors
+    let mut rx = match claude::invoke_claude_streaming(
+        &config.claude.binary_path,
+        config.claude.sdk_url.as_deref(),
+        channel.cli_args(),
+        &prompt,
+        Some(&channel.directory),
+    )
+    .await
+    {
+        Ok(rx) => rx,
+        Err(e) => {
+            let _ = room.typing_notice(false).await;
             tracing::error!(
                 schedule_id = %schedule.id,
                 error = %e,
-                "Schedule execution failed"
+                "Failed to spawn Claude for scheduled task"
             );
+            let error_msg = format!("⚠️ Scheduled task failed: {}", e);
+            let _ = room
+                .send(RoomMessageEventContent::text_plain(&error_msg))
+                .await;
             let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
+            return;
         }
+    };
+
+    // Collect response from stream
+    let mut response = String::new();
+    let mut had_error = false;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            claude::ClaudeEvent::ToolUse { name, input_preview } => {
+                tracing::debug!(tool = %name, preview = %input_preview, "Scheduled task tool use");
+            }
+            claude::ClaudeEvent::Result(text) => {
+                response = text;
+            }
+            claude::ClaudeEvent::Error(e) => {
+                tracing::warn!(error = %e, "Scheduled task Claude error");
+                had_error = true;
+                // Don't return yet - we might have captured text before the error
+            }
+        }
+    }
+
+    // Stop typing
+    let _ = room.typing_notice(false).await;
+
+    // Check for empty response
+    if response.trim().is_empty() {
+        if had_error {
+            tracing::error!(
+                schedule_id = %schedule.id,
+                prompt = %schedule.prompt,
+                "Claude returned empty response with error for scheduled task"
+            );
+            let error_msg = "⚠️ Scheduled task failed: Claude encountered an error and returned no response.";
+            let _ = room
+                .send(RoomMessageEventContent::text_plain(error_msg))
+                .await;
+            let _ = scheduler_store.mark_failed(&schedule.id, "Claude error with empty response");
+        } else {
+            tracing::error!(
+                schedule_id = %schedule.id,
+                prompt = %schedule.prompt,
+                "Claude returned empty response for scheduled task"
+            );
+            let error_msg = "⚠️ Scheduled task failed: Claude returned an empty response. This may indicate a session issue or prompt problem.";
+            let _ = room
+                .send(RoomMessageEventContent::text_plain(error_msg))
+                .await;
+            let _ = scheduler_store.mark_failed(&schedule.id, "Empty response from Claude");
+        }
+        return;
+    }
+
+    // Send response to room with chunking
+    let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
+    let chunk_count = chunks.len();
+
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        let html = markdown_to_html(&chunk);
+        if let Err(e) = room
+            .send(RoomMessageEventContent::text_html(&chunk, &html))
+            .await
+        {
+            tracing::warn!(error = %e, chunk = i, "Failed to send response chunk");
+        }
+
+        // Log the Matrix message
+        log_matrix_message(
+            &channel.directory,
+            room.room_id().as_str(),
+            "scheduled_response",
+            &chunk,
+            Some(&html),
+            if chunk_count > 1 { Some(i) } else { None },
+            if chunk_count > 1 {
+                Some(chunk_count)
+            } else {
+                None
+            },
+        )
+        .await;
+
+        // Small delay between chunks
+        if i < chunk_count - 1 {
+            tokio::time::sleep(StdDuration::from_millis(100)).await;
+        }
+    }
+
+    // Calculate next execution for recurring schedules
+    let next_execution = if let Some(ref cron_expr) = schedule.cron_expression {
+        match compute_next_cron_execution_in_tz(cron_expr, &config.scheduler.timezone) {
+            Ok(next) => Some(next),
+            Err(e) => {
+                // Log the error and mark schedule as failed instead of silently completing
+                tracing::error!(
+                    schedule_id = %schedule.id,
+                    cron = %cron_expr,
+                    timezone = %config.scheduler.timezone,
+                    error = %e,
+                    "Failed to compute next execution time for recurring schedule"
+                );
+                let _ = scheduler_store.mark_failed(
+                    &schedule.id,
+                    &format!("Failed to compute next execution: {}", e),
+                );
+                return; // Exit early - don't mark as executed
+            }
+        }
+    } else {
+        None // One-time schedule - will be marked completed
+    };
+
+    if let Err(e) = scheduler_store.mark_executed(&schedule.id, next_execution) {
+        tracing::error!(
+            schedule_id = %schedule.id,
+            error = %e,
+            "Failed to mark schedule as executed"
+        );
+    } else {
+        let status = if next_execution.is_some() {
+            "rescheduled"
+        } else {
+            "completed"
+        };
+        tracing::info!(
+            schedule_id = %schedule.id,
+            status,
+            "Schedule execution successful"
+        );
+    }
+
+    // Log warning if there was an error but we still got a response
+    if had_error {
+        tracing::warn!(
+            schedule_id = %schedule.id,
+            "Scheduled task completed with warnings (Claude encountered non-fatal errors)"
+        );
     }
 }

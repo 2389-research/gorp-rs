@@ -72,6 +72,62 @@ pub fn chunk_message(text: &str, max_chars: usize) -> Vec<String> {
 /// Maximum chunk size for Matrix messages (chars)
 pub const MAX_CHUNK_SIZE: usize = 8000;
 
+/// Expand a slash command to its full prompt content
+/// Reads from {workspace}/.claude/commands/{command}.md
+/// Returns Ok(expanded_content) if found, or Ok(original) if not a slash command
+pub fn expand_slash_command(prompt: &str, workspace_dir: &str) -> Result<String, String> {
+    let trimmed = prompt.trim();
+
+    // Check if this is a slash command
+    if !trimmed.starts_with('/') {
+        return Ok(prompt.to_string());
+    }
+
+    // Extract command name (strip leading /)
+    let command_name = trimmed[1..].split_whitespace().next().unwrap_or("");
+    if command_name.is_empty() {
+        return Ok(prompt.to_string());
+    }
+
+    // Look for command file
+    let command_path = std::path::Path::new(workspace_dir)
+        .join(".claude")
+        .join("commands")
+        .join(format!("{}.md", command_name));
+
+    if !command_path.exists() {
+        return Err(format!(
+            "Slash command '{}' not found. Expected file: {}",
+            command_name,
+            command_path.display()
+        ));
+    }
+
+    // Read and parse the command file
+    let content = std::fs::read_to_string(&command_path)
+        .map_err(|e| format!("Failed to read command file: {}", e))?;
+
+    // Strip YAML frontmatter if present (between --- markers)
+    let expanded = if content.starts_with("---") {
+        // Find the closing ---
+        if let Some(end_pos) = content[3..].find("---") {
+            content[end_pos + 6..].trim().to_string()
+        } else {
+            content
+        }
+    } else {
+        content
+    };
+
+    tracing::info!(
+        command = %command_name,
+        expanded_len = expanded.len(),
+        "Expanded slash command for scheduling"
+    );
+
+    Ok(expanded)
+}
+
 /// Matrix message log entry for JSONL logging
 #[derive(Serialize)]
 pub struct MatrixMessageLog {
