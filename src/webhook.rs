@@ -83,6 +83,8 @@ pub async fn start_webhook_server(
         scheduler_store,
         matrix_client: state.matrix_client.clone(),
         timezone: state.config.scheduler.timezone.clone(),
+        workspace_path: state.config.workspace.path.clone(),
+        room_prefix: state.config.matrix.room_prefix.clone(),
     };
 
     let mcp_routes = Router::new()

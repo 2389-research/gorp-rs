@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use matrix_sdk::Client;
 
+use crate::matrix_client;
 use crate::scheduler::{
     parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
 };
@@ -20,6 +21,8 @@ pub struct McpState {
     pub scheduler_store: SchedulerStore,
     pub matrix_client: Client,
     pub timezone: String,
+    pub workspace_path: String,
+    pub room_prefix: String,
 }
 
 /// JSON-RPC request structure
@@ -245,6 +248,42 @@ fn get_tools() -> Vec<ToolDefinition> {
                 "required": ["confirm"]
             }),
         },
+        ToolDefinition {
+            name: "create_channel".to_string(),
+            description: "Create a new Matrix room and channel with its own Claude workspace.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Channel name (alphanumeric, dashes, underscores only)"
+                    },
+                    "invite_user": {
+                        "type": "string",
+                        "description": "Matrix user ID to invite (e.g., @user:matrix.org)"
+                    }
+                },
+                "required": ["name"]
+            }),
+        },
+        ToolDefinition {
+            name: "invite_to_channel".to_string(),
+            description: "Invite a user to an existing channel's Matrix room.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "channel_name": {
+                        "type": "string",
+                        "description": "Channel to invite to (optional, defaults to current channel)"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "Matrix user ID to invite (e.g., @user:matrix.org)"
+                    }
+                },
+                "required": ["user_id"]
+            }),
+        },
     ]
 }
 
@@ -344,6 +383,8 @@ async fn handle_tools_call(state: &McpState, request: &JsonRpcRequest) -> JsonRp
         "list_channels" => handle_list_channels(state),
         "set_debug" => handle_set_debug(state, &arguments),
         "leave_room" => handle_leave_room(state, &arguments).await,
+        "create_channel" => handle_create_channel(state, &arguments).await,
+        "invite_to_channel" => handle_invite_to_channel(state, &arguments).await,
         _ => Err(format!("Unknown tool: {}", tool_name)),
     };
 
@@ -861,5 +902,98 @@ async fn handle_leave_room(state: &McpState, args: &Value) -> Result<String, Str
     Ok(format!(
         "Left room '{}'. Workspace at '{}' is preserved.",
         channel_name, channel.directory
+    ))
+}
+
+/// Handle create_channel tool call
+async fn handle_create_channel(state: &McpState, args: &Value) -> Result<String, String> {
+    let channel_name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: name")?;
+
+    let invite_user = args.get("invite_user").and_then(|v| v.as_str());
+
+    // Create Matrix room first
+    let room_name = format!("{}: {}", state.room_prefix, channel_name);
+    let room_id = matrix_client::create_room(&state.matrix_client, &room_name)
+        .await
+        .map_err(|e| format!("Failed to create Matrix room: {}", e))?;
+
+    // Create channel in session store (handles directory creation, templates, validation)
+    let channel = state
+        .session_store
+        .create_channel(channel_name, &room_id.to_string())
+        .map_err(|e| format!("Failed to create channel: {}", e))?;
+
+    // Invite user if specified
+    if let Some(user_id) = invite_user {
+        matrix_client::invite_user(&state.matrix_client, &room_id, user_id)
+            .await
+            .map_err(|e| format!("Room created but failed to invite user: {}", e))?;
+
+        Ok(format!(
+            "Created channel '{}'\nRoom ID: {}\nWorkspace: {}\nInvited: {}",
+            channel.channel_name,
+            channel.room_id,
+            channel.directory,
+            user_id
+        ))
+    } else {
+        Ok(format!(
+            "Created channel '{}'\nRoom ID: {}\nWorkspace: {}",
+            channel.channel_name,
+            channel.room_id,
+            channel.directory,
+        ))
+    }
+}
+
+/// Handle invite_to_channel tool call
+async fn handle_invite_to_channel(state: &McpState, args: &Value) -> Result<String, String> {
+    use matrix_sdk::ruma::OwnedRoomId;
+
+    let user_id = args
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: user_id")?;
+
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
+
+    // Get channel name from context if not provided
+    let channel_name = match channel_name {
+        Some(name) => name.to_string(),
+        None => {
+            if let Some(workspace_dir) = find_workspace_dir() {
+                if let Some(ctx) = read_context_file(&workspace_dir) {
+                    ctx.channel_name
+                } else {
+                    return Err("channel_name is required (context file not readable)".to_string());
+                }
+            } else {
+                return Err("channel_name is required (no context file found)".to_string());
+            }
+        }
+    };
+
+    let channel = state
+        .session_store
+        .get_by_name(&channel_name)
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| format!("Channel not found: {}", channel_name))?;
+
+    let room_id: OwnedRoomId = channel
+        .room_id
+        .parse()
+        .map_err(|e| format!("Invalid room ID: {}", e))?;
+
+    // Invite the user
+    matrix_client::invite_user(&state.matrix_client, &room_id, user_id)
+        .await
+        .map_err(|e| format!("Failed to invite user: {}", e))?;
+
+    Ok(format!(
+        "Invited {} to channel '{}'",
+        user_id, channel_name
     ))
 }
