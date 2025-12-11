@@ -27,3 +27,10 @@ pub struct ConfigTemplate {
     pub access_token_set: bool,
     pub recovery_key_set: bool,
 }
+
+#[derive(Template)]
+#[template(path = "partials/toast.html")]
+pub struct ToastTemplate {
+    pub message: String,
+    pub is_error: bool,
+}

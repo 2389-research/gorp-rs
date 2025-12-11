@@ -1,0 +1,10 @@
+<div class="{% if is_error %}bg-red-500{% else %}bg-green-500{% endif %} text-white px-6 py-3 rounded-lg shadow-lg animate-fade-in"
+     id="toast-message">
+    {{ message }}
+</div>
+<script>
+    setTimeout(function() {
+        var toast = document.getElementById('toast-message');
+        if (toast) toast.remove();
+    }, 3000);
+</script>
