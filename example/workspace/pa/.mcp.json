@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "gsuite": {
+      "type": "stdio",
+      "command": "gsuite-mcp",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    },
+    "pagen": {
+      "type": "stdio",
+      "command": "pagen",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    },
+    "toki": {
+      "type": "stdio",
+      "command": "toki",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    },
+    "chronicle": {
+      "type": "stdio",
+      "command": "chronicle",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}

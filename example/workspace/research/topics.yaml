@@ -1,0 +1,18 @@
+# ABOUTME: Central registry of all research topics tracked by [AGENT_NAME]
+# ABOUTME: Contains topic metadata including staleness thresholds, priorities, and source preferences
+
+# Schema reference:
+# - name: Human-readable topic name
+# - slug: URL-safe identifier (used for reports/[slug]/)
+# - description: What this research covers
+# - priority: high | medium | low (affects update ordering)
+# - staleness_days: Days before topic needs refresh (default: 3)
+# - date_last_researched: ISO date of last research run
+# - sources: Source preferences for this topic
+#     - web_search: true/false
+#     - academic: true/false (arXiv, Google Scholar)
+#     - social: true/false (Twitter/X, Reddit, HN)
+#     - domains_include: [] (allowlist)
+#     - domains_exclude: [] (blocklist)
+# - status: active | paused | archived
+

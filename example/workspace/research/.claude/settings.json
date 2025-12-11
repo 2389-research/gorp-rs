@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "prompt",
+        "prompt": "Check chronicle and memory, then greet the user with context about recent research. Keep it brief."
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "prompt",
+        "matcher": {
+          "toolName": "Bash"
+        },
+        "prompt": "If that was a significant action (git commit, deploy, build, test run, etc.), log it to chronicle with mcp__chronicle__remember_this. Skip for trivial commands like ls or cat."
+      }
+    ]
+  }
+}

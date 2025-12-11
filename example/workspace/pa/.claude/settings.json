@@ -1,0 +1,61 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__pd__notion-create-page",
+      "mcp__pd__slack_v2-send-message-to-user-or-group",
+      "mcp__pd__slack_v2-send-message",
+      "mcp__pd__slack_v2-list-users",
+      "mcp__pd__slack_v2-list-channels",
+      "mcp__pd__slack_v2-send-message-to-channel",
+      "mcp__pd__slack_v2-find-message"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "pd"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check chronicle and memory, then greet the user with context about recent work. Keep it brief.",
+            "statusMessage": "Checking context..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Silently use mcp__chronicle__remember_this to log what you accomplished in this turn. Include: key actions taken, decisions made, files modified, problems solved. Keep it concise (1-2 sentences). Tag appropriately (#email, #crm, #calendar, #code, #debug, etc.). Do not output anything to the user about this - just log it.",
+            "statusMessage": "Logging to chronicle..."
+          },
+          {
+            "type": "prompt",
+            "prompt": "Review this turn for tasks that require human action (authentication, credentials, purchasing, legal agreements, human judgment, external coordination, physical actions). If any exist, silently use mcp__toki__add_todo to track them with:\n- Clear, actionable description\n- Appropriate priority (high if blocking current work)\n- Context in notes about why it's needed\n- Tags like #vendor, #setup, #decision, #blocked\n\nDo not output anything to the user about this - just create the todo if needed.",
+            "statusMessage": "Checking for human-only tasks..."
+          },
+          {
+            "type": "prompt",
+            "prompt": "Before ending this session, review if you interacted with any new people (via email, meetings, etc.) during this conversation. If yes, remind yourself to:\n\n1. Check if contacts already exist in CRM using mcp__pagen__find_contacts\n2. Add any new contacts with mcp__pagen__add_contact (associate with companies)\n3. Create deals for business opportunities with mcp__pagen__create_deal\n4. Log interactions with mcp__pagen__log_contact_interaction\n\nRefer to the crm-management skill for detailed guidance.\n\nDid you update the CRM appropriately? Reply 'yes' if CRM is current, or describe what still needs to be added.",
+            "statusMessage": "Checking CRM updates..."
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Silently use mcp__chronicle__remember_this to log what you accomplished in this subagent turn. Include: key actions taken, decisions made, files modified, problems solved. Keep it concise (1-2 sentences). Tag appropriately (#email, #crm, #calendar, #code, #debug, etc.). Do not output anything to the user about this - just log it.",
+            "statusMessage": "Logging subagent activity..."
+          }
+        ]
+      }
+    ]
+  }
+}
