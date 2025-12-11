@@ -28,3 +28,6 @@ cron = "0.15"
 regex = "1.12.2"
 chrono-tz = "0.10.4"
 clap = { version = "4.5.53", features = ["derive"] }
+askama = "0.12"
+askama_axum = "0.4"
+tower-sessions = { version = "0.13", features = ["memory-store"] }
