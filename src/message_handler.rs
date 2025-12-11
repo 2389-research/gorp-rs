@@ -1105,6 +1105,7 @@ async fn handle_command(
                                 ScheduleStatus::Completed => "✅",
                                 ScheduleStatus::Failed => "❌",
                                 ScheduleStatus::Executing => "⏳",
+                                ScheduleStatus::Cancelled => "🚫",
                             };
                             let schedule_type = if sched.cron_expression.is_some() {
                                 "🔄 recurring"

@@ -35,6 +35,7 @@ pub enum ScheduleStatus {
     Completed,
     Failed,
     Executing,
+    Cancelled,
 }
 
 impl std::fmt::Display for ScheduleStatus {
@@ -45,6 +46,7 @@ impl std::fmt::Display for ScheduleStatus {
             ScheduleStatus::Completed => write!(f, "completed"),
             ScheduleStatus::Failed => write!(f, "failed"),
             ScheduleStatus::Executing => write!(f, "executing"),
+            ScheduleStatus::Cancelled => write!(f, "cancelled"),
         }
     }
 }
@@ -59,6 +61,7 @@ impl FromStr for ScheduleStatus {
             "completed" => Ok(ScheduleStatus::Completed),
             "failed" => Ok(ScheduleStatus::Failed),
             "executing" => Ok(ScheduleStatus::Executing),
+            "cancelled" => Ok(ScheduleStatus::Cancelled),
             _ => anyhow::bail!("Unknown schedule status: {}", s),
         }
     }
@@ -682,6 +685,65 @@ impl SchedulerStore {
             })),
             None => Ok(None),
         }
+    }
+
+    /// Alias for get_by_id
+    pub fn get_schedule(&self, id: &str) -> Result<Option<ScheduledPrompt>> {
+        self.get_by_id(id)
+    }
+
+    /// List schedules by channel name
+    pub fn list_by_channel(&self, channel_name: &str) -> Result<Vec<ScheduledPrompt>> {
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_name, room_id, prompt, created_by, created_at,
+                    execute_at, cron_expression, last_executed_at, next_execution_at,
+                    status, error_message, execution_count
+             FROM scheduled_prompts
+             WHERE channel_name = ?1
+             ORDER BY next_execution_at ASC",
+        )?;
+
+        let rows = stmt.query_map([channel_name], |row| {
+            Ok(ScheduledPrompt {
+                id: row.get(0)?,
+                channel_name: row.get(1)?,
+                room_id: row.get(2)?,
+                prompt: row.get(3)?,
+                created_by: row.get(4)?,
+                created_at: row.get(5)?,
+                execute_at: row.get(6)?,
+                cron_expression: row.get(7)?,
+                last_executed_at: row.get(8)?,
+                next_execution_at: row.get(9)?,
+                status: row
+                    .get::<_, String>(10)?
+                    .parse()
+                    .unwrap_or(ScheduleStatus::Active),
+                error_message: row.get(11)?,
+                execution_count: row.get(12)?,
+            })
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("Failed to collect schedules: {}", e))
+    }
+
+    /// Cancel a schedule (marks it as cancelled, doesn't delete)
+    pub fn cancel_schedule(&self, id: &str) -> Result<bool> {
+        let conn = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let rows = conn.execute(
+            "UPDATE scheduled_prompts SET status = 'cancelled' WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(rows > 0)
     }
 }
 

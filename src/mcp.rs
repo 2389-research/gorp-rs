@@ -107,6 +107,7 @@ fn find_workspace_dir() -> Option<String> {
 /// Get list of available tools
 fn get_tools() -> Vec<ToolDefinition> {
     vec![
+        // Scheduling tools
         ToolDefinition {
             name: "schedule_prompt".to_string(),
             description: "Schedule a prompt to be executed at a future time. The prompt will be sent to the current channel and processed by Claude.".to_string(),
@@ -130,6 +131,39 @@ fn get_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "list_schedules".to_string(),
+            description: "List all scheduled prompts for a channel.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "channel_name": {
+                        "type": "string",
+                        "description": "Channel to list schedules for (optional, defaults to current channel)"
+                    },
+                    "include_completed": {
+                        "type": "boolean",
+                        "description": "Include completed one-time schedules (default: false)"
+                    }
+                },
+                "required": []
+            }),
+        },
+        ToolDefinition {
+            name: "cancel_schedule".to_string(),
+            description: "Cancel a scheduled prompt by its ID.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "schedule_id": {
+                        "type": "string",
+                        "description": "The schedule ID to cancel"
+                    }
+                },
+                "required": ["schedule_id"]
+            }),
+        },
+        // Attachment tools
+        ToolDefinition {
             name: "send_attachment".to_string(),
             description: "Send a file or image to the Matrix chat room. The file must exist in the workspace directory.".to_string(),
             input_schema: json!({
@@ -149,6 +183,66 @@ fn get_tools() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["file_path"]
+            }),
+        },
+        // Channel management tools
+        ToolDefinition {
+            name: "get_status".to_string(),
+            description: "Get status information about the current channel including room ID, session state, debug mode, and webhook URL.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "channel_name": {
+                        "type": "string",
+                        "description": "Channel to get status for (optional, defaults to current channel)"
+                    }
+                },
+                "required": []
+            }),
+        },
+        ToolDefinition {
+            name: "list_channels".to_string(),
+            description: "List all registered channels/rooms.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
+        ToolDefinition {
+            name: "set_debug".to_string(),
+            description: "Enable or disable debug mode for a channel. Debug mode shows tool usage in Matrix chat.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "true to enable debug mode, false to disable"
+                    },
+                    "channel_name": {
+                        "type": "string",
+                        "description": "Channel to set debug for (optional, defaults to current channel)"
+                    }
+                },
+                "required": ["enabled"]
+            }),
+        },
+        ToolDefinition {
+            name: "leave_room".to_string(),
+            description: "Make the bot leave a Matrix room. The workspace is preserved.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "channel_name": {
+                        "type": "string",
+                        "description": "Channel to leave (optional, defaults to current channel)"
+                    },
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Must be true to confirm leaving"
+                    }
+                },
+                "required": ["confirm"]
             }),
         },
     ]
@@ -243,7 +337,13 @@ async fn handle_tools_call(state: &McpState, request: &JsonRpcRequest) -> JsonRp
 
     let result = match tool_name {
         "schedule_prompt" => handle_schedule_prompt(state, &arguments).await,
+        "list_schedules" => handle_list_schedules(state, &arguments),
+        "cancel_schedule" => handle_cancel_schedule(state, &arguments),
         "send_attachment" => handle_send_attachment(state, &arguments).await,
+        "get_status" => handle_get_status(state, &arguments),
+        "list_channels" => handle_list_channels(state),
+        "set_debug" => handle_set_debug(state, &arguments),
+        "leave_room" => handle_leave_room(state, &arguments).await,
         _ => Err(format!("Unknown tool: {}", tool_name)),
     };
 
@@ -468,5 +568,298 @@ async fn handle_send_attachment(state: &McpState, args: &Value) -> Result<String
     Ok(format!(
         "Successfully sent {} '{}' to room {}",
         type_str, filename, room_id_str
+    ))
+}
+
+/// Handle list_schedules tool call
+fn handle_list_schedules(state: &McpState, args: &Value) -> Result<String, String> {
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
+    let include_completed = args
+        .get("include_completed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Get channel name from context if not provided
+    let channel_name = match channel_name {
+        Some(name) => name.to_string(),
+        None => {
+            if let Some(workspace_dir) = find_workspace_dir() {
+                if let Some(ctx) = read_context_file(&workspace_dir) {
+                    ctx.channel_name
+                } else {
+                    return Err("channel_name is required (context file not readable)".to_string());
+                }
+            } else {
+                return Err("channel_name is required (no context file found)".to_string());
+            }
+        }
+    };
+
+    let schedules = state
+        .scheduler_store
+        .list_by_channel(&channel_name)
+        .map_err(|e| format!("Database error: {}", e))?;
+
+    if schedules.is_empty() {
+        return Ok(format!("No schedules found for channel '{}'", channel_name));
+    }
+
+    let mut output = format!("Schedules for channel '{}':\n\n", channel_name);
+    for schedule in schedules {
+        // Skip completed one-time schedules unless requested
+        if !include_completed
+            && schedule.status == ScheduleStatus::Completed
+            && schedule.cron_expression.is_none()
+        {
+            continue;
+        }
+
+        let schedule_type = if schedule.cron_expression.is_some() {
+            "recurring"
+        } else {
+            "one-time"
+        };
+        let status = format!("{:?}", schedule.status).to_lowercase();
+        let prompt_preview: String = schedule.prompt.chars().take(50).collect();
+
+        output.push_str(&format!(
+            "• {} ({})\n  ID: {}\n  Prompt: {}...\n  Next: {}\n  Status: {}\n\n",
+            schedule_type,
+            schedule.cron_expression.as_deref().unwrap_or("once"),
+            schedule.id,
+            prompt_preview,
+            schedule.next_execution_at,
+            status
+        ));
+    }
+
+    Ok(output)
+}
+
+/// Handle cancel_schedule tool call
+fn handle_cancel_schedule(state: &McpState, args: &Value) -> Result<String, String> {
+    let schedule_id = args
+        .get("schedule_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: schedule_id")?;
+
+    // Verify the schedule exists
+    let schedule = state
+        .scheduler_store
+        .get_schedule(schedule_id)
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| format!("Schedule not found: {}", schedule_id))?;
+
+    // Cancel it
+    state
+        .scheduler_store
+        .cancel_schedule(schedule_id)
+        .map_err(|e| format!("Failed to cancel schedule: {}", e))?;
+
+    Ok(format!(
+        "Cancelled schedule '{}' for channel '{}'",
+        schedule_id, schedule.channel_name
+    ))
+}
+
+/// Handle get_status tool call
+fn handle_get_status(state: &McpState, args: &Value) -> Result<String, String> {
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
+
+    // Get channel name from context if not provided
+    let channel_name = match channel_name {
+        Some(name) => name.to_string(),
+        None => {
+            if let Some(workspace_dir) = find_workspace_dir() {
+                if let Some(ctx) = read_context_file(&workspace_dir) {
+                    ctx.channel_name
+                } else {
+                    return Err("channel_name is required (context file not readable)".to_string());
+                }
+            } else {
+                return Err("channel_name is required (no context file found)".to_string());
+            }
+        }
+    };
+
+    let channel = state
+        .session_store
+        .get_by_name(&channel_name)
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| format!("Channel not found: {}", channel_name))?;
+
+    // Check debug mode
+    let debug_path = std::path::Path::new(&channel.directory)
+        .join(".matrix")
+        .join("enable-debug");
+    let debug_enabled = debug_path.exists();
+
+    // Count schedules
+    let schedules = state
+        .scheduler_store
+        .list_by_channel(&channel_name)
+        .unwrap_or_default();
+    let active_schedules = schedules
+        .iter()
+        .filter(|s| s.status == ScheduleStatus::Active)
+        .count();
+
+    Ok(format!(
+        "Channel: {}\n\
+         Room ID: {}\n\
+         Session ID: {}\n\
+         Session Started: {}\n\
+         Debug Mode: {}\n\
+         Workspace: {}\n\
+         Active Schedules: {}",
+        channel.channel_name,
+        channel.room_id,
+        channel.session_id,
+        if channel.started { "Yes" } else { "No" },
+        if debug_enabled { "Enabled" } else { "Disabled" },
+        channel.directory,
+        active_schedules
+    ))
+}
+
+/// Handle list_channels tool call
+fn handle_list_channels(state: &McpState) -> Result<String, String> {
+    let channels = state
+        .session_store
+        .list_all()
+        .map_err(|e| format!("Database error: {}", e))?;
+
+    if channels.is_empty() {
+        return Ok("No channels registered.".to_string());
+    }
+
+    let mut output = format!("Registered channels ({}):\n\n", channels.len());
+    for channel in channels {
+        let debug_path = std::path::Path::new(&channel.directory)
+            .join(".matrix")
+            .join("enable-debug");
+        let debug_status = if debug_path.exists() { "🔧" } else { "" };
+
+        output.push_str(&format!(
+            "• {} {}\n  Room: {}\n  Started: {}\n\n",
+            channel.channel_name,
+            debug_status,
+            channel.room_id,
+            if channel.started { "Yes" } else { "No" }
+        ));
+    }
+
+    Ok(output)
+}
+
+/// Handle set_debug tool call
+fn handle_set_debug(state: &McpState, args: &Value) -> Result<String, String> {
+    let enabled = args
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or("Missing required parameter: enabled")?;
+
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
+
+    // Get channel name from context if not provided
+    let channel_name = match channel_name {
+        Some(name) => name.to_string(),
+        None => {
+            if let Some(workspace_dir) = find_workspace_dir() {
+                if let Some(ctx) = read_context_file(&workspace_dir) {
+                    ctx.channel_name
+                } else {
+                    return Err("channel_name is required (context file not readable)".to_string());
+                }
+            } else {
+                return Err("channel_name is required (no context file found)".to_string());
+            }
+        }
+    };
+
+    let channel = state
+        .session_store
+        .get_by_name(&channel_name)
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| format!("Channel not found: {}", channel_name))?;
+
+    let debug_dir = std::path::Path::new(&channel.directory).join(".matrix");
+    let debug_file = debug_dir.join("enable-debug");
+
+    if enabled {
+        // Create .matrix directory if needed
+        std::fs::create_dir_all(&debug_dir)
+            .map_err(|e| format!("Failed to create debug directory: {}", e))?;
+        // Create enable-debug file
+        std::fs::write(&debug_file, "")
+            .map_err(|e| format!("Failed to enable debug: {}", e))?;
+        Ok(format!(
+            "Debug mode ENABLED for channel '{}'. Tool usage will be shown in Matrix.",
+            channel_name
+        ))
+    } else {
+        // Remove enable-debug file if it exists
+        if debug_file.exists() {
+            std::fs::remove_file(&debug_file)
+                .map_err(|e| format!("Failed to disable debug: {}", e))?;
+        }
+        Ok(format!(
+            "Debug mode DISABLED for channel '{}'. Tool usage will be hidden.",
+            channel_name
+        ))
+    }
+}
+
+/// Handle leave_room tool call
+async fn handle_leave_room(state: &McpState, args: &Value) -> Result<String, String> {
+    use matrix_sdk::ruma::OwnedRoomId;
+
+    let confirm = args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !confirm {
+        return Err("Must set confirm=true to leave a room".to_string());
+    }
+
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
+
+    // Get channel name from context if not provided
+    let channel_name = match channel_name {
+        Some(name) => name.to_string(),
+        None => {
+            if let Some(workspace_dir) = find_workspace_dir() {
+                if let Some(ctx) = read_context_file(&workspace_dir) {
+                    ctx.channel_name
+                } else {
+                    return Err("channel_name is required (context file not readable)".to_string());
+                }
+            } else {
+                return Err("channel_name is required (no context file found)".to_string());
+            }
+        }
+    };
+
+    let channel = state
+        .session_store
+        .get_by_name(&channel_name)
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| format!("Channel not found: {}", channel_name))?;
+
+    let room_id: OwnedRoomId = channel
+        .room_id
+        .parse()
+        .map_err(|e| format!("Invalid room ID: {}", e))?;
+
+    let room = state
+        .matrix_client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room not found: {}", channel.room_id))?;
+
+    // Leave the room
+    room.leave()
+        .await
+        .map_err(|e| format!("Failed to leave room: {}", e))?;
+
+    Ok(format!(
+        "Left room '{}'. Workspace at '{}' is preserved.",
+        channel_name, channel.directory
     ))
 }
