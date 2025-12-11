@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    admin::admin_router,
+    admin::{admin_router, AdminState},
     claude,
     config::Config,
     session::SessionStore,
@@ -60,10 +60,14 @@ pub async fn start_webhook_server(
 
     let webhook_routes = Router::new()
         .route("/webhook/session/:session_id", post(webhook_handler))
-        .with_state(Arc::new(state));
+        .with_state(Arc::new(state.clone()));
+
+    let admin_state = AdminState {
+        config: Arc::clone(&state.config),
+    };
 
     let app = Router::new()
-        .nest("/admin", admin_router())
+        .nest("/admin", admin_router().with_state(admin_state))
         .merge(webhook_routes)
         .layer(TraceLayer::new_for_http());
 
