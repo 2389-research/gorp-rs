@@ -6,8 +6,8 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     middleware,
-    response::IntoResponse,
-    routing::post,
+    response::{IntoResponse, Redirect},
+    routing::{get, post},
     Json, Router,
 };
 use matrix_sdk::{
@@ -75,6 +75,7 @@ pub async fn start_webhook_server(
         .with_state(admin_state);
 
     let app = Router::new()
+        .route("/", get(|| async { Redirect::permanent("/admin") }))
         .nest("/admin", admin_routes)
         .merge(webhook_routes)
         .layer(TraceLayer::new_for_http());

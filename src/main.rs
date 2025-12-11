@@ -39,7 +39,10 @@ const ASCII_BANNER: &str = r#"
 
 #[derive(Parser)]
 #[command(name = "gorp")]
-#[command(author, version, about = "Matrix-Claude bridge - connect Claude to Matrix rooms", long_about = None)]
+#[command(author, version)]
+#[command(about = "Matrix-Claude bridge - connect Claude to Matrix rooms")]
+#[command(before_help = ASCII_BANNER)]
+#[command(after_help = "Admin panel available at http://localhost:13000/admin when running.")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -166,28 +169,16 @@ async fn notify_ready(client: &Client, config: &Config) {
     }
 }
 
-/// Print the help message with ASCII art banner
-fn print_help() {
-    println!("{}", ASCII_BANNER);
-    println!("  Matrix-Claude bridge - connect Claude to Matrix rooms\n");
-    println!("USAGE:");
-    println!("    gorp <COMMAND>\n");
-    println!("COMMANDS:");
-    println!("    start      Start the Matrix-Claude bridge");
-    println!("    config     Configuration management");
-    println!("    schedule   Schedule management");
-    println!("    help       Print this message\n");
-    println!("Run 'gorp <COMMAND> --help' for more information on a command.");
-    println!("\nAdmin panel available at http://localhost:13000/admin when running.");
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         None => {
-            print_help();
+            // No subcommand - print help with ASCII banner
+            use clap::CommandFactory;
+            Cli::command().print_help()?;
+            println!(); // Add newline after help
             Ok(())
         }
         Some(Commands::Start) => run_start().await,
