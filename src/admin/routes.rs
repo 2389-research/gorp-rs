@@ -2,7 +2,9 @@
 // ABOUTME: Handles config viewing, editing, and session management
 
 use axum::{extract::State, routing::{get, post}, Form, Router};
+use chrono_tz::Tz;
 use serde::Deserialize;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::admin::templates::{ConfigTemplate, DashboardTemplate, ToastTemplate};
@@ -65,6 +67,35 @@ async fn config_save(
     State(state): State<AdminState>,
     Form(form): Form<ConfigForm>,
 ) -> ToastTemplate {
+    // Validate workspace path
+    let workspace_path = Path::new(&form.workspace_path);
+    if form.workspace_path.contains("..") {
+        return ToastTemplate {
+            message: "Invalid workspace path: contains path traversal".to_string(),
+            is_error: true,
+        };
+    }
+    if !workspace_path.exists() {
+        return ToastTemplate {
+            message: format!("Workspace path does not exist: {}", form.workspace_path),
+            is_error: true,
+        };
+    }
+    if !workspace_path.is_dir() {
+        return ToastTemplate {
+            message: format!("Workspace path is not a directory: {}", form.workspace_path),
+            is_error: true,
+        };
+    }
+
+    // Validate timezone
+    if form.scheduler_timezone.parse::<Tz>().is_err() {
+        return ToastTemplate {
+            message: format!("Invalid timezone: {}", form.scheduler_timezone),
+            is_error: true,
+        };
+    }
+
     // Parse allowed_users from comma-separated string
     let allowed_users: Vec<String> = form
         .allowed_users

@@ -29,15 +29,12 @@ pub async fn auth_middleware(
         return Ok(next.run(request).await);
     }
 
-    // Check for API key in query params or header
-    let uri = request.uri();
-    let query = uri.query().unwrap_or("");
-    let has_valid_key = query.contains(&format!("key={}", api_key.as_ref().unwrap()))
-        || request
-            .headers()
-            .get("X-API-Key")
-            .and_then(|v| v.to_str().ok())
-            == api_key.as_deref();
+    // Check for API key in X-API-Key header only (not query params for security)
+    let has_valid_key = request
+        .headers()
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        == api_key.as_deref();
 
     if has_valid_key {
         Ok(next.run(request).await)
