@@ -415,12 +415,12 @@ async fn handle_command(
             };
 
             // Validate channel directory path to prevent path traversal attacks
-            let channel_path = std::path::Path::new(&channel.directory);
-            if !channel_path.is_absolute() && channel.directory.contains("..") {
+            // Reject any path containing ".." regardless of whether it's absolute
+            if channel.directory.contains("..") {
                 tracing::warn!(
                     channel = %channel.channel_name,
                     directory = %channel.directory,
-                    "Suspicious channel directory path detected"
+                    "Suspicious channel directory path detected (contains ..)"
                 );
                 room.send(RoomMessageEventContent::text_plain(
                     "⚠️ Invalid channel directory configuration.",
@@ -429,6 +429,7 @@ async fn handle_command(
                 return Ok(());
             }
 
+            let channel_path = std::path::Path::new(&channel.directory);
             let debug_dir = channel_path.join(".matrix");
             let debug_file = debug_dir.join("enable-debug");
 
