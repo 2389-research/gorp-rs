@@ -1,5 +1,5 @@
-# ABOUTME: Multi-stage Dockerfile for Matrix-Claude bridge
-# ABOUTME: Builds Rust binary and creates minimal runtime image with proper user permissions
+# ABOUTME: Multi-stage Dockerfile for gorp Matrix-Claude bridge
+# ABOUTME: Builds Rust binary and creates minimal runtime image with XDG directory structure
 
 # Build stage
 FROM rustlang/rust:nightly-bookworm as builder
@@ -24,23 +24,31 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash claude
+# Create non-root user with home directory
+RUN useradd --create-home --shell /bin/bash gorp
 
-WORKDIR /app
+# Set up XDG directory structure for gorp user
+RUN mkdir -p /home/gorp/.config/gorp \
+             /home/gorp/.local/share/gorp/crypto_store \
+             /home/gorp/.local/share/gorp/logs \
+             /home/gorp/workspace && \
+    chown -R gorp:gorp /home/gorp
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/gorp /app/gorp
-
-# Create directories for persistent data
-RUN mkdir -p /app/sessions_db /app/crypto_store && \
-    chown -R claude:claude /app
+COPY --from=builder /app/target/release/gorp /usr/local/bin/gorp
 
 # Switch to non-root user
-USER claude
+USER gorp
+WORKDIR /home/gorp
 
-# Volumes for persistent data
-VOLUME ["/app/sessions_db", "/app/crypto_store"]
+# Environment variables for XDG compliance
+ENV HOME=/home/gorp
+
+# Volumes for persistent data (XDG-compliant paths)
+VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.local/share/gorp", "/home/gorp/workspace"]
+
+# Expose webhook port
+EXPOSE 13000
 
 # Run the bot
-CMD ["/app/gorp"]
+CMD ["gorp", "start"]

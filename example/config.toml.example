@@ -1,13 +1,18 @@
-# Matrix-Claude Bridge Configuration
+# gorp - Matrix-Claude Bridge Configuration
 #
 # Configuration file locations (searched in order):
-#   1. ./config.toml (current directory)
-#   2. ~/.config/matrix-bridge/config.toml (XDG config dir)
+#   1. ./config.toml (current directory - for development)
+#   2. ~/.config/gorp/config.toml (XDG config dir)
 #
-# Data directories (XDG compliant):
-#   - Crypto store: ~/.local/share/matrix-bridge/crypto_store/
-#   - Logs: ~/.local/share/matrix-bridge/logs/debug.log.YYYY-MM-DD
-#   (On macOS: ~/Library/Application Support/com.2389.matrix-bridge/)
+# Data directories:
+#   - Crypto store: ~/.local/share/gorp/crypto_store/
+#   - Logs: ~/.local/share/gorp/logs/
+#   - Schedules DB: ~/.local/share/gorp/scheduled_prompts.db
+#
+# Docker paths (when using docker-compose):
+#   - Config: ./config/config.toml -> /home/gorp/.config/gorp/config.toml
+#   - Data: ./data/ -> /home/gorp/.local/share/gorp/
+#   - Workspace: ./workspace/ -> /home/gorp/workspace/
 
 [matrix]
 # Matrix homeserver URL (required)
@@ -23,14 +28,13 @@ password = "your-password-here"
 # access_token = "syt_..."
 
 # Device name for this bot instance
-device_name = "claude-matrix-bridge"
+device_name = "gorp"
 
-# Comma-separated list of allowed user IDs (required)
+# List of allowed user IDs (required)
 allowed_users = ["@user1:matrix.org", "@user2:matrix.org"]
 
 # Prefix for room names (default: "Claude")
 # Room names will be formatted as "PREFIX: channel-name"
-# Example: "Work: PA" or "Personal: dev-help"
 room_prefix = "Claude"
 
 # Recovery key for cross-signing bootstrap (optional)
@@ -60,4 +64,12 @@ host = "localhost"
 
 [workspace]
 # Directory where channel workspaces are stored (default: "./workspace")
+# Supports tilde expansion: ~/projects/gorp-workspace
+# Docker: use absolute path like /home/gorp/workspace
 path = "./workspace"
+
+[scheduler]
+# Timezone for interpreting schedule times (default: auto-detect from system)
+# Uses IANA timezone names (e.g., "America/Chicago", "Europe/London", "UTC")
+# See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+timezone = "America/Chicago"

@@ -1,5 +1,5 @@
-# ABOUTME: Docker Compose configuration for Matrix-Claude bridge
-# ABOUTME: Manages volumes, environment variables, and restart policy
+# ABOUTME: Docker Compose configuration for gorp Matrix-Claude bridge
+# ABOUTME: Uses XDG-compliant paths with volume mounts for config and data persistence
 version: '3.8'
 
 services:
@@ -9,16 +9,25 @@ services:
     container_name: gorp
     restart: unless-stopped
 
-    # Environment variables from .env file
+    # Environment variables (override config.toml values)
+    # Use env_file OR environment, not both for the same vars
     env_file:
       - .env
 
-    # Persistent volumes for session and crypto data
+    # Persistent volumes using XDG directory structure
     volumes:
-      - ./sessions_db:/app/sessions_db
-      - ./crypto_store:/app/crypto_store
-      # Mount claude binary from host (optional - comment out if claude is in PATH)
-      # - /usr/local/bin/claude:/usr/local/bin/claude:ro
+      # Config directory - put your config.toml here
+      - ./config:/home/gorp/.config/gorp
+
+      # Data directory (crypto store, logs, scheduled prompts db)
+      - ./data:/home/gorp/.local/share/gorp
+
+      # Workspace directory for Claude sessions
+      - ./workspace:/home/gorp/workspace
+
+    # Webhook port
+    ports:
+      - "13000:13000"
 
     # Logging configuration
     logging:
