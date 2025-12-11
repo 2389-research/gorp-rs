@@ -424,7 +424,13 @@ async fn health_view(State(state): State<AdminState>) -> HealthTemplate {
 }
 
 async fn schedules_list(State(state): State<AdminState>) -> SchedulesTemplate {
-    let schedules = state.scheduler_store.list_all().unwrap_or_default();
+    let schedules = match state.scheduler_store.list_all() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list schedules");
+            Vec::new()
+        }
+    };
 
     let schedule_rows: Vec<ScheduleRow> = schedules
         .iter()
@@ -468,13 +474,21 @@ async fn schedule_cancel(
     State(state): State<AdminState>,
     AxumPath(id): AxumPath<String>,
 ) -> ToastTemplate {
+    // Validate ID
+    if id.is_empty() || id.len() > 256 {
+        return ToastTemplate {
+            message: "Invalid schedule ID".to_string(),
+            is_error: true,
+        };
+    }
+
     match state.scheduler_store.cancel_schedule(&id) {
         Ok(true) => ToastTemplate {
-            message: format!("Schedule {} cancelled", id),
+            message: "Schedule cancelled".to_string(),
             is_error: false,
         },
         Ok(false) => ToastTemplate {
-            message: format!("Schedule not found: {}", id),
+            message: "Schedule not found".to_string(),
             is_error: true,
         },
         Err(e) => ToastTemplate {
@@ -488,13 +502,22 @@ async fn schedule_pause(
     State(state): State<AdminState>,
     AxumPath(id): AxumPath<String>,
 ) -> ToastTemplate {
+    // Validate ID
+    if id.is_empty() || id.len() > 256 {
+        return ToastTemplate {
+            message: "Invalid schedule ID".to_string(),
+            is_error: true,
+        };
+    }
+
     match state.scheduler_store.pause_schedule(&id) {
         Ok(true) => ToastTemplate {
-            message: format!("Schedule {} paused", id),
+            message: "Schedule paused".to_string(),
             is_error: false,
         },
         Ok(false) => ToastTemplate {
-            message: format!("Schedule not found: {}", id),
+            // Could be not found OR not in active status
+            message: "Could not pause schedule (not found or not active)".to_string(),
             is_error: true,
         },
         Err(e) => ToastTemplate {
@@ -508,13 +531,22 @@ async fn schedule_resume(
     State(state): State<AdminState>,
     AxumPath(id): AxumPath<String>,
 ) -> ToastTemplate {
+    // Validate ID
+    if id.is_empty() || id.len() > 256 {
+        return ToastTemplate {
+            message: "Invalid schedule ID".to_string(),
+            is_error: true,
+        };
+    }
+
     match state.scheduler_store.resume_schedule(&id) {
         Ok(true) => ToastTemplate {
-            message: format!("Schedule {} resumed", id),
+            message: "Schedule resumed".to_string(),
             is_error: false,
         },
         Ok(false) => ToastTemplate {
-            message: format!("Schedule not found: {}", id),
+            // Could be not found OR not in paused status
+            message: "Could not resume schedule (not found or not paused)".to_string(),
             is_error: true,
         },
         Err(e) => ToastTemplate {

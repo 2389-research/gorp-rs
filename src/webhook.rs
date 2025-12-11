@@ -65,7 +65,10 @@ pub async fn start_webhook_server(
         .route("/webhook/session/:session_id", post(webhook_handler))
         .with_state(Arc::new(state.clone()));
 
-    // Create scheduler store for admin and MCP routes
+    // Create scheduler store here because it needs the database connection from session_store.
+    // The scheduler_store is shared between admin routes (for viewing/managing schedules)
+    // and MCP routes (for creating schedules via Claude). It must be created after
+    // session_store is available but before admin_state and mcp_state are constructed.
     let scheduler_store = SchedulerStore::new(state.session_store.db_connection());
 
     let admin_state = AdminState {
