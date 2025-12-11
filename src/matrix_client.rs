@@ -1,6 +1,7 @@
 // ABOUTME: Matrix client initialization and authentication
 // ABOUTME: Handles client creation with crypto store and login via password or token
 
+use crate::paths;
 use anyhow::{Context, Result};
 use matrix_sdk::{
     ruma::{
@@ -11,12 +12,36 @@ use matrix_sdk::{
     },
     Client,
 };
-use std::path::Path;
 
-pub async fn create_client(homeserver: &str, _user_id: &str) -> Result<Client> {
+/// Convert a string to a filesystem-safe slug
+fn slugify(s: &str) -> String {
+    s.trim_start_matches('@')
+        .replace(':', "_")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '.' || *c == '-')
+        .collect()
+}
+
+pub async fn create_client(homeserver: &str, user_id: &str, device_name: &str) -> Result<Client> {
+    // Include both user and device in path for full isolation
+    let user_slug = slugify(user_id);
+    let device_slug = slugify(device_name);
+    let crypto_store_path = paths::crypto_store_dir().join(format!("{}_{}", user_slug, device_slug));
+
+    // Ensure the crypto store directory exists
+    std::fs::create_dir_all(&crypto_store_path)
+        .context("Failed to create crypto store directory")?;
+
+    tracing::info!(
+        path = %crypto_store_path.display(),
+        user = %user_slug,
+        device = %device_slug,
+        "Using crypto store directory"
+    );
+
     let client = Client::builder()
         .homeserver_url(homeserver)
-        .sqlite_store(Path::new("./crypto_store"), None)
+        .sqlite_store(&crypto_store_path, None)
         .build()
         .await
         .context("Failed to create Matrix client")?;

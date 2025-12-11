@@ -93,6 +93,11 @@ impl SessionStore {
         })
     }
 
+    /// Get the shared database connection for use by other stores (like SchedulerStore)
+    pub fn db_connection(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.db)
+    }
+
     /// Get channel by room ID
     pub fn get_by_room(&self, room_id: &str) -> Result<Option<Channel>> {
         let db = self.db.lock().unwrap();
@@ -200,20 +205,31 @@ impl SessionStore {
                 // Release lock before file I/O
                 drop(db);
 
-                // Create directory only after successful DB insert
-                std::fs::create_dir_all(&channel_dir)
-                    .context("Failed to create channel directory")?;
+                // Check if directory already exists (inherit existing workspace)
+                let dir_existed = channel_dir.exists();
 
-                // Copy template directory if it exists
-                let template_dir = self.workspace_path.join("template");
-                if template_dir.exists() && template_dir.is_dir() {
-                    copy_dir_contents(&template_dir, &channel_dir)
-                        .context("Failed to copy template directory contents")?;
+                if dir_existed {
                     tracing::info!(
-                        template = %template_dir.display(),
-                        destination = %channel_dir.display(),
-                        "Copied template to new channel"
+                        channel_name = %channel_name,
+                        directory = %channel_dir.display(),
+                        "Inheriting existing workspace directory"
                     );
+                } else {
+                    // Create directory only if it doesn't exist
+                    std::fs::create_dir_all(&channel_dir)
+                        .context("Failed to create channel directory")?;
+
+                    // Copy template directory if it exists
+                    let template_dir = self.workspace_path.join("template");
+                    if template_dir.exists() && template_dir.is_dir() {
+                        copy_dir_contents(&template_dir, &channel_dir)
+                            .context("Failed to copy template directory contents")?;
+                        tracing::info!(
+                            template = %template_dir.display(),
+                            destination = %channel_dir.display(),
+                            "Copied template to new channel"
+                        );
+                    }
                 }
 
                 tracing::info!(
@@ -221,6 +237,7 @@ impl SessionStore {
                     room_id = %room_id,
                     session_id = %channel.session_id,
                     directory = %channel.directory,
+                    inherited = dir_existed,
                     "Channel created"
                 );
 
@@ -271,6 +288,25 @@ impl SessionStore {
 
         tracing::info!(channel_name = %channel_name, "Channel deleted");
         Ok(())
+    }
+
+    /// Delete a channel by room ID
+    pub fn delete_by_room(&self, room_id: &str) -> Result<Option<String>> {
+        // Get channel name first for logging
+        let channel_name = {
+            let db = self.db.lock().unwrap();
+            let mut stmt = db.prepare("SELECT channel_name FROM channels WHERE room_id = ?1")?;
+            stmt.query_row(params![room_id], |row| row.get::<_, String>(0))
+                .ok()
+        };
+
+        if let Some(ref name) = channel_name {
+            let db = self.db.lock().unwrap();
+            db.execute("DELETE FROM channels WHERE room_id = ?1", params![room_id])?;
+            tracing::info!(channel_name = %name, room_id = %room_id, "Channel deleted by room ID");
+        }
+
+        Ok(channel_name)
     }
 
     /// Mark channel as started

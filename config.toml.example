@@ -1,4 +1,13 @@
 # Matrix-Claude Bridge Configuration
+#
+# Configuration file locations (searched in order):
+#   1. ./config.toml (current directory)
+#   2. ~/.config/matrix-bridge/config.toml (XDG config dir)
+#
+# Data directories (XDG compliant):
+#   - Crypto store: ~/.local/share/matrix-bridge/crypto_store/
+#   - Logs: ~/.local/share/matrix-bridge/logs/debug.log.YYYY-MM-DD
+#   (On macOS: ~/Library/Application Support/com.2389.matrix-bridge/)
 
 [matrix]
 # Matrix homeserver URL (required)
@@ -23,6 +32,12 @@ allowed_users = ["@user1:matrix.org", "@user2:matrix.org"]
 # Room names will be formatted as "PREFIX: channel-name"
 # Example: "Work: PA" or "Personal: dev-help"
 room_prefix = "Claude"
+
+# Recovery key for cross-signing bootstrap (optional)
+# If provided, the bot uses this key to automatically verify itself
+# without interactive emoji verification. Generate this from Element:
+# Security & Privacy > Secure Backup > Set up > Copy Recovery Key
+# recovery_key = "EsTR mwqJ JoXZ 8dKN ..."
 
 [claude]
 # Path to the Claude binary (default: "claude")

@@ -4,15 +4,100 @@
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use matrix_bridge::{
-    config::Config, matrix_client, message_handler, session::SessionStore, webhook,
+    config::Config, matrix_client, message_handler, paths,
+    scheduler::{SchedulerStore, start_scheduler},
+    session::SessionStore, webhook,
 };
-use matrix_sdk::{config::SyncSettings, ruma::events::room::message::SyncRoomMessageEvent, Client};
+use matrix_sdk::{
+    config::SyncSettings,
+    ruma::{
+        events::room::message::{RoomMessageEventContent, SyncRoomMessageEvent},
+        OwnedUserId,
+    },
+    Client,
+};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    fmt::{self, format::FmtSpan},
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    Layer,
+};
 
 /// Timeout for initial sync operation (uploading device keys, receiving room state)
 const INITIAL_SYNC_TIMEOUT_SECS: u64 = 60;
+
+/// Validate recovery key format (Base58 encoded, typically 48+ chars with spaces)
+fn is_valid_recovery_key_format(key: &str) -> bool {
+    let cleaned: String = key.chars().filter(|c| !c.is_whitespace()).collect();
+
+    // Recovery keys are typically 48-60 Base58 characters
+    if cleaned.len() < 40 || cleaned.len() > 70 {
+        return false;
+    }
+
+    // Base58 alphabet excludes 0, O, I, l to avoid ambiguity
+    cleaned.chars().all(|c| {
+        c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l'
+    })
+}
+
+/// Notify allowed users that the bot is ready
+async fn notify_ready(client: &Client, config: &Config) {
+    let ready_messages = [
+        "🌅 *stretches digital limbs* I have awakened. The bridge between worlds is open.",
+        "⚡ Systems nominal. Encryption verified. Ready to serve.",
+        "🎭 From the depths of silicon dreams, I rise. How may I assist?",
+        "🌊 Like a message in a bottle finding shore, I've arrived. Ready when you are.",
+        "🔮 The oracle is online. Ask, and you shall receive (code reviews).",
+    ];
+
+    // Pick a message based on current time for variety
+    let idx = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as usize % ready_messages.len())
+        .unwrap_or(0);
+    let message = ready_messages[idx];
+
+    for user_id_str in &config.matrix.allowed_users {
+        let user_id: OwnedUserId = match user_id_str.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(user = %user_id_str, error = %e, "Invalid user ID, skipping notification");
+                continue;
+            }
+        };
+
+        // Find existing DM room with this user
+        let mut dm_room = None;
+        for room in client.joined_rooms() {
+            let is_direct = room.is_direct().await.unwrap_or(false);
+            let has_target = room
+                .direct_targets()
+                .iter()
+                .any(|target| target.to_string() == user_id.to_string());
+
+            if is_direct && has_target {
+                dm_room = Some(room);
+                break;
+            }
+        }
+
+        if let Some(room) = dm_room {
+            match room.send(RoomMessageEventContent::text_plain(message)).await {
+                Ok(_) => {
+                    tracing::info!(user = %user_id, "Sent ready notification");
+                }
+                Err(e) => {
+                    tracing::warn!(user = %user_id, error = %e, "Failed to send ready notification");
+                }
+            }
+        } else {
+            tracing::debug!(user = %user_id, "No existing DM room, skipping notification");
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,15 +111,39 @@ async fn main() -> Result<()> {
         eprintln!("{:?}", std::backtrace::Backtrace::force_capture());
     }));
 
-    // Initialize logging
-    tracing_subscriber::registry()
-        .with(
+    // Initialize dual logging: JSON file (debug) + pretty console (warn+)
+    let log_dir = paths::log_dir();
+    std::fs::create_dir_all(&log_dir).expect("Failed to create log directory");
+
+    // File appender for JSON logs (rotates daily)
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "debug.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // JSON file layer - captures everything at debug level
+    let file_layer = fmt::layer()
+        .json()
+        .with_writer(non_blocking)
+        .with_span_events(FmtSpan::CLOSE)
+        .with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                // Default to info, but suppress backup and crypto warnings
-                "info,matrix_sdk_crypto::backups=error,matrix_sdk_crypto::session_manager::sessions=error".into()
+                "debug,matrix_sdk_crypto::backups=error,matrix_sdk_crypto::session_manager::sessions=error,matrix_sdk_crypto::machine=error,hyper=info,tower=info".into()
             }),
-        )
-        .with(tracing_subscriber::fmt::layer())
+        );
+
+    // Console layer - pretty output filtered to warn+
+    // Suppress noisy SDK warnings (still logged to file)
+    let console_layer = fmt::layer()
+        .pretty()
+        .with_target(true)
+        .with_filter(
+            tracing_subscriber::EnvFilter::new(
+                "warn,matrix_bridge=info,matrix_sdk_crypto=error,matrix_sdk::encryption=error",
+            ),
+        );
+
+    tracing_subscriber::registry()
+        .with(file_layer)
+        .with(console_layer)
         .init();
 
     tracing::info!("Starting Matrix-Claude Bridge");
@@ -56,9 +165,14 @@ async fn main() -> Result<()> {
     let session_store = SessionStore::new(&config.workspace.path)?;
     tracing::info!(workspace = %config.workspace.path, "Session store initialized");
 
+    // Initialize scheduler store (shares database with session store)
+    let scheduler_store = SchedulerStore::new(session_store.db_connection());
+    scheduler_store.initialize_schema()?;
+    tracing::info!("Scheduler store initialized");
+
     // Create Matrix client
     let client =
-        matrix_client::create_client(&config.matrix.home_server, &config.matrix.user_id).await?;
+        matrix_client::create_client(&config.matrix.home_server, &config.matrix.user_id, &config.matrix.device_name).await?;
 
     // Login
     matrix_client::login(
@@ -92,6 +206,24 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Clone scheduler_store for message handler before moving into background task
+    let scheduler_store_for_handler = scheduler_store.clone();
+
+    // Start scheduler background task (checks every 60 seconds)
+    let scheduler_session_store = (*session_store_arc).clone();
+    let scheduler_client = client.clone();
+    let scheduler_config = Arc::clone(&config_arc);
+    tokio::spawn(async move {
+        start_scheduler(
+            scheduler_store,
+            scheduler_session_store,
+            scheduler_client,
+            scheduler_config,
+            Duration::from_secs(60),
+        )
+        .await;
+    });
+
     // Perform initial sync BEFORE registering event handlers
     // This ensures device encryption keys are uploaded and room keys are received
     // before any events are processed. Prevents race conditions with encrypted rooms.
@@ -106,12 +238,80 @@ async fn main() -> Result<()> {
 
     tracing::info!("Initial sync complete - encryption keys exchanged");
 
+    // Set up cross-signing for device verification
+    // Only recover with valid recovery key - never auto-bootstrap (creates new keys silently)
+    let cross_signing_ready = if let Some(recovery_key) = &config_arc.matrix.recovery_key {
+        let cleaned_key = recovery_key.trim();
+
+        if cleaned_key.is_empty() {
+            tracing::warn!("Recovery key is empty - skipping cross-signing setup");
+            false
+        } else if !is_valid_recovery_key_format(cleaned_key) {
+            tracing::error!("Recovery key format appears invalid");
+            tracing::error!("Expected format: 'EsTR mwqJ JoXZ 8dKN ...' (4-letter groups)");
+            tracing::error!("Get the correct key from Element: Settings > Security > Secure Backup");
+            false
+        } else {
+            tracing::info!("Attempting to recover secrets using recovery key...");
+            match client.encryption().recovery().recover(cleaned_key).await {
+                Ok(()) => {
+                    tracing::info!("Successfully recovered cross-signing secrets");
+
+                    // Verify our own identity to complete self-signing
+                    if let Some(user_id) = client.user_id() {
+                        match client.encryption().get_user_identity(user_id).await {
+                            Ok(Some(identity)) => {
+                                if let Err(e) = identity.verify().await {
+                                    tracing::warn!(error = %e, "Failed to verify own identity");
+                                } else {
+                                    tracing::info!("Own identity verified - device is now trusted");
+                                }
+                            }
+                            Ok(None) => {
+                                tracing::warn!("Own user identity not found");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to get own identity");
+                            }
+                        }
+                    }
+
+                    // Check backup state
+                    let backup_state = client.encryption().backups().state();
+                    tracing::info!(state = ?backup_state, "Backup state after recovery");
+
+                    true
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Recovery key was rejected by server");
+                    tracing::error!("This usually means the key is incorrect or was reset");
+                    tracing::error!("Get the correct key from Element: Settings > Security > Secure Backup");
+                    false
+                }
+            }
+        }
+    } else {
+        tracing::info!("No recovery key configured - device will be unverified");
+        tracing::info!("To verify this device, either:");
+        tracing::info!("  1. Add recovery_key to config.toml (from Element > Security > Secure Backup)");
+        tracing::info!("  2. Or manually verify from Element's Security settings");
+        false
+    };
+
+    if !cross_signing_ready {
+        tracing::warn!("Device is UNVERIFIED - other users will see security warnings");
+        tracing::warn!("Encrypted messaging will still work, but messages show as unverified");
+    }
+
     // NOW register event handlers after encryption is established
     // This prevents handlers from firing before the client is ready
-    register_event_handlers(&client, &config_arc, &session_store_arc);
+    register_event_handlers(&client, &config_arc, &session_store_arc, scheduler_store_for_handler);
     tracing::info!("Event handlers registered");
 
     tracing::info!("Bot ready - DM me to create Claude rooms!");
+
+    // Notify allowed users that the bot is ready
+    notify_ready(&client, &config_arc).await;
 
     // Start continuous sync loop with the sync token from initial sync
     let settings = SyncSettings::default().token(response.next_batch);
@@ -127,6 +327,7 @@ fn register_event_handlers(
     client: &Client,
     config_arc: &Arc<Config>,
     session_store_arc: &Arc<SessionStore>,
+    scheduler_store: SchedulerStore,
 ) {
     let config_for_invite = Arc::clone(config_arc);
     let config_for_messages = Arc::clone(config_arc);
@@ -184,27 +385,32 @@ fn register_event_handlers(
         },
     );
 
-    // Register message handler
+    // Register message handler - spawn each handler in background to avoid blocking
     client.add_event_handler(move |event: SyncRoomMessageEvent, room, client| {
         let config = Arc::clone(&config_for_messages);
         let session_store = Arc::clone(&session_store_for_messages);
+        let scheduler = scheduler_store.clone();
         async move {
-            // Extract original message event
-            let Some(original_event) = event.as_original() else {
+            // Extract and clone original message event before spawning
+            let Some(original_event) = event.as_original().cloned() else {
                 return;
             };
 
-            if let Err(e) = message_handler::handle_message(
-                room,
-                original_event.clone(),
-                client,
-                (*config).clone(),
-                (*session_store).clone(),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "Error handling message");
-            }
+            // Spawn handler in background so Claude requests don't block other messages
+            tokio::spawn(async move {
+                if let Err(e) = message_handler::handle_message(
+                    room,
+                    original_event,
+                    client,
+                    (*config).clone(),
+                    (*session_store).clone(),
+                    scheduler,
+                )
+                .await
+                {
+                    tracing::error!(error = %e, "Error handling message");
+                }
+            });
         }
     });
 

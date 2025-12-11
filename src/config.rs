@@ -1,9 +1,10 @@
 // ABOUTME: Configuration parsing from TOML file with environment variable overrides
 // ABOUTME: Validates required fields and provides sensible defaults for optional ones
+use crate::paths;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -13,7 +14,7 @@ pub struct Config {
     pub workspace: WorkspaceConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MatrixConfig {
     pub home_server: String,
     pub user_id: String,
@@ -26,6 +27,25 @@ pub struct MatrixConfig {
     pub allowed_users: Vec<String>,
     #[serde(default = "default_room_prefix")]
     pub room_prefix: String,
+    /// Recovery key for cross-signing bootstrap (auto-verifies this device)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_key: Option<String>,
+}
+
+// Custom Debug impl to redact sensitive fields
+impl std::fmt::Debug for MatrixConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatrixConfig")
+            .field("home_server", &self.home_server)
+            .field("user_id", &self.user_id)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("access_token", &self.access_token.as_ref().map(|_| "[REDACTED]"))
+            .field("device_name", &self.device_name)
+            .field("allowed_users", &self.allowed_users)
+            .field("room_prefix", &self.room_prefix)
+            .field("recovery_key", &self.recovery_key.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,15 +97,40 @@ fn default_room_prefix() -> String {
 }
 
 impl Config {
+    /// Find the config file, checking multiple locations in order:
+    /// 1. ./config.toml (current directory)
+    /// 2. ~/.config/matrix-bridge/config.toml (XDG config dir)
+    fn find_config_file() -> Option<PathBuf> {
+        let local_config = PathBuf::from("config.toml");
+        if local_config.exists() {
+            return Some(local_config);
+        }
+
+        let xdg_config = paths::config_file();
+        if xdg_config.exists() {
+            return Some(xdg_config);
+        }
+
+        None
+    }
+
     /// Load configuration from config.toml with environment variable overrides
+    /// Searches: ./config.toml, then ~/.config/matrix-bridge/config.toml
     pub fn load() -> Result<Self> {
-        // Try to load from config.toml first
-        let config_path = "config.toml";
-        let mut config = if Path::new(config_path).exists() {
-            let content =
-                std::fs::read_to_string(config_path).context("Failed to read config.toml")?;
-            toml::from_str::<Config>(&content).context("Failed to parse config.toml")?
+        // Try to find and load config file
+        let mut config = if let Some(config_path) = Self::find_config_file() {
+            tracing::info!(
+                path = %config_path.display(),
+                "Loading configuration from file"
+            );
+            let content = std::fs::read_to_string(&config_path)
+                .with_context(|| format!("Failed to read {}", config_path.display()))?;
+            toml::from_str::<Config>(&content)
+                .with_context(|| format!("Failed to parse {}", config_path.display()))?
         } else {
+            tracing::info!(
+                "No config file found, using environment variables and defaults"
+            );
             // If no config file, create default config
             Config {
                 matrix: MatrixConfig {
@@ -96,6 +141,7 @@ impl Config {
                     device_name: default_device_name(),
                     allowed_users: Vec::new(),
                     room_prefix: default_room_prefix(),
+                    recovery_key: None,
                 },
                 claude: ClaudeConfig {
                     binary_path: default_claude_binary(),
@@ -137,6 +183,11 @@ impl Config {
         }
         if let Ok(val) = std::env::var("MATRIX_ROOM_PREFIX") {
             config.matrix.room_prefix = val;
+        }
+        if let Ok(val) = std::env::var("MATRIX_RECOVERY_KEY") {
+            config.matrix.recovery_key = Some(val);
+            // Clear from environment to prevent exposure via /proc or ps
+            std::env::remove_var("MATRIX_RECOVERY_KEY");
         }
         if let Ok(val) = std::env::var("CLAUDE_BINARY_PATH") {
             config.claude.binary_path = val;

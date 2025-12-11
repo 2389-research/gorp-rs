@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
-use crate::{claude, config::Config, session::SessionStore};
+use crate::{claude, config::Config, session::SessionStore, utils::{markdown_to_html, chunk_message, log_matrix_message, MAX_CHUNK_SIZE}};
 
 #[derive(Clone)]
 pub struct WebhookState {
@@ -205,19 +205,40 @@ async fn webhook_handler(
         }
     };
 
-    // 3. Send Claude's response to room
-    if let Err(e) = room
-        .send(RoomMessageEventContent::text_plain(&claude_response))
-        .await
-    {
-        tracing::error!(error = %e, "Failed to send Claude response");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(WebhookResponse {
-                success: false,
-                message: format!("Failed to send response: {}", e),
-            }),
-        );
+    // 3. Send Claude's response to room with markdown formatting and chunking
+    let chunks = chunk_message(&claude_response, MAX_CHUNK_SIZE);
+    let chunk_count = chunks.len();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let html = markdown_to_html(chunk);
+        if let Err(e) = room
+            .send(RoomMessageEventContent::text_html(chunk, &html))
+            .await
+        {
+            tracing::error!(error = %e, chunk = i, "Failed to send Claude response chunk");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(WebhookResponse {
+                    success: false,
+                    message: format!("Failed to send response chunk {}: {}", i, e),
+                }),
+            );
+        }
+
+        // Log the Matrix message
+        log_matrix_message(
+            &channel.directory,
+            &channel.room_id,
+            "webhook_response",
+            chunk,
+            Some(&html),
+            if chunk_count > 1 { Some(i) } else { None },
+            if chunk_count > 1 { Some(chunk_count) } else { None },
+        ).await;
+
+        // Small delay between chunks for ordering
+        if i < chunks.len() - 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
     }
 
     // 4. Mark session as started

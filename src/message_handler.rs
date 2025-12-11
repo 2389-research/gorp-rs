@@ -1,12 +1,20 @@
 // ABOUTME: Message handler that processes Matrix room messages with authentication and Claude invocation.
-// ABOUTME: Checks room ID and user whitelist, manages typing indicators, and handles Claude response delivery.
+// ABOUTME: Checks room ID and user whitelist, manages typing indicators, streams tool usage to Matrix.
 
 use anyhow::Result;
 use matrix_sdk::{
     room::Room, ruma::events::room::message::RoomMessageEventContent, Client, RoomState,
 };
 
-use crate::{claude, config::Config, matrix_client, session::SessionStore};
+use crate::{
+    claude::{self, ClaudeEvent},
+    config::Config,
+    matrix_client,
+    scheduler::{parse_time_expression, ParsedSchedule, ScheduledPrompt, ScheduleStatus, SchedulerStore},
+    session::SessionStore,
+    utils::{markdown_to_html, chunk_message, log_matrix_message, MAX_CHUNK_SIZE},
+};
+use chrono::Utc;
 
 pub async fn handle_message(
     room: Room,
@@ -14,6 +22,7 @@ pub async fn handle_message(
     client: Client,
     config: Config,
     session_store: SessionStore,
+    scheduler_store: SchedulerStore,
 ) -> Result<()> {
     // Only work with joined rooms
     if room.state() != RoomState::Joined {
@@ -54,7 +63,7 @@ pub async fn handle_message(
             && body.chars().nth(1).map_or(false, |c| c.is_alphabetic()));
 
     if is_command {
-        return handle_command(room, body, &session_store, &client, sender, is_dm, &config).await;
+        return handle_command(room, body, &session_store, &scheduler_store, &client, sender, is_dm, &config).await;
     }
 
     // Check if channel is attached
@@ -102,8 +111,8 @@ pub async fn handle_message(
         }
     });
 
-    // Invoke Claude
-    let response = match claude::invoke_claude(
+    // Invoke Claude with streaming to show tool usage
+    let mut event_rx = match claude::invoke_claude_streaming(
         &config.claude.binary_path,
         config.claude.sdk_url.as_deref(),
         channel_args,
@@ -112,21 +121,90 @@ pub async fn handle_message(
     )
     .await
     {
-        Ok(resp) => {
-            tracing::info!(response_length = resp.len(), "Claude responded");
-            resp
-        }
+        Ok(rx) => rx,
         Err(e) => {
             tracing::error!(error = %e, "Claude invocation failed");
             let error_msg = format!("⚠️ Claude error: {}", e);
 
-            // Stop typing indicator refresh
             let _ = typing_tx.send(());
             typing_handle.abort();
             room.typing_notice(false).await?;
 
             room.send(RoomMessageEventContent::text_plain(&error_msg))
                 .await?;
+            return Ok(());
+        }
+    };
+
+    // Process streaming events
+    let mut final_response: Option<String> = None;
+    let mut tools_used: Vec<String> = Vec::new();
+
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            ClaudeEvent::ToolUse { name, input_preview } => {
+                // Build tool message with plain and HTML versions
+                let (plain, html) = if input_preview.is_empty() {
+                    (
+                        format!("🔧 {}", name),
+                        format!("🔧 <code>{}</code>", name),
+                    )
+                } else {
+                    (
+                        format!("🔧 {} · {}", name, input_preview),
+                        format!("🔧 <code>{}</code> · <code>{}</code>", name, input_preview),
+                    )
+                };
+
+                // Send tool notification to room
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_html(&plain, &html))
+                    .await
+                {
+                    tracing::warn!(error = %e, "Failed to send tool notification");
+                } else {
+                    log_matrix_message(
+                        &channel.directory,
+                        room.room_id().as_str(),
+                        "tool_notification",
+                        &plain,
+                        Some(&html),
+                        None,
+                        None,
+                    ).await;
+                }
+                tools_used.push(name);
+            }
+            ClaudeEvent::Result(result) => {
+                final_response = Some(result);
+            }
+            ClaudeEvent::Error(error) => {
+                let _ = typing_tx.send(());
+                typing_handle.abort();
+                room.typing_notice(false).await?;
+
+                let error_msg = format!("⚠️ Claude error: {}", error);
+                room.send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await?;
+                return Ok(());
+            }
+        }
+    }
+
+    let response = match final_response {
+        Some(r) => {
+            tracing::info!(response_length = r.len(), tools_count = tools_used.len(), "Claude responded");
+            r
+        }
+        None => {
+            let _ = typing_tx.send(());
+            typing_handle.abort();
+            room.typing_notice(false).await?;
+
+            room.send(RoomMessageEventContent::text_plain(
+                "⚠️ Claude finished without a response",
+            ))
+            .await?;
             return Ok(());
         }
     };
@@ -139,11 +217,34 @@ pub async fn handle_message(
     let _ = typing_handle.await; // Wait for graceful shutdown
     room.typing_notice(false).await?;
 
-    // Send response
-    room.send(RoomMessageEventContent::text_plain(&response))
-        .await?;
+    // Send response with markdown formatting, chunked if too long
+    // Matrix limit is ~65KB but we chunk for better display
+    let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
+    let chunk_count = chunks.len();
 
-    tracing::info!("Response sent successfully");
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        let html = markdown_to_html(&chunk);
+        room.send(RoomMessageEventContent::text_html(&chunk, &html))
+            .await?;
+
+        // Log the Matrix message
+        log_matrix_message(
+            &channel.directory,
+            room.room_id().as_str(),
+            "response",
+            &chunk,
+            Some(&html),
+            if chunk_count > 1 { Some(i) } else { None },
+            if chunk_count > 1 { Some(chunk_count) } else { None },
+        ).await;
+
+        // Small delay between chunks to maintain order
+        if i < chunk_count - 1 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    tracing::info!(chunk_count, "Response sent successfully");
 
     Ok(())
 }
@@ -152,6 +253,7 @@ async fn handle_command(
     room: Room,
     body: &str,
     session_store: &SessionStore,
+    scheduler_store: &SchedulerStore,
     client: &Client,
     sender: &str,
     is_dm: bool,
@@ -175,13 +277,17 @@ async fn handle_command(
     if command_parts.is_empty() || command_parts[0].is_empty() {
         let help_msg = if is_dm {
             "💬 Orchestrator Commands:\n\
-            !create <name> - Create new channel (e.g., !create PA)\n\
-            !list - Show all your channels\n\
+            !create <name> - Create new channel\n\
+            !join <name> - Get invited to a channel\n\
+            !delete <name> - Remove channel (keeps workspace)\n\
+            !cleanup - Leave orphaned rooms\n\
+            !list - Show all channels\n\
             !help - Show detailed help"
         } else {
             "Available commands:\n\
             !help - Show detailed help\n\
-            !status - Show current channel info"
+            !status - Show current channel info\n\
+            !leave - Bot leaves this room"
         };
         room.send(RoomMessageEventContent::text_plain(help_msg))
             .await?;
@@ -200,11 +306,18 @@ async fn handle_command(
                 ## DM Commands (Orchestrator)\n\
                 !create <name> - Create a new channel\n\
                   Example: !create PA\n\
-                  Creates: workspace/PA/ directory + Matrix room + Claude session\n\n\
+                  Creates: workspace/PA/ directory + Matrix room + Claude session\n\
+                  (Reuses existing directory if present)\n\n\
+                !delete <name> - Remove channel from bot\n\
+                  Bot leaves room, removes from database\n\
+                  Workspace directory is preserved\n\n\
                 !list - Show all your channels\n\
                 !help - Show this help message\n\n\
                 ## Room Commands\n\
                 !status - Show current channel info\n\
+                !leave - Bot leaves this room (preserves workspace)\n\
+                !schedule <time> <prompt> - Schedule a prompt\n\
+                !schedule list - View scheduled prompts\n\
                 !help - Show this help message\n\n\
                 ## How It Works\n\
                 1. DM the bot: !create PA\n\
@@ -219,11 +332,19 @@ async fn handle_command(
                   POST http://{}:{}/webhook/session/<session-id>\n\
                   {{\"prompt\": \"your message here\"}}\n\n\
                 Use this for scheduled tasks, cron jobs, etc.\n\n\
+                ## Scheduling\n\
+                Schedule prompts to run at specific times:\n\
+                  !schedule in 2 hours check my inbox\n\
+                  !schedule tomorrow 9am summarize my calendar\n\
+                  !schedule every monday 8am weekly standup\n\
+                  !schedule list - View scheduled prompts\n\
+                  !schedule delete <id> - Remove a schedule\n\n\
                 ## Features\n\
                 ✅ Persistent conversation history\n\
                 ✅ Dedicated workspace per channel\n\
                 ✅ Smart session reuse\n\
                 ✅ Webhook integration for automation\n\
+                ✅ Scheduled prompts (one-time and recurring)\n\
                 ✅ One channel = one ongoing conversation\n\n\
                 Need more help? Just ask!",
                 config.matrix.room_prefix, config.webhook.host, config.webhook.port
@@ -350,6 +471,270 @@ async fn handle_command(
                 "Created channel for user"
             );
         }
+        "join" => {
+            if !is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "❌ The !join command only works in DMs.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            if command_parts.len() < 2 {
+                room.send(RoomMessageEventContent::text_plain(
+                    "Usage: !join <channel-name>\n\n\
+                    Sends you an invite to the channel's room.\n\
+                    Use !list to see available channels.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            let channel_name = command_parts[1].to_lowercase();
+
+            // Find the channel
+            let Some(channel) = session_store.get_by_name(&channel_name)? else {
+                room.send(RoomMessageEventContent::text_plain(&format!(
+                    "❌ Channel '{}' not found.\n\nUse !list to see all channels.",
+                    channel_name
+                )))
+                .await?;
+                return Ok(());
+            };
+
+            // Invite user to the room
+            let room_id: matrix_sdk::ruma::OwnedRoomId = channel
+                .room_id
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Invalid room ID: {}", e))?;
+            match matrix_client::invite_user(client, &room_id, sender).await {
+                Ok(_) => {
+                    room.send(RoomMessageEventContent::text_plain(&format!(
+                        "✅ Invited you to channel '{}'!\n\nCheck your room invites.",
+                        channel_name
+                    )))
+                    .await?;
+                    tracing::info!(
+                        channel_name = %channel_name,
+                        user = %sender,
+                        "User invited to channel"
+                    );
+                }
+                Err(e) => {
+                    // Check if already in room
+                    let err_str = e.to_string();
+                    if err_str.contains("already in the room") || err_str.contains("is already joined") {
+                        room.send(RoomMessageEventContent::text_plain(&format!(
+                            "ℹ️ You're already in channel '{}'!",
+                            channel_name
+                        )))
+                        .await?;
+                    } else {
+                        room.send(RoomMessageEventContent::text_plain(&format!(
+                            "⚠️ Failed to invite: {}",
+                            e
+                        )))
+                        .await?;
+                    }
+                }
+            }
+        }
+        "delete" => {
+            if !is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "❌ The !delete command only works in DMs.\n\nDM me to manage channels!",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            if command_parts.len() < 2 {
+                room.send(RoomMessageEventContent::text_plain(
+                    "Usage: !delete <channel-name>\n\n\
+                    This removes the channel from the database and the bot leaves the room.\n\
+                    The workspace directory is preserved.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            let channel_name = command_parts[1].to_lowercase();
+
+            // Find the channel
+            let Some(channel) = session_store.get_by_name(&channel_name)? else {
+                room.send(RoomMessageEventContent::text_plain(&format!(
+                    "❌ Channel '{}' not found.\n\nUse !list to see all channels.",
+                    channel_name
+                )))
+                .await?;
+                return Ok(());
+            };
+
+            // Leave the room
+            let room_id = channel.room_id.clone();
+            if let Some(target_room) = client.get_room(
+                <&matrix_sdk::ruma::RoomId>::try_from(room_id.as_str())
+                    .map_err(|e| anyhow::anyhow!("Invalid room ID: {}", e))?,
+            ) {
+                if let Err(e) = target_room.leave().await {
+                    tracing::warn!(error = %e, room_id = %room_id, "Failed to leave room");
+                }
+            }
+
+            // Remove from database (keeps directory)
+            session_store.delete_channel(&channel_name)?;
+
+            let response = format!(
+                "✅ Deleted channel: {}\n\n\
+                - Bot left the room\n\
+                - Removed from database\n\
+                - Workspace preserved: {}",
+                channel_name, channel.directory
+            );
+            room.send(RoomMessageEventContent::text_plain(&response))
+                .await?;
+
+            tracing::info!(
+                channel_name = %channel_name,
+                room_id = %room_id,
+                "Channel deleted by user"
+            );
+        }
+        "leave" => {
+            // Bot leaves current room, removes from database if tracked
+            let room_id = room.room_id().to_string();
+
+            // Check if this room is tracked
+            let channel_name = session_store.delete_by_room(&room_id)?;
+
+            let goodbye = if let Some(name) = &channel_name {
+                format!("👋 Leaving channel '{}'. Workspace preserved. Goodbye!", name)
+            } else {
+                "👋 Goodbye!".to_string()
+            };
+
+            room.send(RoomMessageEventContent::text_plain(&goodbye))
+                .await?;
+
+            // Leave the room
+            if let Err(e) = room.leave().await {
+                tracing::error!(error = %e, room_id = %room_id, "Failed to leave room");
+            } else {
+                tracing::info!(
+                    room_id = %room_id,
+                    channel_name = ?channel_name,
+                    "Bot left room"
+                );
+            }
+        }
+        "cleanup" => {
+            if !is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "❌ The !cleanup command only works in DMs.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            room.send(RoomMessageEventContent::text_plain(
+                "🧹 Scanning for orphaned rooms and stale database entries...",
+            ))
+            .await?;
+
+            let mut cleaned_rooms = Vec::new();
+            let mut cleaned_db = Vec::new();
+            let mut errors = Vec::new();
+
+            // Get all joined room IDs for checking stale DB entries
+            let joined_room_ids: std::collections::HashSet<String> = client
+                .joined_rooms()
+                .iter()
+                .map(|r| r.room_id().to_string())
+                .collect();
+
+            // Phase 1: Clean orphaned rooms (where bot is the only member)
+            for joined_room in client.joined_rooms() {
+                let room_id = joined_room.room_id().to_string();
+
+                // Get member count (joined members only)
+                let members = match joined_room.members(matrix_sdk::RoomMemberships::JOIN).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        errors.push(format!("{}: {}", room_id, e));
+                        continue;
+                    }
+                };
+
+                // If bot is the only member, clean up
+                if members.len() <= 1 {
+                    // Get channel name if tracked
+                    let channel_name = session_store.delete_by_room(&room_id).ok().flatten();
+
+                    // Leave the room
+                    if let Err(e) = joined_room.leave().await {
+                        errors.push(format!("{}: {}", room_id, e));
+                        continue;
+                    }
+
+                    let name = channel_name.unwrap_or_else(|| room_id.clone());
+                    cleaned_rooms.push(name);
+                }
+            }
+
+            // Phase 2: Clean stale database entries (rooms bot is no longer in)
+            if let Ok(channels) = session_store.list_all() {
+                for channel in channels {
+                    if !joined_room_ids.contains(&channel.room_id) {
+                        // Bot is not in this room anymore, clean up DB entry
+                        if session_store.delete_by_room(&channel.room_id).is_ok() {
+                            cleaned_db.push(channel.channel_name);
+                        }
+                    }
+                }
+            }
+
+            let response = if cleaned_rooms.is_empty() && cleaned_db.is_empty() && errors.is_empty() {
+                "✅ No orphaned rooms or stale entries found. Everything is clean!".to_string()
+            } else {
+                let mut msg = String::new();
+                if !cleaned_rooms.is_empty() {
+                    msg.push_str(&format!(
+                        "🧹 Left {} orphaned room(s):\n",
+                        cleaned_rooms.len()
+                    ));
+                    for name in &cleaned_rooms {
+                        msg.push_str(&format!("  - {}\n", name));
+                    }
+                }
+                if !cleaned_db.is_empty() {
+                    msg.push_str(&format!(
+                        "\n🗑️ Removed {} stale database entry(ies):\n",
+                        cleaned_db.len()
+                    ));
+                    for name in &cleaned_db {
+                        msg.push_str(&format!("  - {}\n", name));
+                    }
+                }
+                if !errors.is_empty() {
+                    msg.push_str(&format!("\n⚠️ {} error(s):\n", errors.len()));
+                    for err in &errors {
+                        msg.push_str(&format!("  - {}\n", err));
+                    }
+                }
+                msg.push_str("\nWorkspace directories preserved.");
+                msg
+            };
+
+            room.send(RoomMessageEventContent::text_plain(&response))
+                .await?;
+
+            tracing::info!(
+                cleaned_rooms = cleaned_rooms.len(),
+                cleaned_db = cleaned_db.len(),
+                error_count = errors.len(),
+                "Cleanup completed"
+            );
+        }
         "list" => {
             let channels = session_store.list_all()?;
 
@@ -386,15 +771,288 @@ async fn handle_command(
             room.send(RoomMessageEventContent::text_plain(&list_text))
                 .await?;
         }
+        "schedule" => {
+            // Only allow in channels (not DMs)
+            if is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "Scheduling is only available in channels. Create a channel first with !create <name>",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            // Get the channel for this room
+            let channel = match session_store.get_by_room(room.room_id().as_str())? {
+                Some(c) => c,
+                None => {
+                    room.send(RoomMessageEventContent::text_plain(
+                        "This room is not associated with a channel. Please set up a channel first.",
+                    ))
+                    .await?;
+                    return Ok(());
+                }
+            };
+
+            // Parse subcommand (args are command_parts[1..])
+            let args = &command_parts[1..];
+            let subcommand = args.first().map(|s| s.to_lowercase());
+            match subcommand.as_deref() {
+                Some("list") => {
+                    // List schedules for this room
+                    let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
+                    if schedules.is_empty() {
+                        room.send(RoomMessageEventContent::text_plain(
+                            "📅 No scheduled prompts.\n\nCreate one with: !schedule <time> <prompt>\nExamples:\n  !schedule in 2 hours check my inbox\n  !schedule tomorrow 9am summarize my calendar\n  !schedule every monday 8am weekly standup",
+                        ))
+                        .await?;
+                    } else {
+                        let mut msg = String::from("📅 Scheduled Prompts\n\n");
+                        for (i, sched) in schedules.iter().enumerate() {
+                            let status_icon = match sched.status {
+                                ScheduleStatus::Active => "🟢",
+                                ScheduleStatus::Paused => "⏸️",
+                                ScheduleStatus::Completed => "✅",
+                                ScheduleStatus::Failed => "❌",
+                            };
+                            let schedule_type = if sched.cron_expression.is_some() {
+                                "🔄 recurring"
+                            } else {
+                                "⏰ one-time"
+                            };
+                            msg.push_str(&format!(
+                                "{}. {} {} [{}]\n   📝 {}\n   ⏱️ Next: {}\n   🆔 {}\n\n",
+                                i + 1,
+                                status_icon,
+                                schedule_type,
+                                sched.status,
+                                truncate_str(&sched.prompt, 50),
+                                &sched.next_execution_at[..16],
+                                &sched.id[..8]
+                            ));
+                        }
+                        msg.push_str("Commands: !schedule delete <id>, !schedule pause <id>, !schedule resume <id>");
+                        room.send(RoomMessageEventContent::text_plain(&msg))
+                            .await?;
+                    }
+                }
+                Some("delete") => {
+                    let schedule_id = args.get(1);
+                    match schedule_id {
+                        Some(id) => {
+                            // Find schedule by partial ID match
+                            let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
+                            let matching: Vec<_> = schedules
+                                .iter()
+                                .filter(|s| s.id.starts_with(*id))
+                                .collect();
+                            match matching.len() {
+                                0 => {
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "No schedule found matching ID '{}'",
+                                        id
+                                    )))
+                                    .await?;
+                                }
+                                1 => {
+                                    scheduler_store.delete_schedule(&matching[0].id)?;
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "🗑️ Deleted schedule: {}",
+                                        truncate_str(&matching[0].prompt, 50)
+                                    )))
+                                    .await?;
+                                }
+                                _ => {
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "Multiple schedules match '{}'. Be more specific.",
+                                        id
+                                    )))
+                                    .await?;
+                                }
+                            }
+                        }
+                        None => {
+                            room.send(RoomMessageEventContent::text_plain(
+                                "Usage: !schedule delete <id>\nUse !schedule list to see IDs",
+                            ))
+                            .await?;
+                        }
+                    }
+                }
+                Some("pause") => {
+                    let schedule_id = args.get(1);
+                    match schedule_id {
+                        Some(id) => {
+                            let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
+                            let matching: Vec<_> = schedules
+                                .iter()
+                                .filter(|s| s.id.starts_with(*id) && s.status == ScheduleStatus::Active)
+                                .collect();
+                            match matching.len() {
+                                0 => {
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "No active schedule found matching ID '{}'",
+                                        id
+                                    )))
+                                    .await?;
+                                }
+                                1 => {
+                                    scheduler_store.pause_schedule(&matching[0].id)?;
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "⏸️ Paused schedule: {}",
+                                        truncate_str(&matching[0].prompt, 50)
+                                    )))
+                                    .await?;
+                                }
+                                _ => {
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "Multiple schedules match '{}'. Be more specific.",
+                                        id
+                                    )))
+                                    .await?;
+                                }
+                            }
+                        }
+                        None => {
+                            room.send(RoomMessageEventContent::text_plain(
+                                "Usage: !schedule pause <id>\nUse !schedule list to see IDs",
+                            ))
+                            .await?;
+                        }
+                    }
+                }
+                Some("resume") => {
+                    let schedule_id = args.get(1);
+                    match schedule_id {
+                        Some(id) => {
+                            let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
+                            let matching: Vec<_> = schedules
+                                .iter()
+                                .filter(|s| s.id.starts_with(*id) && s.status == ScheduleStatus::Paused)
+                                .collect();
+                            match matching.len() {
+                                0 => {
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "No paused schedule found matching ID '{}'",
+                                        id
+                                    )))
+                                    .await?;
+                                }
+                                1 => {
+                                    scheduler_store.resume_schedule(&matching[0].id)?;
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "▶️ Resumed schedule: {}",
+                                        truncate_str(&matching[0].prompt, 50)
+                                    )))
+                                    .await?;
+                                }
+                                _ => {
+                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                        "Multiple schedules match '{}'. Be more specific.",
+                                        id
+                                    )))
+                                    .await?;
+                                }
+                            }
+                        }
+                        None => {
+                            room.send(RoomMessageEventContent::text_plain(
+                                "Usage: !schedule resume <id>\nUse !schedule list to see IDs",
+                            ))
+                            .await?;
+                        }
+                    }
+                }
+                _ => {
+                    // Default: create a schedule
+                    // Parse time expression from the beginning of args
+                    if args.is_empty() {
+                        room.send(RoomMessageEventContent::text_plain(
+                            "Usage: !schedule <time> <prompt>\n\nExamples:\n  !schedule in 2 hours check my inbox\n  !schedule tomorrow 9am summarize my calendar\n  !schedule every monday 8am weekly standup\n\nOther commands:\n  !schedule list\n  !schedule delete <id>\n  !schedule pause <id>\n  !schedule resume <id>",
+                        ))
+                        .await?;
+                        return Ok(());
+                    }
+
+                    // Try to parse time expression greedily from start
+                    let full_args = args.join(" ");
+                    let (parsed_schedule, prompt) = parse_schedule_input(&full_args)?;
+
+                    if prompt.is_empty() {
+                        room.send(RoomMessageEventContent::text_plain(
+                            "Missing prompt. Usage: !schedule <time> <prompt>",
+                        ))
+                        .await?;
+                        return Ok(());
+                    }
+
+                    // Create the schedule
+                    let schedule_id = uuid::Uuid::new_v4().to_string();
+                    let now = Utc::now().to_rfc3339();
+
+                    let (execute_at, cron_expr, next_exec) = match &parsed_schedule {
+                        ParsedSchedule::OneTime(dt) => (Some(dt.to_rfc3339()), None, dt.to_rfc3339()),
+                        ParsedSchedule::Recurring { cron, next } => {
+                            (None, Some(cron.clone()), next.to_rfc3339())
+                        }
+                    };
+
+                    let scheduled_prompt = ScheduledPrompt {
+                        id: schedule_id.clone(),
+                        channel_name: channel.channel_name.clone(),
+                        room_id: room.room_id().to_string(),
+                        prompt: prompt.clone(),
+                        created_by: sender.to_string(),
+                        created_at: now,
+                        execute_at,
+                        cron_expression: cron_expr.clone(),
+                        last_executed_at: None,
+                        next_execution_at: next_exec.clone(),
+                        status: ScheduleStatus::Active,
+                        error_message: None,
+                        execution_count: 0,
+                    };
+
+                    scheduler_store.create_schedule(&scheduled_prompt)?;
+
+                    let schedule_type = if cron_expr.is_some() {
+                        "🔄 Recurring schedule"
+                    } else {
+                        "⏰ One-time schedule"
+                    };
+
+                    room.send(RoomMessageEventContent::text_plain(&format!(
+                        "{} created!\n\n📝 Prompt: {}\n⏱️ Next execution: {}\n🆔 ID: {}",
+                        schedule_type,
+                        truncate_str(&prompt, 100),
+                        &next_exec[..16],
+                        &schedule_id[..8]
+                    )))
+                    .await?;
+
+                    tracing::info!(
+                        schedule_id = %schedule_id,
+                        channel = %channel.channel_name,
+                        next_exec = %next_exec,
+                        "Schedule created"
+                    );
+                }
+            }
+        }
         _ => {
             let help_msg = if is_dm {
                 "Unknown command. Available commands:\n\
                 !create <name> - Create new channel\n\
+                !join <name> - Get invited to channel\n\
+                !delete <name> - Remove channel\n\
+                !cleanup - Leave orphaned rooms\n\
                 !list - Show all channels\n\
                 !help - Show detailed help"
             } else {
                 "Unknown command. Available commands:\n\
                 !status - Show channel info\n\
+                !schedule <time> <prompt> - Schedule a prompt\n\
+                !schedule list - View schedules\n\
+                !leave - Bot leaves room\n\
                 !help - Show detailed help"
             };
             room.send(RoomMessageEventContent::text_plain(help_msg))
@@ -403,4 +1061,45 @@ async fn handle_command(
     }
 
     Ok(())
+}
+
+/// Truncate a string to max_len characters, adding "..." if truncated
+/// Uses character-based slicing to avoid UTF-8 boundary panics
+fn truncate_str(s: &str, max_len: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_len {
+        s.to_string()
+    } else {
+        let truncated: String = chars[..max_len.saturating_sub(3)].iter().collect();
+        format!("{}...", truncated)
+    }
+}
+
+/// Parse schedule input to extract time expression and prompt
+/// Uses greedy matching with a max lookahead to avoid consuming the entire prompt
+fn parse_schedule_input(input: &str) -> anyhow::Result<(ParsedSchedule, String)> {
+    let words: Vec<&str> = input.split_whitespace().collect();
+
+    // Require at least 1 word for prompt, limit time expression to 10 words max
+    let max_time_words = std::cmp::min(words.len().saturating_sub(1), 10);
+
+    // Try progressively longer prefixes until parsing fails
+    let mut last_valid: Option<(ParsedSchedule, usize)> = None;
+
+    for end_idx in 1..=max_time_words {
+        let time_expr = words[..end_idx].join(" ");
+        if let Ok(schedule) = parse_time_expression(&time_expr) {
+            last_valid = Some((schedule, end_idx));
+        }
+    }
+
+    match last_valid {
+        Some((schedule, word_count)) => {
+            let prompt = words[word_count..].join(" ");
+            Ok((schedule, prompt))
+        }
+        None => anyhow::bail!(
+            "Could not parse time expression. Try: 'in 2 hours', 'tomorrow 9am', 'every monday 8am'"
+        ),
+    }
 }

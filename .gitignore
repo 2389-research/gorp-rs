@@ -14,3 +14,7 @@ test-bot*.log
 *~
 .DS_Store
 test-accounts.txt
+runtime.log
+*.log
+output.txt
+test-config.toml

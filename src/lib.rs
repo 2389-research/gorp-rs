@@ -4,5 +4,8 @@ pub mod claude;
 pub mod config;
 pub mod matrix_client;
 pub mod message_handler;
+pub mod paths;
+pub mod scheduler;
 pub mod session;
+pub mod utils;
 pub mod webhook;
