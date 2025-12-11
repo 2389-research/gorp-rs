@@ -30,7 +30,7 @@ RUN useradd --create-home --shell /bin/bash claude
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/matrix-bridge /app/matrix-bridge
+COPY --from=builder /app/target/release/gorp /app/gorp
 
 # Create directories for persistent data
 RUN mkdir -p /app/sessions_db /app/crypto_store && \
@@ -43,4 +43,4 @@ USER claude
 VOLUME ["/app/sessions_db", "/app/crypto_store"]
 
 # Run the bot
-CMD ["/app/matrix-bridge"]
+CMD ["/app/gorp"]

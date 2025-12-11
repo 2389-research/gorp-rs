@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
-use matrix_bridge::{
+use gorp::{
     config::Config, matrix_client, message_handler, paths,
     scheduler::{SchedulerStore, start_scheduler},
     session::SessionStore, webhook,

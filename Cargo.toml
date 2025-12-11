@@ -1,5 +1,5 @@
 [package]
-name = "matrix-bridge"
+name = "gorp"
 version = "0.1.0"
 edition = "2021"
 
@@ -26,3 +26,4 @@ pulldown-cmark = "0.10"
 two_timer = "2.2"
 cron = "0.15"
 regex = "1.12.2"
+chrono-tz = "0.10.4"

@@ -813,6 +813,7 @@ async fn handle_command(
                                 ScheduleStatus::Paused => "⏸️",
                                 ScheduleStatus::Completed => "✅",
                                 ScheduleStatus::Failed => "❌",
+                                ScheduleStatus::Executing => "⏳",
                             };
                             let schedule_type = if sched.cron_expression.is_some() {
                                 "🔄 recurring"
@@ -975,7 +976,7 @@ async fn handle_command(
 
                     // Try to parse time expression greedily from start
                     let full_args = args.join(" ");
-                    let (parsed_schedule, prompt) = parse_schedule_input(&full_args)?;
+                    let (parsed_schedule, prompt) = parse_schedule_input(&full_args, &config.scheduler.timezone)?;
 
                     if prompt.is_empty() {
                         room.send(RoomMessageEventContent::text_plain(
@@ -1021,10 +1022,11 @@ async fn handle_command(
                     };
 
                     room.send(RoomMessageEventContent::text_plain(&format!(
-                        "{} created!\n\n📝 Prompt: {}\n⏱️ Next execution: {}\n🆔 ID: {}",
+                        "{} created!\n\n📝 Prompt: {}\n⏱️ Next execution: {} ({})\n🆔 ID: {}",
                         schedule_type,
                         truncate_str(&prompt, 100),
                         &next_exec[..16],
+                        &config.scheduler.timezone,
                         &schedule_id[..8]
                     )))
                     .await?;
@@ -1077,7 +1079,7 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 
 /// Parse schedule input to extract time expression and prompt
 /// Uses greedy matching with a max lookahead to avoid consuming the entire prompt
-fn parse_schedule_input(input: &str) -> anyhow::Result<(ParsedSchedule, String)> {
+fn parse_schedule_input(input: &str, timezone: &str) -> anyhow::Result<(ParsedSchedule, String)> {
     let words: Vec<&str> = input.split_whitespace().collect();
 
     // Require at least 1 word for prompt, limit time expression to 10 words max
@@ -1088,7 +1090,7 @@ fn parse_schedule_input(input: &str) -> anyhow::Result<(ParsedSchedule, String)>
 
     for end_idx in 1..=max_time_words {
         let time_expr = words[..end_idx].join(" ");
-        if let Ok(schedule) = parse_time_expression(&time_expr) {
+        if let Ok(schedule) = parse_time_expression(&time_expr, timezone) {
             last_valid = Some((schedule, end_idx));
         }
     }

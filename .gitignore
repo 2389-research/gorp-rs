@@ -19,3 +19,5 @@ runtime.log
 output.txt
 test-config.toml
 workspace
+!example/workspace
+*.db

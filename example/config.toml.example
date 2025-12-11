@@ -61,9 +61,3 @@ host = "localhost"
 [workspace]
 # Directory where channel workspaces are stored (default: "./workspace")
 path = "./workspace"
-
-[scheduler]
-# Timezone for interpreting schedule times (default: auto-detect from system)
-# Uses IANA timezone names (e.g., "America/Chicago", "Europe/London", "UTC")
-# See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-timezone = "America/Chicago"

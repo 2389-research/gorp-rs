@@ -3,10 +3,10 @@
 version: '3.8'
 
 services:
-  matrix-bridge:
+  gorp:
     build: .
-    image: matrix-claude-bridge:latest
-    container_name: matrix-claude-bridge
+    image: gorp:latest
+    container_name: gorp
     restart: unless-stopped
 
     # Environment variables from .env file

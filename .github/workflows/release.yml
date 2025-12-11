@@ -18,11 +18,11 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             platform: Linux x86_64
-            artifact_name: matrix-bridge-linux-x86_64
+            artifact_name: gorp-linux-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
             platform: macOS x86_64
-            artifact_name: matrix-bridge-macos-x86_64
+            artifact_name: gorp-macos-x86_64
 
     steps:
       - name: Checkout code
@@ -53,15 +53,15 @@ jobs:
 
       - name: Strip binary (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: strip target/${{ matrix.target }}/release/matrix-bridge
+        run: strip target/${{ matrix.target }}/release/gorp
 
       - name: Strip binary (macOS)
         if: matrix.os == 'macos-latest'
-        run: strip target/${{ matrix.target }}/release/matrix-bridge
+        run: strip target/${{ matrix.target }}/release/gorp
 
       - name: Rename binary
         run: |
-          cp target/${{ matrix.target }}/release/matrix-bridge ${{ matrix.artifact_name }}
+          cp target/${{ matrix.target }}/release/gorp ${{ matrix.artifact_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -86,13 +86,13 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
-          name: matrix-bridge-linux-x86_64
+          name: gorp-linux-x86_64
           path: ./artifacts
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: matrix-bridge-macos-x86_64
+          name: gorp-macos-x86_64
           path: ./artifacts
 
       - name: Generate changelog
@@ -145,8 +145,8 @@ jobs:
         with:
           body: ${{ steps.changelog.outputs.changelog }}
           files: |
-            ./artifacts/matrix-bridge-linux-x86_64
-            ./artifacts/matrix-bridge-macos-x86_64
+            ./artifacts/gorp-linux-x86_64
+            ./artifacts/gorp-macos-x86_64
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

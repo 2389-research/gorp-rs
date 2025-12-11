@@ -12,6 +12,8 @@ pub struct Config {
     pub claude: ClaudeConfig,
     pub webhook: WebhookConfig,
     pub workspace: WorkspaceConfig,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -70,6 +72,48 @@ pub struct WebhookConfig {
 pub struct WorkspaceConfig {
     #[serde(default = "default_workspace_path")]
     pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerConfig {
+    /// Timezone for interpreting schedule times (e.g., "America/Chicago", "UTC")
+    /// Uses IANA timezone names. Defaults to system local timezone.
+    #[serde(default = "default_timezone")]
+    pub timezone: String,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            timezone: default_timezone(),
+        }
+    }
+}
+
+fn default_timezone() -> String {
+    // Try to detect system timezone, fall back to UTC
+    // Always validate that the timezone is parseable by chrono-tz
+    if let Ok(tz) = std::env::var("TZ") {
+        if tz.parse::<chrono_tz::Tz>().is_ok() {
+            return tz;
+        }
+    }
+    // On Unix systems, try to read /etc/localtime symlink
+    #[cfg(unix)]
+    {
+        if let Ok(link) = std::fs::read_link("/etc/localtime") {
+            if let Some(tz) = link.to_str() {
+                // Extract timezone from path like /usr/share/zoneinfo/America/Chicago
+                if let Some(pos) = tz.find("zoneinfo/") {
+                    let detected = tz[pos + 9..].to_string();
+                    if detected.parse::<chrono_tz::Tz>().is_ok() {
+                        return detected;
+                    }
+                }
+            }
+        }
+    }
+    "UTC".to_string()
 }
 
 fn default_device_name() -> String {
@@ -155,6 +199,7 @@ impl Config {
                 workspace: WorkspaceConfig {
                     path: default_workspace_path(),
                 },
+                scheduler: SchedulerConfig::default(),
             }
         };
 
@@ -208,6 +253,17 @@ impl Config {
         }
         if let Ok(val) = std::env::var("WORKSPACE_PATH") {
             config.workspace.path = val;
+        }
+        if let Ok(val) = std::env::var("SCHEDULER_TIMEZONE") {
+            config.scheduler.timezone = val;
+        }
+
+        // Validate timezone is a valid IANA timezone
+        if config.scheduler.timezone.parse::<chrono_tz::Tz>().is_err() {
+            anyhow::bail!(
+                "Invalid timezone '{}'. Use IANA timezone names like 'America/Chicago', 'Europe/London', 'UTC'",
+                config.scheduler.timezone
+            );
         }
 
         // Validate required fields

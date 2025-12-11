@@ -34,6 +34,7 @@ pub enum ScheduleStatus {
     Paused,
     Completed,
     Failed,
+    Executing,
 }
 
 impl std::fmt::Display for ScheduleStatus {
@@ -43,6 +44,7 @@ impl std::fmt::Display for ScheduleStatus {
             ScheduleStatus::Paused => write!(f, "paused"),
             ScheduleStatus::Completed => write!(f, "completed"),
             ScheduleStatus::Failed => write!(f, "failed"),
+            ScheduleStatus::Executing => write!(f, "executing"),
         }
     }
 }
@@ -56,6 +58,7 @@ impl FromStr for ScheduleStatus {
             "paused" => Ok(ScheduleStatus::Paused),
             "completed" => Ok(ScheduleStatus::Completed),
             "failed" => Ok(ScheduleStatus::Failed),
+            "executing" => Ok(ScheduleStatus::Executing),
             _ => anyhow::bail!("Unknown schedule status: {}", s),
         }
     }
@@ -89,14 +92,16 @@ fn parse_relative_time(input: &str) -> Option<Result<ParsedSchedule>> {
 }
 
 /// Parse natural language time expression into a schedule
-pub fn parse_time_expression(input: &str) -> Result<ParsedSchedule> {
+pub fn parse_time_expression(input: &str, timezone: &str) -> Result<ParsedSchedule> {
     let input_lower = input.to_lowercase().trim().to_string();
+    // Normalize common aliases
+    let input_lower = input_lower.replace("everyday", "every day");
 
-    tracing::debug!(input = %input_lower, "Attempting to parse time expression");
+    tracing::debug!(input = %input_lower, timezone = %timezone, "Attempting to parse time expression");
 
     // Check for recurring patterns first
     if input_lower.starts_with("every ") {
-        return parse_recurring(&input_lower);
+        return parse_recurring(&input_lower, timezone);
     }
 
     // Handle "in X minutes/hours/days" patterns manually
@@ -136,7 +141,7 @@ pub fn parse_time_expression(input: &str) -> Result<ParsedSchedule> {
 }
 
 /// Parse recurring schedule patterns like "every monday 8am"
-fn parse_recurring(input: &str) -> Result<ParsedSchedule> {
+fn parse_recurring(input: &str, timezone: &str) -> Result<ParsedSchedule> {
     let rest = input.strip_prefix("every ").unwrap_or(input);
 
     // Parse common recurring patterns
@@ -196,8 +201,8 @@ fn parse_recurring(input: &str) -> Result<ParsedSchedule> {
         parse_weekday_time(rest)?
     };
 
-    // Validate the cron expression and compute next execution
-    let next = compute_next_cron_execution(&cron)?;
+    // Validate the cron expression and compute next execution in the configured timezone
+    let next = compute_next_cron_execution_in_tz(&cron, timezone)?;
 
     Ok(ParsedSchedule::Recurring { cron, next })
 }
@@ -294,8 +299,13 @@ fn parse_weekday_time(input: &str) -> Result<String> {
     Ok(format!("{} {} * * {}", minute, hour, cron_day))
 }
 
-/// Compute the next execution time for a cron expression
+/// Compute the next execution time for a cron expression in the given timezone
 pub fn compute_next_cron_execution(cron_expr: &str) -> Result<DateTime<Utc>> {
+    compute_next_cron_execution_in_tz(cron_expr, "UTC")
+}
+
+/// Compute the next execution time for a cron expression in the given timezone
+pub fn compute_next_cron_execution_in_tz(cron_expr: &str, timezone: &str) -> Result<DateTime<Utc>> {
     // Cron crate expects 6-field expressions (with seconds), but we use 5-field
     // Prepend "0 " for seconds
     let cron_with_seconds = format!("0 {}", cron_expr);
@@ -303,10 +313,18 @@ pub fn compute_next_cron_execution(cron_expr: &str) -> Result<DateTime<Utc>> {
     let schedule = Schedule::from_str(&cron_with_seconds)
         .with_context(|| format!("Invalid cron expression: {}", cron_expr))?;
 
-    schedule
-        .upcoming(Utc)
+    // Parse timezone and compute next execution in that timezone
+    let tz: chrono_tz::Tz = timezone
+        .parse()
+        .with_context(|| format!("Invalid timezone: {}", timezone))?;
+
+    let next_local = schedule
+        .upcoming(tz)
         .next()
-        .context("Could not compute next execution time")
+        .context("Could not compute next execution time")?;
+
+    // Convert to UTC for storage
+    Ok(next_local.with_timezone(&Utc))
 }
 
 /// Scheduler store for database operations
@@ -390,31 +408,32 @@ impl SchedulerStore {
     }
 
     /// Atomically claim and return schedules that are due for execution.
-    /// This prevents race conditions where the same schedule could be executed twice
-    /// if the previous execution hasn't completed before the next scheduler tick.
+    /// Uses a claim token to ensure we only fetch schedules this call claimed,
+    /// preventing race conditions with concurrent executions or crashed instances.
     pub fn claim_due_schedules(&self, now: DateTime<Utc>) -> Result<Vec<ScheduledPrompt>> {
         let conn = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let now_str = now.to_rfc3339();
 
-        // First, atomically mark due schedules as 'executing' to claim them
+        // Use now timestamp as claim token to identify schedules claimed by this call
+        // This ensures we only fetch schedules we just marked, not pre-existing 'executing' ones
         conn.execute(
             "UPDATE scheduled_prompts
-             SET status = 'executing'
-             WHERE status = 'active' AND next_execution_at <= ?1",
-            params![now_str],
+             SET status = 'executing', error_message = ?1
+             WHERE status = 'active' AND next_execution_at <= ?2",
+            params![now_str, now_str],
         )?;
 
-        // Then fetch the claimed schedules
+        // Fetch only schedules claimed by this call (matching claim token in error_message)
         let mut stmt = conn.prepare(
             "SELECT id, channel_name, room_id, prompt, created_by, created_at,
                     execute_at, cron_expression, last_executed_at, next_execution_at,
                     status, error_message, execution_count
              FROM scheduled_prompts
-             WHERE status = 'executing'",
+             WHERE status = 'executing' AND error_message = ?1",
         )?;
 
         let schedules = stmt
-            .query_map([], |row| {
+            .query_map([&now_str], |row| {
                 Ok(ScheduledPrompt {
                     id: row.get(0)?,
                     channel_name: row.get(1)?,
@@ -426,8 +445,8 @@ impl SchedulerStore {
                     cron_expression: row.get(7)?,
                     last_executed_at: row.get(8)?,
                     next_execution_at: row.get(9)?,
-                    status: ScheduleStatus::Active, // Return as Active for execution logic
-                    error_message: row.get(11)?,
+                    status: ScheduleStatus::Executing,
+                    error_message: None, // Clear claim token from returned struct
                     execution_count: row.get(12)?,
                 })
             })?
@@ -737,6 +756,21 @@ async fn execute_schedule(
             // Stop typing
             let _ = room.typing_notice(false).await;
 
+            // Check for empty response - this is a failure case
+            if response.trim().is_empty() {
+                tracing::error!(
+                    schedule_id = %schedule.id,
+                    prompt = %schedule.prompt,
+                    "Claude returned empty response for scheduled task"
+                );
+                let error_msg = "⚠️ Scheduled task failed: Claude returned an empty response. This may indicate a session issue or prompt problem.";
+                let _ = room
+                    .send(RoomMessageEventContent::text_plain(error_msg))
+                    .await;
+                let _ = scheduler_store.mark_failed(&schedule.id, "Empty response from Claude");
+                return;
+            }
+
             // Send response to room with chunking
             let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
             let chunk_count = chunks.len();
@@ -770,7 +804,24 @@ async fn execute_schedule(
 
             // Calculate next execution for recurring schedules
             let next_execution = if let Some(ref cron_expr) = schedule.cron_expression {
-                compute_next_cron_execution(cron_expr).ok()
+                match compute_next_cron_execution_in_tz(cron_expr, &config.scheduler.timezone) {
+                    Ok(next) => Some(next),
+                    Err(e) => {
+                        // Log the error and mark schedule as failed instead of silently completing
+                        tracing::error!(
+                            schedule_id = %schedule.id,
+                            cron = %cron_expr,
+                            timezone = %config.scheduler.timezone,
+                            error = %e,
+                            "Failed to compute next execution time for recurring schedule"
+                        );
+                        let _ = scheduler_store.mark_failed(
+                            &schedule.id,
+                            &format!("Failed to compute next execution: {}", e),
+                        );
+                        return; // Exit early - don't mark as executed
+                    }
+                }
             } else {
                 None // One-time schedule - will be marked completed
             };
