@@ -17,6 +17,14 @@ use crate::{
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
 };
 use chrono::Utc;
+use std::path::Path;
+
+/// Check if debug mode is enabled for a channel directory
+/// Debug mode is enabled by creating an empty file: .matrix/enable-debug
+fn is_debug_enabled(channel_dir: &str) -> bool {
+    let debug_path = Path::new(channel_dir).join(".matrix").join("enable-debug");
+    debug_path.exists()
+}
 
 pub async fn handle_message(
     room: Room,
@@ -148,6 +156,13 @@ pub async fn handle_message(
         }
     };
 
+    // Check if debug mode is enabled for this channel
+    // Debug mode shows tool usage in Matrix (create .matrix/enable-debug to enable)
+    let debug_enabled = is_debug_enabled(&channel.directory);
+    if debug_enabled {
+        tracing::debug!(channel = %channel.channel_name, "Debug mode enabled - will show tool usage");
+    }
+
     // Process streaming events
     let mut final_response: Option<String> = None;
     let mut tools_used: Vec<String> = Vec::new();
@@ -158,35 +173,39 @@ pub async fn handle_message(
                 name,
                 input_preview,
             } => {
-                // Build tool message with plain and HTML versions
-                let (plain, html) = if input_preview.is_empty() {
-                    (format!("🔧 {}", name), format!("🔧 <code>{}</code>", name))
-                } else {
-                    (
-                        format!("🔧 {} · {}", name, input_preview),
-                        format!("🔧 <code>{}</code> · <code>{}</code>", name, input_preview),
-                    )
-                };
+                tools_used.push(name.clone());
 
-                // Send tool notification to room
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_html(&plain, &html))
-                    .await
-                {
-                    tracing::warn!(error = %e, "Failed to send tool notification");
-                } else {
-                    log_matrix_message(
-                        &channel.directory,
-                        room.room_id().as_str(),
-                        "tool_notification",
-                        &plain,
-                        Some(&html),
-                        None,
-                        None,
-                    )
-                    .await;
+                // Only send tool notifications if debug mode is enabled
+                if debug_enabled {
+                    // Build tool message with plain and HTML versions
+                    let (plain, html) = if input_preview.is_empty() {
+                        (format!("🔧 {}", name), format!("🔧 <code>{}</code>", name))
+                    } else {
+                        (
+                            format!("🔧 {} · {}", name, input_preview),
+                            format!("🔧 <code>{}</code> · <code>{}</code>", name, input_preview),
+                        )
+                    };
+
+                    // Send tool notification to room
+                    if let Err(e) = room
+                        .send(RoomMessageEventContent::text_html(&plain, &html))
+                        .await
+                    {
+                        tracing::warn!(error = %e, "Failed to send tool notification");
+                    } else {
+                        log_matrix_message(
+                            &channel.directory,
+                            room.room_id().as_str(),
+                            "tool_notification",
+                            &plain,
+                            Some(&html),
+                            None,
+                            None,
+                        )
+                        .await;
+                    }
                 }
-                tools_used.push(name);
             }
             ClaudeEvent::Result(result) => {
                 final_response = Some(result);
@@ -309,6 +328,7 @@ async fn handle_command(
             "Available commands:\n\
             !help - Show detailed help\n\
             !status - Show current channel info\n\
+            !debug - Toggle tool usage display\n\
             !leave - Bot leaves this room"
         };
         room.send(RoomMessageEventContent::text_plain(help_msg))
@@ -337,6 +357,7 @@ async fn handle_command(
                 !help - Show this help message\n\n\
                 ## Room Commands\n\
                 !status - Show current channel info\n\
+                !debug - Toggle tool usage display (on/off)\n\
                 !leave - Bot leaves this room (preserves workspace)\n\
                 !schedule <time> <prompt> - Schedule a prompt\n\
                 !schedule list - View scheduled prompts\n\
@@ -374,6 +395,87 @@ async fn handle_command(
 
             room.send(RoomMessageEventContent::text_plain(&help_text))
                 .await?;
+        }
+        "debug" => {
+            if is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "❌ The !debug command only works in channel rooms.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            // Get channel directory
+            let Some(channel) = session_store.get_by_room(room.room_id().as_str())? else {
+                room.send(RoomMessageEventContent::text_plain(
+                    "No channel attached to this room.",
+                ))
+                .await?;
+                return Ok(());
+            };
+
+            let debug_dir = std::path::Path::new(&channel.directory).join(".matrix");
+            let debug_file = debug_dir.join("enable-debug");
+
+            let subcommand = command_parts.get(1).map(|s| s.to_lowercase());
+            match subcommand.as_deref() {
+                Some("on") | Some("enable") => {
+                    // Create .matrix directory if needed
+                    if let Err(e) = std::fs::create_dir_all(&debug_dir) {
+                        room.send(RoomMessageEventContent::text_plain(&format!(
+                            "⚠️ Failed to create debug directory: {}",
+                            e
+                        )))
+                        .await?;
+                        return Ok(());
+                    }
+                    // Create enable-debug file
+                    if let Err(e) = std::fs::write(&debug_file, "") {
+                        room.send(RoomMessageEventContent::text_plain(&format!(
+                            "⚠️ Failed to enable debug: {}",
+                            e
+                        )))
+                        .await?;
+                        return Ok(());
+                    }
+                    room.send(RoomMessageEventContent::text_plain(
+                        "🔧 Debug mode ENABLED\n\nTool usage will now be shown in this channel.",
+                    ))
+                    .await?;
+                    tracing::info!(channel = %channel.channel_name, "Debug mode enabled");
+                }
+                Some("off") | Some("disable") => {
+                    // Remove enable-debug file if it exists
+                    if debug_file.exists() {
+                        if let Err(e) = std::fs::remove_file(&debug_file) {
+                            room.send(RoomMessageEventContent::text_plain(&format!(
+                                "⚠️ Failed to disable debug: {}",
+                                e
+                            )))
+                            .await?;
+                            return Ok(());
+                        }
+                    }
+                    room.send(RoomMessageEventContent::text_plain(
+                        "🔇 Debug mode DISABLED\n\nTool usage will be hidden in this channel.",
+                    ))
+                    .await?;
+                    tracing::info!(channel = %channel.channel_name, "Debug mode disabled");
+                }
+                _ => {
+                    // Show current status
+                    let status = if debug_file.exists() {
+                        "🔧 Debug mode is ENABLED\n\nTool usage is shown in this channel."
+                    } else {
+                        "🔇 Debug mode is DISABLED\n\nTool usage is hidden in this channel."
+                    };
+                    room.send(RoomMessageEventContent::text_plain(&format!(
+                        "{}\n\nCommands:\n  !debug on - Show tool usage\n  !debug off - Hide tool usage",
+                        status
+                    )))
+                    .await?;
+                }
+            }
         }
         "status" => {
             if let Some(channel) = session_store.get_by_room(room.room_id().as_str())? {
@@ -1087,6 +1189,7 @@ async fn handle_command(
             } else {
                 "Unknown command. Available commands:\n\
                 !status - Show channel info\n\
+                !debug - Toggle tool usage display\n\
                 !schedule <time> <prompt> - Schedule a prompt\n\
                 !schedule list - View schedules\n\
                 !leave - Bot leaves room\n\
