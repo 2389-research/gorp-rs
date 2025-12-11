@@ -5,6 +5,7 @@ use anyhow::Result;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    middleware,
     response::IntoResponse,
     routing::post,
     Json, Router,
@@ -18,7 +19,7 @@ use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    admin::{admin_router, AdminState},
+    admin::{admin_router, auth_middleware, AdminState},
     claude,
     config::Config,
     session::SessionStore,
@@ -66,8 +67,15 @@ pub async fn start_webhook_server(
         config: Arc::clone(&state.config),
     };
 
+    let admin_routes = admin_router()
+        .layer(middleware::from_fn_with_state(
+            admin_state.clone(),
+            auth_middleware,
+        ))
+        .with_state(admin_state);
+
     let app = Router::new()
-        .nest("/admin", admin_router().with_state(admin_state))
+        .nest("/admin", admin_routes)
         .merge(webhook_routes)
         .layer(TraceLayer::new_for_http());
 
@@ -75,7 +83,11 @@ pub async fn start_webhook_server(
     tracing::info!(addr = %addr, "Starting webhook server");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
