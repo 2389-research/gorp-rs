@@ -171,7 +171,7 @@ async fn channels_list(State(state): State<AdminState>) -> ChannelListTemplate {
     let channel_rows: Vec<ChannelRow> = channels
         .iter()
         .map(|ch| {
-            let debug_enabled = is_debug_enabled(&ch.directory);
+            let debug_enabled = is_debug_enabled(ch);
             ChannelRow {
                 name: ch.channel_name.clone(),
                 room_id: ch.room_id.clone(),
@@ -205,7 +205,13 @@ async fn channel_detail(
             is_error: true,
         })?;
 
-    let debug_enabled = is_debug_enabled(&channel.directory);
+    // Validate directory path
+    channel.validate_directory().map_err(|e| ToastTemplate {
+        message: format!("Invalid channel directory: {}", e),
+        is_error: true,
+    })?;
+
+    let debug_enabled = is_debug_enabled(&channel);
     let webhook_url = format!(
         "http://{}:{}/webhook/session/{}",
         state.config.webhook.host, state.config.webhook.port, channel.session_id
@@ -237,6 +243,13 @@ async fn channel_create(
         };
     }
 
+    if name.len() > 64 {
+        return ToastTemplate {
+            message: "Channel name too long (max 64 characters)".to_string(),
+            is_error: true,
+        };
+    }
+
     if !name
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
@@ -247,17 +260,14 @@ async fn channel_create(
         };
     }
 
-    // Create channel (room_id will be empty - needs Matrix room creation separately)
-    // For now, just create the local channel entry without a Matrix room
-    // Full room creation requires the Matrix client which isn't available in admin state
+    // Channel creation requires Matrix client which isn't available in admin state
+    // Direct users to proper creation methods
     ToastTemplate {
         message: format!(
-            "Channel creation via admin UI requires Matrix client. \
-             Use the MCP tool 'create_channel' from within a Claude session, \
-             or DM the bot with: !create {}",
-            name
+            "To create channel '{}': DM the bot with !create {} or use the MCP create_channel tool from a Claude session.",
+            name, name
         ),
-        is_error: true,
+        is_error: false, // Info message, not an error
     }
 }
 
@@ -319,6 +329,14 @@ async fn channel_toggle_debug(
         }
     };
 
+    // Validate directory path to prevent path traversal attacks
+    if let Err(e) = channel.validate_directory() {
+        return ToastTemplate {
+            message: format!("Invalid channel directory: {}", e),
+            is_error: true,
+        };
+    }
+
     let debug_dir = Path::new(&channel.directory).join(".matrix");
     let debug_file = debug_dir.join("enable-debug");
     let currently_enabled = debug_file.exists();
@@ -356,8 +374,15 @@ async fn channel_toggle_debug(
     }
 }
 
-/// Check if debug mode is enabled for a channel directory
-fn is_debug_enabled(channel_dir: &str) -> bool {
-    let debug_path = Path::new(channel_dir).join(".matrix").join("enable-debug");
+/// Check if debug mode is enabled for a channel
+/// Returns false if the directory path is invalid (safe default)
+fn is_debug_enabled(channel: &crate::session::Channel) -> bool {
+    // Validate directory path to prevent path traversal
+    if channel.validate_directory().is_err() {
+        return false;
+    }
+    let debug_path = Path::new(&channel.directory)
+        .join(".matrix")
+        .join("enable-debug");
     debug_path.exists()
 }

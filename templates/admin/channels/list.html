@@ -49,7 +49,7 @@
                         </span>
                         {% endif %}
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono" title="{{ channel.room_id }}">
                         {{ channel.room_id|truncate(30) }}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
@@ -63,13 +63,15 @@
                         <button hx-post="/admin/channels/{{ channel.name }}/debug"
                                 hx-target="#toast"
                                 hx-swap="innerHTML"
+                                hx-on::after-request="setTimeout(() => location.reload(), 1500)"
                                 class="text-blue-600 hover:text-blue-800 mr-3">
                             Toggle Debug
                         </button>
                         <button hx-post="/admin/channels/{{ channel.name }}/delete"
                                 hx-target="#toast"
                                 hx-swap="innerHTML"
-                                hx-confirm="Are you sure you want to delete channel '{{ channel.name }}'? The workspace will be preserved."
+                                hx-on::after-request="setTimeout(() => location.reload(), 1500)"
+                                hx-confirm="Are you sure you want to delete channel '{{ channel.name }}'? Files in {{ channel.directory }} will be kept."
                                 class="text-red-600 hover:text-red-800">
                             Delete
                         </button>
