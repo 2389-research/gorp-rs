@@ -50,6 +50,21 @@ impl Channel {
             vec!["--session-id", &self.session_id]
         }
     }
+
+    /// Validate that the channel directory path is safe (no path traversal)
+    /// This guards against tampered database entries
+    pub fn validate_directory(&self) -> Result<()> {
+        // Reject any path containing ".." to prevent path traversal
+        if self.directory.contains("..") {
+            tracing::error!(
+                channel = %self.channel_name,
+                directory = %self.directory,
+                "Channel has invalid directory path (contains ..)"
+            );
+            anyhow::bail!("Invalid channel directory: contains path traversal");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -118,7 +133,10 @@ impl SessionStore {
         });
 
         match channel {
-            Ok(c) => Ok(Some(c)),
+            Ok(c) => {
+                c.validate_directory()?;
+                Ok(Some(c))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -147,7 +165,10 @@ impl SessionStore {
         });
 
         match channel {
-            Ok(c) => Ok(Some(c)),
+            Ok(c) => {
+                c.validate_directory()?;
+                Ok(Some(c))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -339,7 +360,10 @@ impl SessionStore {
         });
 
         match channel {
-            Ok(c) => Ok(Some(c)),
+            Ok(c) => {
+                c.validate_directory()?;
+                Ok(Some(c))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
