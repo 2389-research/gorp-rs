@@ -414,7 +414,22 @@ async fn handle_command(
                 return Ok(());
             };
 
-            let debug_dir = std::path::Path::new(&channel.directory).join(".matrix");
+            // Validate channel directory path to prevent path traversal attacks
+            let channel_path = std::path::Path::new(&channel.directory);
+            if !channel_path.is_absolute() && channel.directory.contains("..") {
+                tracing::warn!(
+                    channel = %channel.channel_name,
+                    directory = %channel.directory,
+                    "Suspicious channel directory path detected"
+                );
+                room.send(RoomMessageEventContent::text_plain(
+                    "⚠️ Invalid channel directory configuration.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            let debug_dir = channel_path.join(".matrix");
             let debug_file = debug_dir.join("enable-debug");
 
             let subcommand = command_parts.get(1).map(|s| s.to_lowercase());
@@ -479,12 +494,18 @@ async fn handle_command(
         }
         "status" => {
             if let Some(channel) = session_store.get_by_room(room.room_id().as_str())? {
+                let debug_status = if is_debug_enabled(&channel.directory) {
+                    "🔧 Enabled (tool usage shown)"
+                } else {
+                    "🔇 Disabled (tool usage hidden)"
+                };
                 let status = format!(
                     "📊 Channel Status\n\n\
                     Channel: {}\n\
                     Session ID: {}\n\
                     Directory: {}\n\
-                    Started: {}\n\n\
+                    Started: {}\n\
+                    Debug Mode: {}\n\n\
                     Webhook URL:\n\
                     POST http://{}:{}/webhook/session/{}\n\n\
                     This room is backed by a persistent Claude session.",
@@ -496,6 +517,7 @@ async fn handle_command(
                     } else {
                         "No (first message will start it)"
                     },
+                    debug_status,
                     config.webhook.host,
                     config.webhook.port,
                     channel.session_id

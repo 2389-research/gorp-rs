@@ -147,6 +147,7 @@ fn default_room_prefix() -> String {
 }
 
 /// Expand tilde (~) to home directory in paths
+/// Logs a warning if expansion fails and falls back to the original path
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") {
         if let Some(base_dirs) = directories::BaseDirs::new() {
@@ -155,10 +156,17 @@ fn expand_tilde(path: &str) -> String {
                 .join(&path[2..])
                 .to_string_lossy()
                 .to_string();
+        } else {
+            tracing::warn!(
+                path = %path,
+                "Failed to expand tilde in path: could not determine home directory"
+            );
         }
     } else if path == "~" {
         if let Some(base_dirs) = directories::BaseDirs::new() {
             return base_dirs.home_dir().to_string_lossy().to_string();
+        } else {
+            tracing::warn!("Failed to expand tilde: could not determine home directory");
         }
     }
     path.to_string()

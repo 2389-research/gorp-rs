@@ -24,7 +24,9 @@ if [ ! -f "$CONFIG_DIR/config.toml" ]; then
         echo "Warning: No config.toml found in $CONFIG_DIR"
         echo "You can either:"
         echo "  1. Mount a config file: -v ./config:/home/gorp/.config/gorp"
-        echo "  2. Use environment variables (see .env.example)"
+        echo "  2. Use environment variables:"
+        echo "     MATRIX_HOME_SERVER, MATRIX_USER_ID, MATRIX_PASSWORD,"
+        echo "     ALLOWED_USERS (comma-separated Matrix user IDs)"
     fi
 fi
 
