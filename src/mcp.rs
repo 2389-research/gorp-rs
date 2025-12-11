@@ -108,7 +108,7 @@ fn find_workspace_dir() -> Option<String> {
 fn get_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
-            name: "gorp_schedule_prompt".to_string(),
+            name: "schedule_prompt".to_string(),
             description: "Schedule a prompt to be executed at a future time. The prompt will be sent to the current channel and processed by Claude.".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -130,7 +130,7 @@ fn get_tools() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "gorp_send_attachment".to_string(),
+            name: "send_attachment".to_string(),
             description: "Send a file or image to the Matrix chat room. The file must exist in the workspace directory.".to_string(),
             input_schema: json!({
                 "type": "object",
@@ -162,6 +162,8 @@ pub async fn mcp_handler(
     tracing::debug!(method = %request.method, "MCP request received");
 
     let response = match request.method.as_str() {
+        "initialize" => handle_initialize(&request),
+        "notifications/initialized" => handle_initialized_notification(&request),
         "tools/list" => handle_tools_list(&request),
         "tools/call" => handle_tools_call(&state, &request).await,
         _ => JsonRpcResponse {
@@ -177,6 +179,38 @@ pub async fn mcp_handler(
     };
 
     (StatusCode::OK, Json(response))
+}
+
+/// Handle MCP initialize request
+fn handle_initialize(request: &JsonRpcRequest) -> JsonRpcResponse {
+    tracing::info!("MCP initialize request received");
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: request.id.clone(),
+        result: Some(json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "gorp",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        })),
+        error: None,
+    }
+}
+
+/// Handle MCP initialized notification (no response needed for notifications)
+fn handle_initialized_notification(request: &JsonRpcRequest) -> JsonRpcResponse {
+    tracing::info!("MCP initialized notification received");
+    // Notifications don't require a response, but we return success anyway
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: request.id.clone(),
+        result: Some(json!({})),
+        error: None,
+    }
 }
 
 /// Handle tools/list request
@@ -208,8 +242,8 @@ async fn handle_tools_call(state: &McpState, request: &JsonRpcRequest) -> JsonRp
     tracing::info!(tool = %tool_name, "MCP tool call");
 
     let result = match tool_name {
-        "gorp_schedule_prompt" => handle_schedule_prompt(state, &arguments).await,
-        "gorp_send_attachment" => handle_send_attachment(state, &arguments).await,
+        "schedule_prompt" => handle_schedule_prompt(state, &arguments).await,
+        "send_attachment" => handle_send_attachment(state, &arguments).await,
         _ => Err(format!("Unknown tool: {}", tool_name)),
     };
 
