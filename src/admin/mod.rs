@@ -4,4 +4,4 @@
 pub mod routes;
 pub mod templates;
 
-pub use routes::admin_router;
+pub use routes::{admin_router, AdminState};
