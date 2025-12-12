@@ -157,6 +157,7 @@ pub struct BrowseEntry {
     pub name: String,
     pub path: String,        // URL path for linking
     pub is_dir: bool,
+    pub is_markdown: bool,   // Whether file is markdown
     pub size_bytes: Option<u64>,   // File size in bytes (None for dirs)
     pub size_display: String,      // Human-readable size
     pub modified: String,    // Human-readable date
@@ -180,6 +181,16 @@ pub struct FileTemplate {
     pub content: String,      // File content (truncated if too large)
     pub size_display: String, // Human-readable size
     pub is_truncated: bool,
+    pub is_markdown: bool,    // Whether file is markdown
+}
+
+#[derive(Template)]
+#[template(path = "admin/browse/markdown.html")]
+pub struct MarkdownTemplate {
+    pub title: String,
+    pub path: String,
+    pub parent_path: String,
+    pub content_html: String,  // Already converted to HTML
 }
 
 #[cfg(test)]

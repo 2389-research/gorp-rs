@@ -17,8 +17,8 @@ use std::sync::Arc;
 use crate::admin::templates::{
     BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate,
     DashboardTemplate, DirectoryTemplate, ErrorEntry, FileTemplate, HealthTemplate,
-    LogViewerTemplate, MessageEntry, MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow,
-    SchedulesTemplate, ToastTemplate,
+    LogViewerTemplate, MarkdownTemplate, MessageEntry, MessageHistoryTemplate,
+    ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -67,6 +67,7 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/schedules/{id}/resume", post(schedule_resume))
         .route("/browse", get(browse_root))
         .route("/browse/*path", get(browse_path))
+        .route("/render/*path", get(render_markdown))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -1145,6 +1146,13 @@ fn view_file(full_path: &std::path::Path, relative_path: &str) -> Result<FileTem
     let size = metadata.len();
     let is_truncated = size > MAX_DISPLAY_FILE_SIZE;
 
+    // Check if file is markdown
+    let is_markdown = full_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("md"))
+        .unwrap_or(false);
+
     // Read file content (truncated if too large)
     let content = if is_truncated {
         let mut file = File::open(full_path).map_err(|e| ToastTemplate {
@@ -1194,6 +1202,7 @@ fn view_file(full_path: &std::path::Path, relative_path: &str) -> Result<FileTem
         content,
         size_display: format_file_size(size),
         is_truncated,
+        is_markdown,
     })
 }
 
@@ -1326,6 +1335,18 @@ async fn browse_directory(
             (Some(bytes), format_file_size(bytes))
         };
 
+        // Check if file is markdown
+        let is_markdown = if !is_dir {
+            entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
         let modified = metadata
             .modified()
             .map(format_modified_time)
@@ -1342,6 +1363,7 @@ async fn browse_directory(
             name,
             path: url_path,
             is_dir,
+            is_markdown,
             size_bytes,
             size_display,
             modified,
@@ -1381,5 +1403,77 @@ async fn browse_directory(
         current_path,
         parent_path,
         entries: browse_entries,
+    })
+}
+
+// ============================================================================
+// Markdown Renderer Handler
+// ============================================================================
+
+/// Render markdown file as HTML
+async fn render_markdown(
+    State(state): State<AdminState>,
+    AxumPath(path): AxumPath<String>,
+) -> Result<MarkdownTemplate, ToastTemplate> {
+    let workspace_root = Path::new(&state.config.workspace.path);
+    let full_path = validate_and_resolve_path(workspace_root, &path)?;
+
+    // Verify it's a file
+    if !full_path.is_file() {
+        return Err(ToastTemplate {
+            message: "Not a file".to_string(),
+            is_error: true,
+        });
+    }
+
+    // Verify it's a markdown file
+    let is_markdown = full_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("md"))
+        .unwrap_or(false);
+
+    if !is_markdown {
+        return Err(ToastTemplate {
+            message: "Not a markdown file".to_string(),
+            is_error: true,
+        });
+    }
+
+    // Read file content
+    let markdown_content = std::fs::read_to_string(&full_path).map_err(|e| ToastTemplate {
+        message: format!("Failed to read file: {}", e),
+        is_error: true,
+    })?;
+
+    // Parse markdown to HTML using pulldown-cmark
+    use pulldown_cmark::{html, Options, Parser};
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+
+    let parser = Parser::new_ext(&markdown_content, options);
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+
+    // Calculate parent path for back navigation
+    let parent_path = if path.contains('/') {
+        let segments: Vec<&str> = path.rsplitn(2, '/').collect();
+        segments.get(1).unwrap_or(&"").to_string()
+    } else {
+        String::new() // Root level
+    };
+
+    let file_name = full_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+
+    Ok(MarkdownTemplate {
+        title: format!("{} - gorp Admin", file_name),
+        path: path.to_string(),
+        parent_path,
+        content_html: html_output,
     })
 }
