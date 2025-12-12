@@ -2,7 +2,7 @@
 # ABOUTME: Uses dependency caching for fast rebuilds, creates minimal runtime image
 
 # Build stage - cache dependencies separately from source
-FROM rustlang/rust:nightly-bookworm as builder
+FROM rustlang/rust:nightly-bookworm AS builder
 
 WORKDIR /app
 
@@ -19,9 +19,10 @@ RUN mkdir src && \
 RUN cargo build --release && \
     rm -rf src templates
 
-# Now copy real source code and templates
+# Now copy real source code, templates, and docs
 COPY src ./src
 COPY templates ./templates
+COPY docs ./docs
 COPY config.toml.example ./config.toml.example
 
 # Touch main.rs to ensure rebuild (cargo sometimes skips if timestamp is old)
