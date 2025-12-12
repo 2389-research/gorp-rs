@@ -25,9 +25,9 @@ use chrono::Utc;
 use std::path::Path;
 
 /// Check if debug mode is enabled for a channel directory
-/// Debug mode is enabled by creating an empty file: .matrix/enable-debug
+/// Debug mode is enabled by creating an empty file: .gorp/enable-debug
 fn is_debug_enabled(channel_dir: &str) -> bool {
-    let debug_path = Path::new(channel_dir).join(".matrix").join("enable-debug");
+    let debug_path = Path::new(channel_dir).join(".gorp").join("enable-debug");
     debug_path.exists()
 }
 
@@ -39,8 +39,8 @@ async fn write_context_file(
     channel_name: &str,
     session_id: &str,
 ) -> Result<()> {
-    let matrix_dir = Path::new(channel_dir).join(".matrix");
-    tokio::fs::create_dir_all(&matrix_dir).await?;
+    let gorp_dir = Path::new(channel_dir).join(".gorp");
+    tokio::fs::create_dir_all(&gorp_dir).await?;
 
     let context = serde_json::json!({
         "room_id": room_id,
@@ -49,7 +49,7 @@ async fn write_context_file(
         "updated_at": chrono::Utc::now().to_rfc3339()
     });
 
-    let context_path = matrix_dir.join("context.json");
+    let context_path = gorp_dir.join("context.json");
     tokio::fs::write(&context_path, serde_json::to_string_pretty(&context)?).await?;
 
     tracing::debug!(path = %context_path.display(), "Wrote MCP context file");
@@ -309,7 +309,7 @@ pub async fn handle_message(
     };
 
     // Check if debug mode is enabled for this channel
-    // Debug mode shows tool usage in Matrix (create .matrix/enable-debug to enable)
+    // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)
     let debug_enabled = is_debug_enabled(&channel.directory);
     if debug_enabled {
         tracing::debug!(channel = %channel.channel_name, "Debug mode enabled - will show tool usage");
@@ -533,7 +533,9 @@ async fn handle_command(
                   !schedule tomorrow 9am summarize my calendar\n\
                   !schedule every monday 8am weekly standup\n\
                   !schedule list - View scheduled prompts\n\
-                  !schedule delete <id> - Remove a schedule\n\n\
+                  !schedule delete <id> - Remove a schedule\n\
+                  !schedule export - Export to .gorp/schedule.yaml\n\
+                  !schedule import - Import from .gorp/schedule.yaml\n\n\
                 ## Features\n\
                 ✅ Persistent conversation history\n\
                 ✅ Dedicated workspace per channel\n\
@@ -568,13 +570,13 @@ async fn handle_command(
 
             // Note: Channel directory is validated at database read time via Channel::validate_directory()
             let channel_path = std::path::Path::new(&channel.directory);
-            let debug_dir = channel_path.join(".matrix");
+            let debug_dir = channel_path.join(".gorp");
             let debug_file = debug_dir.join("enable-debug");
 
             let subcommand = command_parts.get(1).map(|s| s.to_lowercase());
             match subcommand.as_deref() {
                 Some("on") | Some("enable") => {
-                    // Create .matrix directory if needed
+                    // Create .gorp directory if needed
                     if let Err(e) = std::fs::create_dir_all(&debug_dir) {
                         room.send(RoomMessageEventContent::text_plain(&format!(
                             "⚠️ Failed to create debug directory: {}",
@@ -1259,12 +1261,172 @@ async fn handle_command(
                         }
                     }
                 }
+                Some("export") => {
+                    // Export schedules to .gorp/schedule.yaml
+                    let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
+                    let active_schedules: Vec<_> = schedules
+                        .iter()
+                        .filter(|s| matches!(s.status, ScheduleStatus::Active | ScheduleStatus::Paused))
+                        .collect();
+
+                    if active_schedules.is_empty() {
+                        room.send(RoomMessageEventContent::text_plain(
+                            "📅 No schedules to export.",
+                        ))
+                        .await?;
+                        return Ok(());
+                    }
+
+                    // Build YAML content
+                    let mut yaml_content = String::from("# Gorp Schedule Export\n# Import with: !schedule import\n\nschedules:\n");
+                    for sched in &active_schedules {
+                        let time_str = if let Some(ref cron) = sched.cron_expression {
+                            cron.clone()
+                        } else if let Some(ref exec_at) = sched.execute_at {
+                            exec_at.clone()
+                        } else {
+                            sched.next_execution_at.clone()
+                        };
+                        let status = if matches!(sched.status, ScheduleStatus::Paused) {
+                            "paused"
+                        } else {
+                            "active"
+                        };
+                        // Escape prompt for YAML (simple approach: use literal block if it has special chars)
+                        let prompt_escaped = sched.prompt.replace('\"', "\\\"");
+                        yaml_content.push_str(&format!(
+                            "  - time: \"{}\"\n    prompt: \"{}\"\n    status: {}\n",
+                            time_str, prompt_escaped, status
+                        ));
+                    }
+
+                    // Write to .gorp/schedule.yaml
+                    let gorp_dir = std::path::Path::new(&channel.directory).join(".gorp");
+                    if let Err(e) = std::fs::create_dir_all(&gorp_dir) {
+                        room.send(RoomMessageEventContent::text_plain(&format!(
+                            "⚠️ Failed to create .gorp directory: {}",
+                            e
+                        )))
+                        .await?;
+                        return Ok(());
+                    }
+                    let schedule_path = gorp_dir.join("schedule.yaml");
+                    if let Err(e) = std::fs::write(&schedule_path, &yaml_content) {
+                        room.send(RoomMessageEventContent::text_plain(&format!(
+                            "⚠️ Failed to write schedule.yaml: {}",
+                            e
+                        )))
+                        .await?;
+                        return Ok(());
+                    }
+
+                    room.send(RoomMessageEventContent::text_plain(&format!(
+                        "📤 Exported {} schedule(s) to .gorp/schedule.yaml",
+                        active_schedules.len()
+                    )))
+                    .await?;
+                }
+                Some("import") => {
+                    // Import schedules from .gorp/schedule.yaml
+                    let schedule_path = std::path::Path::new(&channel.directory)
+                        .join(".gorp")
+                        .join("schedule.yaml");
+
+                    if !schedule_path.exists() {
+                        room.send(RoomMessageEventContent::text_plain(
+                            "📥 No schedule.yaml found in .gorp/ directory.\nCreate one manually or use !schedule export first.",
+                        ))
+                        .await?;
+                        return Ok(());
+                    }
+
+                    let yaml_content = match std::fs::read_to_string(&schedule_path) {
+                        Ok(content) => content,
+                        Err(e) => {
+                            room.send(RoomMessageEventContent::text_plain(&format!(
+                                "⚠️ Failed to read schedule.yaml: {}",
+                                e
+                            )))
+                            .await?;
+                            return Ok(());
+                        }
+                    };
+
+                    // Parse YAML (simple parsing - look for time: and prompt: lines)
+                    let mut imported_count = 0;
+                    let mut errors: Vec<String> = Vec::new();
+                    let mut current_time: Option<String> = None;
+                    let mut current_prompt: Option<String> = None;
+                    let mut current_status = "active";
+
+                    for line in yaml_content.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("- time:") {
+                            // Save previous schedule if complete
+                            if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take()) {
+                                match import_schedule(
+                                    &time,
+                                    &prompt,
+                                    current_status == "paused",
+                                    &channel,
+                                    sender,
+                                    &config.scheduler.timezone,
+                                    scheduler_store,
+                                ) {
+                                    Ok(_) => imported_count += 1,
+                                    Err(e) => errors.push(format!("'{}': {}", prompt.chars().take(20).collect::<String>(), e)),
+                                }
+                            }
+                            current_status = "active";
+                            // Parse time value
+                            let time_val = trimmed.strip_prefix("- time:").unwrap().trim();
+                            current_time = Some(time_val.trim_matches('"').to_string());
+                        } else if trimmed.starts_with("time:") {
+                            let time_val = trimmed.strip_prefix("time:").unwrap().trim();
+                            current_time = Some(time_val.trim_matches('"').to_string());
+                        } else if trimmed.starts_with("prompt:") {
+                            let prompt_val = trimmed.strip_prefix("prompt:").unwrap().trim();
+                            current_prompt = Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
+                        } else if trimmed.starts_with("status:") {
+                            let status_val = trimmed.strip_prefix("status:").unwrap().trim();
+                            current_status = status_val.trim();
+                        }
+                    }
+
+                    // Don't forget the last one
+                    if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take()) {
+                        match import_schedule(
+                            &time,
+                            &prompt,
+                            current_status == "paused",
+                            &channel,
+                            sender,
+                            &config.scheduler.timezone,
+                            scheduler_store,
+                        ) {
+                            Ok(_) => imported_count += 1,
+                            Err(e) => errors.push(format!("'{}': {}", prompt.chars().take(20).collect::<String>(), e)),
+                        }
+                    }
+
+                    let mut msg = format!("📥 Imported {} schedule(s)", imported_count);
+                    if !errors.is_empty() {
+                        msg.push_str(&format!("\n\n⚠️ {} error(s):\n", errors.len()));
+                        for err in errors.iter().take(5) {
+                            msg.push_str(&format!("  • {}\n", err));
+                        }
+                        if errors.len() > 5 {
+                            msg.push_str(&format!("  ... and {} more\n", errors.len() - 5));
+                        }
+                    }
+                    room.send(RoomMessageEventContent::text_plain(&msg)).await?;
+                }
                 _ => {
                     // Default: create a schedule
                     // Parse time expression from the beginning of args
                     if args.is_empty() {
                         room.send(RoomMessageEventContent::text_plain(
-                            "Usage: !schedule <time> <prompt>\n\nExamples:\n  !schedule in 2 hours check my inbox\n  !schedule tomorrow 9am summarize my calendar\n  !schedule every monday 8am weekly standup\n\nOther commands:\n  !schedule list\n  !schedule delete <id>\n  !schedule pause <id>\n  !schedule resume <id>",
+                            "Usage: !schedule <time> <prompt>\n\nExamples:\n  !schedule in 2 hours check my inbox\n  !schedule tomorrow 9am summarize my calendar\n  !schedule every monday 8am weekly standup\n\nOther commands:\n  !schedule list\n  !schedule delete <id>\n  !schedule pause <id>\n  !schedule resume <id>\n  !schedule export\n  !schedule import",
                         ))
                         .await?;
                         return Ok(());
@@ -1395,6 +1557,7 @@ async fn handle_command(
                 !reset - Reset Claude session (reload MCP tools)\n\
                 !schedule <time> <prompt> - Schedule a prompt\n\
                 !schedule list - View schedules\n\
+                !schedule export/import - Backup/restore schedules\n\
                 !leave - Bot leaves room\n\
                 !help - Show detailed help"
             };
@@ -1416,6 +1579,53 @@ fn truncate_str(s: &str, max_len: usize) -> String {
         let truncated: String = chars[..max_len.saturating_sub(3)].iter().collect();
         format!("{}...", truncated)
     }
+}
+
+/// Import a single schedule from YAML data
+fn import_schedule(
+    time: &str,
+    prompt: &str,
+    paused: bool,
+    channel: &crate::session::Channel,
+    sender: &str,
+    timezone: &str,
+    scheduler_store: &SchedulerStore,
+) -> anyhow::Result<()> {
+    // Try parsing the time expression
+    let parsed = parse_time_expression(time, timezone)?;
+
+    let schedule_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let (execute_at, cron_expr, next_exec) = match &parsed {
+        ParsedSchedule::OneTime(dt) => (Some(dt.to_rfc3339()), None, dt.to_rfc3339()),
+        ParsedSchedule::Recurring { cron, next } => (None, Some(cron.clone()), next.to_rfc3339()),
+    };
+
+    let status = if paused {
+        ScheduleStatus::Paused
+    } else {
+        ScheduleStatus::Active
+    };
+
+    let scheduled_prompt = ScheduledPrompt {
+        id: schedule_id,
+        channel_name: channel.channel_name.clone(),
+        room_id: channel.room_id.clone(),
+        prompt: prompt.to_string(),
+        created_by: sender.to_string(),
+        created_at: now,
+        execute_at,
+        cron_expression: cron_expr,
+        last_executed_at: None,
+        next_execution_at: next_exec,
+        status,
+        error_message: None,
+        execution_count: 0,
+    };
+
+    scheduler_store.create_schedule(&scheduled_prompt)?;
+    Ok(())
 }
 
 /// Parse schedule input to extract time expression and prompt

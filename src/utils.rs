@@ -143,7 +143,7 @@ pub struct MatrixMessageLog {
     pub total_chunks: Option<usize>,
 }
 
-/// Log a Matrix message to .matrix/matrix-messages.jsonl
+/// Log a Matrix message to .gorp/matrix-messages.jsonl
 pub async fn log_matrix_message(
     working_dir: &str,
     room_id: &str,
@@ -153,13 +153,13 @@ pub async fn log_matrix_message(
     chunk_index: Option<usize>,
     total_chunks: Option<usize>,
 ) {
-    let matrix_dir = format!("{}/.matrix", working_dir);
-    if let Err(e) = create_dir_all(&matrix_dir).await {
-        tracing::warn!(error = %e, "Failed to create .matrix directory for logging");
+    let gorp_dir = format!("{}/.gorp", working_dir);
+    if let Err(e) = create_dir_all(&gorp_dir).await {
+        tracing::warn!(error = %e, "Failed to create .gorp directory for logging");
         return;
     }
 
-    let path = format!("{}/matrix-messages.jsonl", matrix_dir);
+    let path = format!("{}/matrix-messages.jsonl", gorp_dir);
     let log_entry = MatrixMessageLog {
         timestamp: chrono::Utc::now().to_rfc3339(),
         room_id: room_id.to_string(),

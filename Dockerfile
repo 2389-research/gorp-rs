@@ -34,6 +34,18 @@ RUN apt-get update && apt-get install -y \
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
+# Install MCP tools (chronicle, memory, toki, pagen)
+RUN curl -fsSL https://github.com/harperreed/chronicle/releases/download/v1.1.4/chronicle-linux-amd64.tar.gz | tar -xz -C /tmp && \
+    mv /tmp/chronicle-linux-amd64 /usr/local/bin/chronicle && \
+    curl -fsSL https://github.com/harperreed/memory/releases/download/v0.3.3/memory_v0.3.3_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
+    mv /tmp/memory-linux-amd64 /usr/local/bin/memory && \
+    curl -fsSL https://github.com/harperreed/toki/releases/download/v0.3.6/toki_0.3.6_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
+    mv /tmp/toki_0.3.6_Linux_x86_64/toki /usr/local/bin/toki && \
+    rm -rf /tmp/toki_0.3.6_Linux_x86_64 && \
+    curl -fsSL https://github.com/harperreed/pagen/releases/download/v0.4.4/pagen_v0.4.4_linux_amd64.tar.gz | tar -xz -C /tmp && \
+    mv /tmp/pagen /usr/local/bin/pagen && \
+    chmod +x /usr/local/bin/chronicle /usr/local/bin/memory /usr/local/bin/toki /usr/local/bin/pagen
+
 # Create non-root user with home directory
 RUN useradd --create-home --shell /bin/bash gorp
 
@@ -45,11 +57,15 @@ COPY config.toml.example /app/config.toml.example
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
-# Set up XDG directory structure for gorp user (including Claude config)
+# Set up XDG directory structure for gorp user (including Claude config and MCP tools)
 RUN mkdir -p /home/gorp/.config/gorp \
              /home/gorp/.config/claude \
              /home/gorp/.local/share/gorp/crypto_store \
              /home/gorp/.local/share/gorp/logs \
+             /home/gorp/.local/share/chronicle \
+             /home/gorp/.local/share/memory \
+             /home/gorp/.local/share/toki \
+             /home/gorp/.local/share/pagen \
              /home/gorp/workspace && \
     chown -R gorp:gorp /home/gorp /app
 
@@ -59,12 +75,15 @@ WORKDIR /home/gorp
 
 # Environment variables
 ENV HOME=/home/gorp
-# Claude Code auth: either set ANTHROPIC_API_KEY env var, or shell in and run `claude` to login
-# ENV ANTHROPIC_API_KEY=your-key-here
+
+# Claude Code uses ANTHROPIC_API_KEY for authentication (no OAuth needed)
+# Set this when running the container: docker run -e ANTHROPIC_API_KEY=sk-ant-...
+# Or in docker-compose.yml / .env file
 
 # Volumes for persistent data (XDG-compliant paths)
 # Mount .config/claude to persist Claude Code auth across container restarts
-VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.local/share/gorp", "/home/gorp/workspace"]
+# MCP tool data: chronicle, memory, toki, pagen
+VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/workspace"]
 
 # Expose webhook port
 EXPOSE 13000

@@ -1,18 +1,63 @@
 #!/bin/bash
 # ABOUTME: Docker entrypoint script for gorp
-# ABOUTME: Creates directories and copies example config on first run
+# ABOUTME: Creates directories, configures Claude MCP servers, and copies example config on first run
 
 set -e
 
 CONFIG_DIR="/home/gorp/.config/gorp"
 DATA_DIR="/home/gorp/.local/share/gorp"
 WORKSPACE_DIR="/home/gorp/workspace"
+CLAUDE_CONFIG="/home/gorp/.claude.json"
 
 # Create directories if they don't exist
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$DATA_DIR/crypto_store"
 mkdir -p "$DATA_DIR/logs"
 mkdir -p "$WORKSPACE_DIR"
+mkdir -p "/home/gorp/.local/share/chronicle"
+mkdir -p "/home/gorp/.local/share/memory"
+mkdir -p "/home/gorp/.local/share/toki"
+mkdir -p "/home/gorp/.local/share/pagen"
+
+# Set up Claude Code MCP servers if not already configured
+if [ ! -f "$CLAUDE_CONFIG" ]; then
+    echo "Setting up Claude Code MCP servers..."
+    cat > "$CLAUDE_CONFIG" << 'EOF'
+{
+  "mcpServers": {
+    "chronicle": {
+      "type": "stdio",
+      "command": "chronicle",
+      "args": ["mcp"],
+      "env": {}
+    },
+    "memory": {
+      "type": "stdio",
+      "command": "memory",
+      "args": ["mcp"],
+      "env": {}
+    },
+    "toki": {
+      "type": "stdio",
+      "command": "toki",
+      "args": ["mcp"],
+      "env": {}
+    },
+    "pagen": {
+      "type": "stdio",
+      "command": "pagen",
+      "args": ["mcp"],
+      "env": {}
+    },
+    "gorp": {
+      "type": "http",
+      "url": "http://localhost:13000/mcp"
+    }
+  }
+}
+EOF
+    echo "Claude Code MCP servers configured."
+fi
 
 # Copy example config if no config exists
 if [ ! -f "$CONFIG_DIR/config.toml" ]; then

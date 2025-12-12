@@ -232,10 +232,10 @@ pub async fn invoke_claude_streaming(
 
         // Open stderr log file if working directory is set
         let mut log_file = if let Some(ref dir) = stderr_log_dir {
-            let matrix_dir = format!("{}/.matrix", dir);
-            // Create .matrix directory if it doesn't exist
-            let _ = tokio::fs::create_dir_all(&matrix_dir).await;
-            let path = format!("{}/claude-messages.jsonl", matrix_dir);
+            let gorp_dir = format!("{}/.gorp", dir);
+            // Create .gorp directory if it doesn't exist
+            let _ = tokio::fs::create_dir_all(&gorp_dir).await;
+            let path = format!("{}/claude-messages.jsonl", gorp_dir);
             tokio::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -271,12 +271,12 @@ pub async fn invoke_claude_streaming(
 
         // Open log file if working directory is set
         let mut log_file = if let Some(ref dir) = log_dir {
-            let matrix_dir = format!("{}/.matrix", dir);
-            // Create .matrix directory if it doesn't exist
-            if let Err(e) = tokio::fs::create_dir_all(&matrix_dir).await {
-                tracing::warn!(error = %e, path = %matrix_dir, "Failed to create .matrix directory");
+            let gorp_dir = format!("{}/.gorp", dir);
+            // Create .gorp directory if it doesn't exist
+            if let Err(e) = tokio::fs::create_dir_all(&gorp_dir).await {
+                tracing::warn!(error = %e, path = %gorp_dir, "Failed to create .gorp directory");
             }
-            let path = format!("{}/claude-messages.jsonl", matrix_dir);
+            let path = format!("{}/claude-messages.jsonl", gorp_dir);
             match tokio::fs::OpenOptions::new()
                 .create(true)
                 .append(true)

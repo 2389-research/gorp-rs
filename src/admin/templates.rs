@@ -217,7 +217,7 @@ pub struct MarkdownTemplate {
     pub content_html: String,  // Already converted to HTML
 }
 
-/// .matrix/ directory file entry
+/// .gorp/ directory file entry
 #[derive(Clone)]
 pub struct MatrixFileEntry {
     pub name: String,

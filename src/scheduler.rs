@@ -761,8 +761,8 @@ use tokio::time::interval;
 
 /// Write context file for MCP tools (used by scheduler before Claude invocation)
 async fn write_context_file(channel: &Channel) -> Result<()> {
-    let matrix_dir = Path::new(&channel.directory).join(".matrix");
-    tokio::fs::create_dir_all(&matrix_dir).await?;
+    let gorp_dir = Path::new(&channel.directory).join(".gorp");
+    tokio::fs::create_dir_all(&gorp_dir).await?;
 
     let context = serde_json::json!({
         "room_id": channel.room_id,
@@ -771,7 +771,7 @@ async fn write_context_file(channel: &Channel) -> Result<()> {
         "updated_at": Utc::now().to_rfc3339()
     });
 
-    let context_path = matrix_dir.join("context.json");
+    let context_path = gorp_dir.join("context.json");
     tokio::fs::write(&context_path, serde_json::to_string_pretty(&context)?).await?;
 
     tracing::debug!(path = %context_path.display(), "Wrote MCP context file for scheduled task");

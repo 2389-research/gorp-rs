@@ -7,7 +7,7 @@
     <div class="flex justify-between items-center mb-6">
         <div>
             <a href="/admin/channels/{{ channel_name }}" class="text-blue-600 hover:text-blue-800 text-sm">&larr; Back to Channel Detail</a>
-            <h1 class="text-2xl font-bold mt-2">.matrix/: {{ channel_name }}</h1>
+            <h1 class="text-2xl font-bold mt-2">.gorp/: {{ channel_name }}</h1>
         </div>
     </div>
 
@@ -45,7 +45,7 @@
 
         {% if files.is_empty() %}
         <div class="text-center py-8 text-gray-500">
-            <p>No files in .matrix/ directory</p>
+            <p>No files in .gorp/ directory</p>
         </div>
         {% else %}
         <div class="overflow-x-auto">
@@ -104,9 +104,9 @@
     </div>
 
     <div class="mt-6 p-4 bg-blue-50 rounded-lg">
-        <h3 class="text-sm font-semibold text-blue-800">About .matrix/ Directory</h3>
+        <h3 class="text-sm font-semibold text-blue-800">About .gorp/ Directory</h3>
         <p class="mt-2 text-sm text-blue-700">
-            The .matrix/ directory contains important logs and debugging files for this channel workspace:
+            The .gorp/ directory contains important logs and debugging files for this channel workspace:
         </p>
         <ul class="mt-2 text-sm text-blue-700 list-disc list-inside space-y-1">
             <li><code class="bg-blue-100 px-1 rounded">matrix_messages.log</code> - JSON log of all Matrix messages</li>

@@ -77,7 +77,7 @@ struct WorkspaceContext {
 /// Returns None if file doesn't exist or can't be parsed
 fn read_context_file(workspace_dir: &str) -> Option<WorkspaceContext> {
     let context_path = std::path::Path::new(workspace_dir)
-        .join(".matrix")
+        .join(".gorp")
         .join("context.json");
 
     let content = std::fs::read_to_string(&context_path).ok()?;
@@ -89,7 +89,7 @@ fn find_workspace_dir() -> Option<String> {
     // Check PWD first (Claude runs from workspace directory)
     if let Ok(pwd) = std::env::var("PWD") {
         let context_path = std::path::Path::new(&pwd)
-            .join(".matrix")
+            .join(".gorp")
             .join("context.json");
         if context_path.exists() {
             return Some(pwd);
@@ -750,7 +750,7 @@ fn handle_get_status(state: &McpState, args: &Value) -> Result<String, String> {
 
     // Check debug mode
     let debug_path = std::path::Path::new(&channel.directory)
-        .join(".matrix")
+        .join(".gorp")
         .join("enable-debug");
     let debug_enabled = debug_path.exists();
 
@@ -796,7 +796,7 @@ fn handle_list_channels(state: &McpState) -> Result<String, String> {
     let mut output = format!("Registered channels ({}):\n\n", channels.len());
     for channel in channels {
         let debug_path = std::path::Path::new(&channel.directory)
-            .join(".matrix")
+            .join(".gorp")
             .join("enable-debug");
         let debug_status = if debug_path.exists() { "🔧" } else { "" };
 

@@ -112,7 +112,7 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
             }
 
             let log_path = Path::new(&channel.directory)
-                .join(".matrix")
+                .join(".gorp")
                 .join("matrix_messages.log");
 
             // Use efficient tail reading with pattern matching
@@ -331,7 +331,7 @@ async fn channel_logs(
     })?;
 
     let log_path = Path::new(&channel.directory)
-        .join(".matrix")
+        .join(".gorp")
         .join("matrix_messages.log");
 
     // Use efficient tail reading - only reads last 100 lines without loading entire file
@@ -366,22 +366,22 @@ async fn channel_matrix_dir(
         is_error: true,
     })?;
 
-    let matrix_dir = Path::new(&channel.directory).join(".matrix");
+    let gorp_dir = Path::new(&channel.directory).join(".gorp");
 
-    // Check if .matrix directory exists
-    if !matrix_dir.exists() {
+    // Check if .gorp directory exists
+    if !gorp_dir.exists() {
         return Err(ToastTemplate {
-            message: format!("No .matrix/ directory found for channel '{}'", name),
+            message: format!("No .gorp/ directory found for channel '{}'", name),
             is_error: true,
         });
     }
 
     // Check debug mode
-    let debug_enabled = matrix_dir.join("enable-debug").exists();
+    let debug_enabled = gorp_dir.join("enable-debug").exists();
 
     // Read context.json if it exists
     let context_json = {
-        let context_path = matrix_dir.join("context.json");
+        let context_path = gorp_dir.join("context.json");
         if context_path.exists() {
             match std::fs::read_to_string(&context_path) {
                 Ok(content) => {
@@ -409,8 +409,8 @@ async fn channel_matrix_dir(
     };
 
     // Read directory contents
-    let entries = std::fs::read_dir(&matrix_dir).map_err(|e| ToastTemplate {
-        message: format!("Failed to read .matrix/ directory: {}", e),
+    let entries = std::fs::read_dir(&gorp_dir).map_err(|e| ToastTemplate {
+        message: format!("Failed to read .gorp/ directory: {}", e),
         is_error: true,
     })?;
 
@@ -465,7 +465,7 @@ async fn channel_matrix_dir(
     files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
     Ok(MatrixDirTemplate {
-        title: format!(".matrix/: {} - gorp Admin", channel.channel_name),
+        title: format!(".gorp/: {} - gorp Admin", channel.channel_name),
         channel_name: channel.channel_name,
         files,
         context_json,
@@ -580,7 +580,7 @@ async fn channel_toggle_debug(
         };
     }
 
-    let debug_dir = Path::new(&channel.directory).join(".matrix");
+    let debug_dir = Path::new(&channel.directory).join(".gorp");
     let debug_file = debug_dir.join("enable-debug");
     let currently_enabled = debug_file.exists();
 
@@ -750,7 +750,7 @@ fn is_debug_enabled(channel: &crate::session::Channel) -> bool {
         return false;
     }
     let debug_path = Path::new(&channel.directory)
-        .join(".matrix")
+        .join(".gorp")
         .join("enable-debug");
     debug_path.exists()
 }
@@ -998,7 +998,7 @@ async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplat
         }
 
         let log_path = Path::new(&channel.directory)
-            .join(".matrix")
+            .join(".gorp")
             .join("matrix_messages.log");
 
         // Use efficient tail reading
