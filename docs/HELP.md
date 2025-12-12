@@ -14,42 +14,36 @@ gorp is a Matrix-Claude bridge that creates persistent AI assistant channels.
 
 These commands work in direct messages to the bot:
 
-| Command | Description |
-|---------|-------------|
-| `!create <name>` | Create a new channel with workspace |
-| `!join <name>` | Get invited to an existing channel |
-| `!delete <name>` | Remove channel (keeps workspace files) |
-| `!cleanup` | Leave orphaned rooms |
-| `!list` | Show all your channels |
-| `!help` | Show this help |
+- `!create <name>` - Create a new channel with workspace
+- `!join <name>` - Get invited to an existing channel
+- `!delete <name>` - Remove channel (keeps workspace files)
+- `!cleanup` - Leave orphaned rooms
+- `!list` - Show all your channels
+- `!help` - Show this help
 
 ### Room Commands
 
 These commands work in channel rooms:
 
-| Command | Description |
-|---------|-------------|
-| `!help` | Show this help |
-| `!status` | Show channel info (session, directory, debug state) |
-| `!debug on/off` | Toggle tool usage display |
-| `!reset` | Reset Claude session (reloads MCP tools) |
-| `!leave` | Bot leaves room (preserves workspace) |
-| `!changelog` | Show recent changes |
-| `!motd` | Show message of the day |
+- `!help` - Show this help
+- `!status` - Show channel info (session, directory, debug state)
+- `!debug on/off` - Toggle tool usage display
+- `!reset` - Reset Claude session (reloads MCP tools)
+- `!leave` - Bot leaves room (preserves workspace)
+- `!changelog` - Show recent changes
+- `!motd` - Show message of the day
 
 ### Scheduling Commands
 
 Schedule prompts to run automatically:
 
-| Command | Description |
-|---------|-------------|
-| `!schedule <time> <prompt>` | Create a scheduled prompt |
-| `!schedule list` | View all scheduled prompts |
-| `!schedule delete <id>` | Remove a schedule |
-| `!schedule pause <id>` | Pause a schedule |
-| `!schedule resume <id>` | Resume a paused schedule |
-| `!schedule export` | Export schedules to `.gorp/schedule.yaml` |
-| `!schedule import` | Import schedules from `.gorp/schedule.yaml` |
+- `!schedule <time> <prompt>` - Create a scheduled prompt
+- `!schedule list` - View all scheduled prompts
+- `!schedule delete <id>` - Remove a schedule
+- `!schedule pause <id>` - Pause a schedule
+- `!schedule resume <id>` - Resume a paused schedule
+- `!schedule export` - Export schedules to `.gorp/schedule.yaml`
+- `!schedule import` - Import schedules from `.gorp/schedule.yaml`
 
 **Time formats:**
 - Relative: `in 2 hours`, `in 30 minutes`, `tomorrow 9am`
@@ -105,14 +99,6 @@ workspace/<channel>/
 - Use `!reset` if MCP tools aren't working (reloads configuration)
 - Export schedules before major changes with `!schedule export`
 - Workspace files persist even after `!delete`
-
-## Admin Panel
-
-Access the web admin panel at `http://localhost:13000/admin`:
-- Dashboard with channel overview
-- Channel management and logs
-- Schedule management
-- Health monitoring
 
 ## More Info
 
