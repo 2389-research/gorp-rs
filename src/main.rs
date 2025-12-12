@@ -63,6 +63,17 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Room management
+    Rooms {
+        #[command(subcommand)]
+        action: RoomsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum RoomsAction {
+    /// Sync all room names to match current prefix
+    Sync,
 }
 
 #[derive(Subcommand)]
@@ -306,6 +317,7 @@ async fn main() -> Result<()> {
         Some(Commands::Start) => run_start().await,
         Some(Commands::Config { action }) => run_config(action),
         Some(Commands::Schedule { action }) => run_schedule(action),
+        Some(Commands::Rooms { action }) => run_rooms(action).await,
     }
 }
 
@@ -473,6 +485,89 @@ fn run_schedule(action: ScheduleAction) -> Result<()> {
                 scheduler_store.delete_schedule(&s.id)?;
             }
             println!("Cleared {} scheduled task(s).", schedules.len());
+            Ok(())
+        }
+    }
+}
+
+/// Handle rooms subcommands
+async fn run_rooms(action: RoomsAction) -> Result<()> {
+    dotenvy::dotenv().ok();
+    let config = Config::load()?;
+    let session_store = SessionStore::new(&config.workspace.path)?;
+
+    match action {
+        RoomsAction::Sync => {
+            println!("Syncing room names to prefix: {}", config.matrix.room_prefix);
+
+            // Need to login to Matrix to rename rooms
+            let client = matrix_client::create_client(
+                &config.matrix.home_server,
+                &config.matrix.user_id,
+                &config.matrix.device_name,
+            )
+            .await?;
+
+            matrix_client::login(
+                &client,
+                &config.matrix.user_id,
+                config.matrix.password.as_deref(),
+                config.matrix.access_token.as_deref(),
+                &config.matrix.device_name,
+            )
+            .await?;
+
+            // Do initial sync to get room list
+            print!("Syncing with server... ");
+            client
+                .sync_once(SyncSettings::default())
+                .await
+                .context("Initial sync failed")?;
+            println!("done.");
+
+            // Get all channels and rename their rooms
+            let channels = session_store.list_all()?;
+            let prefix = &config.matrix.room_prefix;
+
+            for channel in &channels {
+                let room_id: OwnedRoomId = match channel.room_id.parse() {
+                    Ok(id) => id,
+                    Err(_) => {
+                        println!("  ✗ {}: invalid room ID", channel.channel_name);
+                        continue;
+                    }
+                };
+
+                let Some(room) = client.get_room(&room_id) else {
+                    println!("  ✗ {}: room not found", channel.channel_name);
+                    continue;
+                };
+
+                let new_name = format!("{}: {}", prefix, channel.channel_name);
+                let current_name = room.name().unwrap_or_default();
+
+                if current_name == new_name {
+                    println!("  ✓ {}: already correct", channel.channel_name);
+                    continue;
+                }
+
+                let content = RoomNameEventContent::new(new_name.clone());
+                match room.send_state_event(content).await {
+                    Ok(_) => {
+                        println!(
+                            "  ✓ {}: \"{}\" → \"{}\"",
+                            channel.channel_name, current_name, new_name
+                        );
+                    }
+                    Err(e) => {
+                        println!("  ✗ {}: {}", channel.channel_name, e);
+                    }
+                }
+            }
+
+            // Update stored prefix
+            session_store.set_setting(SETTING_ROOM_PREFIX, prefix)?;
+            println!("\nDone. Renamed {} room(s).", channels.len());
             Ok(())
         }
     }
