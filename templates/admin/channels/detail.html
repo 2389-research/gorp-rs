@@ -14,6 +14,10 @@
                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
                 View Logs
             </a>
+            <a href="/admin/channels/{{ name }}/matrix"
+               class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700">
+                View .matrix/
+            </a>
             <button hx-post="/admin/channels/{{ name }}/debug"
                     hx-target="#toast"
                     hx-swap="innerHTML"

@@ -17,8 +17,8 @@ use std::sync::Arc;
 use crate::admin::templates::{
     BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate,
     DashboardTemplate, DirectoryTemplate, ErrorEntry, FileTemplate, HealthTemplate,
-    LogViewerTemplate, MarkdownTemplate, MessageEntry, MessageHistoryTemplate,
-    ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
+    LogViewerTemplate, MarkdownTemplate, MatrixDirTemplate, MatrixFileEntry, MessageEntry,
+    MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -55,6 +55,7 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/channels/create", post(channel_create))
         .route("/channels/{name}", get(channel_detail))
         .route("/channels/{name}/logs", get(channel_logs))
+        .route("/channels/{name}/matrix", get(channel_matrix_dir))
         .route("/channels/{name}/delete", post(channel_delete))
         .route("/channels/{name}/debug", post(channel_toggle_debug))
         .route("/messages", get(messages_view))
@@ -338,6 +339,135 @@ async fn channel_logs(
         title: format!("Logs: {} - gorp Admin", channel.channel_name),
         channel_name: channel.channel_name,
         log_lines,
+    })
+}
+
+async fn channel_matrix_dir(
+    State(state): State<AdminState>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<MatrixDirTemplate, ToastTemplate> {
+    let channel = state
+        .session_store
+        .get_by_name(&name)
+        .map_err(|e| ToastTemplate {
+            message: format!("Database error: {}", e),
+            is_error: true,
+        })?
+        .ok_or_else(|| ToastTemplate {
+            message: format!("Channel not found: {}", name),
+            is_error: true,
+        })?;
+
+    // Validate directory path for security
+    channel.validate_directory().map_err(|e| ToastTemplate {
+        message: format!("Invalid channel directory: {}", e),
+        is_error: true,
+    })?;
+
+    let matrix_dir = Path::new(&channel.directory).join(".matrix");
+
+    // Check if .matrix directory exists
+    if !matrix_dir.exists() {
+        return Err(ToastTemplate {
+            message: format!("No .matrix/ directory found for channel '{}'", name),
+            is_error: true,
+        });
+    }
+
+    // Check debug mode
+    let debug_enabled = matrix_dir.join("enable-debug").exists();
+
+    // Read context.json if it exists
+    let context_json = {
+        let context_path = matrix_dir.join("context.json");
+        if context_path.exists() {
+            match std::fs::read_to_string(&context_path) {
+                Ok(content) => {
+                    // Try to parse and pretty-print the JSON
+                    match serde_json::from_str::<serde_json::Value>(&content) {
+                        Ok(value) => match serde_json::to_string_pretty(&value) {
+                            Ok(pretty) => Some(pretty),
+                            Err(_) => Some(content), // Fall back to raw content
+                        },
+                        Err(_) => Some(content), // Not valid JSON, show raw
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        channel = %name,
+                        error = %e,
+                        "Failed to read context.json"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
+
+    // Read directory contents
+    let entries = std::fs::read_dir(&matrix_dir).map_err(|e| ToastTemplate {
+        message: format!("Failed to read .matrix/ directory: {}", e),
+        is_error: true,
+    })?;
+
+    let mut files: Vec<MatrixFileEntry> = Vec::new();
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to read directory entry, skipping");
+                continue;
+            }
+        };
+
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    path = %entry.path().display(),
+                    error = %e,
+                    "Failed to read metadata, skipping entry"
+                );
+                continue;
+            }
+        };
+
+        // Only include files, not directories
+        if !metadata.is_file() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().to_string();
+
+        let size_display = format_file_size(metadata.len());
+        let modified = metadata
+            .modified()
+            .map(format_modified_time)
+            .unwrap_or_else(|_| "Unknown".to_string());
+
+        let is_log = name.ends_with(".log");
+
+        files.push(MatrixFileEntry {
+            name,
+            size_display,
+            modified,
+            is_log,
+        });
+    }
+
+    // Sort files alphabetically
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    Ok(MatrixDirTemplate {
+        title: format!(".matrix/: {} - gorp Admin", channel.channel_name),
+        channel_name: channel.channel_name,
+        files,
+        context_json,
+        debug_enabled,
     })
 }
 

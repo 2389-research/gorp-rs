@@ -193,6 +193,25 @@ pub struct MarkdownTemplate {
     pub content_html: String,  // Already converted to HTML
 }
 
+/// .matrix/ directory file entry
+#[derive(Clone)]
+pub struct MatrixFileEntry {
+    pub name: String,
+    pub size_display: String,
+    pub modified: String,
+    pub is_log: bool,  // true for .log files
+}
+
+#[derive(Template)]
+#[template(path = "admin/channels/matrix.html")]
+pub struct MatrixDirTemplate {
+    pub title: String,
+    pub channel_name: String,
+    pub files: Vec<MatrixFileEntry>,
+    pub context_json: Option<String>,  // Pretty-printed context.json if exists
+    pub debug_enabled: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
