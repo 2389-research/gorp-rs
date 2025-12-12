@@ -34,15 +34,25 @@ RUN cargo build --release
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies and Node.js for Claude Code
+# Install runtime dependencies, Node.js, and Chromium for Claude Code
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     curl \
     git \
+    chromium \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install uv (Python package manager)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    mv /root/.local/bin/uvx /usr/local/bin/uvx
+
+# Install mise (runtime version manager)
+RUN curl https://mise.run | sh && \
+    mv /root/.local/bin/mise /usr/local/bin/mise
 
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
