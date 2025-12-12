@@ -57,6 +57,54 @@ RUN ln -s /usr/bin/chromium /usr/bin/google-chrome && \
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --headless"
 
+# Create Chrome startup script for superpowers-chrome plugin
+RUN mkdir -p /home/gorp/.local/bin && \
+    cat > /home/gorp/.local/bin/start-chrome.sh << 'CHROME_SCRIPT'
+#!/bin/bash
+# Kill any existing Chrome processes
+pkill -f "chromium.*remote-debugging-port" 2>/dev/null || true
+sleep 1
+
+# Start Chrome with remote debugging
+chromium \
+    --remote-debugging-port=9222 \
+    --remote-debugging-address=127.0.0.1 \
+    --no-sandbox \
+    --disable-dev-shm-usage \
+    --disable-gpu \
+    --headless=new \
+    --disable-background-networking \
+    --disable-default-apps \
+    --disable-extensions \
+    --disable-sync \
+    --disable-translate \
+    --mute-audio \
+    --no-first-run \
+    --user-data-dir=/tmp/chrome-debug \
+    > /tmp/chrome.log 2>&1 &
+
+# Wait for Chrome to start
+for i in {1..10}; do
+    if curl -s http://127.0.0.1:9222/json/version > /dev/null 2>&1; then
+        echo "Chrome started successfully on port 9222"
+        exit 0
+    fi
+    sleep 0.5
+done
+
+echo "Chrome failed to start. Check /tmp/chrome.log"
+exit 1
+CHROME_SCRIPT
+RUN chmod +x /home/gorp/.local/bin/start-chrome.sh
+
+# Create Chrome stop script
+RUN cat > /home/gorp/.local/bin/stop-chrome.sh << 'STOP_SCRIPT'
+#!/bin/bash
+pkill -f "chromium.*remote-debugging-port" 2>/dev/null
+echo "Chrome stopped"
+STOP_SCRIPT
+RUN chmod +x /home/gorp/.local/bin/stop-chrome.sh
+
 # Install uv (Python package manager)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     mv /root/.local/bin/uv /usr/local/bin/uv && \
