@@ -302,6 +302,24 @@ fn get_tools() -> Vec<ToolDefinition> {
                 "required": ["image_path"]
             }),
         },
+        ToolDefinition {
+            name: "set_room_topic".to_string(),
+            description: "Set or change the room's topic/description.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "The new topic/description for the room"
+                    },
+                    "channel_name": {
+                        "type": "string",
+                        "description": "Channel to set topic for (optional, defaults to current channel)"
+                    }
+                },
+                "required": ["topic"]
+            }),
+        },
     ]
 }
 
@@ -404,6 +422,7 @@ async fn handle_tools_call(state: &McpState, request: &JsonRpcRequest) -> JsonRp
         "create_channel" => handle_create_channel(state, &arguments).await,
         "invite_to_channel" => handle_invite_to_channel(state, &arguments).await,
         "set_room_avatar" => handle_set_room_avatar(state, &arguments).await,
+        "set_room_topic" => handle_set_room_topic(state, &arguments).await,
         _ => Err(format!("Unknown tool: {}", tool_name)),
     };
 
@@ -1104,5 +1123,60 @@ async fn handle_set_room_avatar(state: &McpState, args: &Value) -> Result<String
     Ok(format!(
         "Set avatar for room '{}' to '{}'",
         channel.channel_name, filename
+    ))
+}
+
+/// Handle set_room_topic tool call
+async fn handle_set_room_topic(state: &McpState, args: &Value) -> Result<String, String> {
+    use matrix_sdk::ruma::{events::room::topic::RoomTopicEventContent, OwnedRoomId};
+
+    let topic = args
+        .get("topic")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: topic")?;
+
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
+
+    // Get channel name from context if not provided
+    let channel_name = match channel_name {
+        Some(name) => name.to_string(),
+        None => {
+            if let Some(workspace_dir) = find_workspace_dir() {
+                if let Some(ctx) = read_context_file(&workspace_dir) {
+                    ctx.channel_name
+                } else {
+                    return Err("channel_name is required (context file not readable)".to_string());
+                }
+            } else {
+                return Err("channel_name is required (no context file found)".to_string());
+            }
+        }
+    };
+
+    let channel = state
+        .session_store
+        .get_by_name(&channel_name)
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| format!("Channel not found: {}", channel_name))?;
+
+    let room_id: OwnedRoomId = channel
+        .room_id
+        .parse()
+        .map_err(|e| format!("Invalid room ID: {}", e))?;
+
+    let room = state
+        .matrix_client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room not found: {}", channel.room_id))?;
+
+    // Set room topic
+    let content = RoomTopicEventContent::new(topic.to_string());
+    room.send_state_event(content)
+        .await
+        .map_err(|e| format!("Failed to set room topic: {}", e))?;
+
+    Ok(format!(
+        "Set topic for room '{}' to: {}",
+        channel.channel_name, topic
     ))
 }
