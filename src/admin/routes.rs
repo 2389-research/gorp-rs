@@ -8,6 +8,8 @@ use axum::{
 };
 use chrono_tz::Tz;
 use serde::Deserialize;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -65,17 +67,30 @@ pub fn admin_router() -> Router<AdminState> {
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
     // Get channel counts
-    let channels = state.session_store.list_all().unwrap_or_default();
+    let channels = match state.session_store.list_all() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list channels for dashboard");
+            Vec::new()
+        }
+    };
     let total_channels = channels.len();
     let active_channels = channels.iter().filter(|c| c.started).count();
 
     // Get schedule count
-    let schedules = state.scheduler_store.list_all().unwrap_or_default();
+    let schedules = match state.scheduler_store.list_all() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list schedules for dashboard");
+            Vec::new()
+        }
+    };
     let total_schedules = schedules.len();
 
-    // Count messages from today across all channels
+    // Count recent messages from today across all channels
+    // Uses efficient tail reading - only reads last 1000 lines per channel
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let messages_today = channels
+    let messages_today: usize = channels
         .iter()
         .map(|channel| {
             // Validate directory path for security
@@ -87,15 +102,8 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
                 .join(".matrix")
                 .join("matrix_messages.log");
 
-            if !log_path.exists() {
-                return 0;
-            }
-
-            // Count lines containing today's date
-            match std::fs::read_to_string(&log_path) {
-                Ok(content) => content.lines().filter(|line| line.contains(&today)).count(),
-                Err(_) => 0,
-            }
+            // Use efficient tail reading with pattern matching
+            count_recent_lines_matching(&log_path, &today)
         })
         .sum();
 
@@ -217,7 +225,13 @@ pub struct CreateChannelForm {
 }
 
 async fn channels_list(State(state): State<AdminState>) -> ChannelListTemplate {
-    let channels = state.session_store.list_all().unwrap_or_default();
+    let channels = match state.session_store.list_all() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list channels");
+            Vec::new()
+        }
+    };
 
     let channel_rows: Vec<ChannelRow> = channels
         .iter()
@@ -307,31 +321,8 @@ async fn channel_logs(
         .join(".matrix")
         .join("matrix_messages.log");
 
-    let log_lines = if log_path.exists() {
-        match std::fs::read_to_string(&log_path) {
-            Ok(content) => {
-                // Get last 100 lines
-                let lines: Vec<String> = content
-                    .lines()
-                    .rev()
-                    .take(100)
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
-                lines
-            }
-            Err(e) => {
-                return Err(ToastTemplate {
-                    message: format!("Failed to read log file: {}", e),
-                    is_error: true,
-                });
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    // Use efficient tail reading - only reads last 100 lines without loading entire file
+    let log_lines = read_last_n_lines(&log_path, 100);
 
     Ok(LogViewerTemplate {
         title: format!("Logs: {} - gorp Admin", channel.channel_name),
@@ -484,6 +475,114 @@ async fn channel_toggle_debug(
     }
 }
 
+/// Maximum file size to read for message counting (10MB)
+const MAX_LOG_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Read the last N lines of a file efficiently by reading backwards from end.
+/// Returns empty vec if file doesn't exist, is too large, or on any error.
+/// This avoids loading entire files into memory.
+fn read_last_n_lines(path: &std::path::Path, n: usize) -> Vec<String> {
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+
+    // Check file size - skip if too large
+    let metadata = match file.metadata() {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+
+    if metadata.len() > MAX_LOG_FILE_SIZE {
+        tracing::warn!(
+            path = %path.display(),
+            size = metadata.len(),
+            "Log file too large, skipping"
+        );
+        return Vec::new();
+    }
+
+    // For small files, just read normally
+    if metadata.len() < 64 * 1024 {
+        let reader = BufReader::new(file);
+        let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+        let start = lines.len().saturating_sub(n);
+        return lines[start..].to_vec();
+    }
+
+    // For larger files, read backwards from end
+    read_last_n_lines_reverse(file, n, metadata.len())
+}
+
+/// Read last N lines by seeking backwards from file end.
+/// More efficient for large files when we only need recent entries.
+fn read_last_n_lines_reverse(mut file: File, n: usize, file_size: u64) -> Vec<String> {
+    // Start with a reasonable chunk size
+    let chunk_size: u64 = 64 * 1024; // 64KB chunks
+    let mut lines: Vec<String> = Vec::new();
+    let mut pos = file_size;
+    let mut leftover = String::new();
+
+    while lines.len() < n && pos > 0 {
+        let read_size = std::cmp::min(chunk_size, pos);
+        pos -= read_size;
+
+        if file.seek(SeekFrom::Start(pos)).is_err() {
+            break;
+        }
+
+        let mut buffer = vec![0u8; read_size as usize];
+        if file.read_exact(&mut buffer).is_err() {
+            break;
+        }
+
+        let chunk = match String::from_utf8(buffer) {
+            Ok(s) => s,
+            Err(_) => break, // Invalid UTF-8, stop reading
+        };
+
+        // Prepend leftover from previous chunk
+        let combined = chunk + &leftover;
+        leftover.clear();
+
+        // Split into lines
+        let mut chunk_lines: Vec<&str> = combined.lines().collect();
+
+        // If we didn't start at beginning of file, first "line" is partial
+        if pos > 0 && !chunk_lines.is_empty() {
+            leftover = chunk_lines.remove(0).to_string();
+        }
+
+        // Add lines in reverse order (they'll be reversed at end)
+        for line in chunk_lines.into_iter().rev() {
+            if !line.is_empty() {
+                lines.push(line.to_string());
+                if lines.len() >= n {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Include any remaining leftover if we reached start of file
+    if pos == 0 && !leftover.is_empty() && lines.len() < n {
+        lines.push(leftover);
+    }
+
+    // Reverse to get chronological order
+    lines.reverse();
+    lines
+}
+
+/// Count lines matching a pattern in the last portion of a file.
+/// Only reads the tail of the file to avoid loading entire logs.
+fn count_recent_lines_matching(path: &std::path::Path, pattern: &str) -> usize {
+    // Read last 1000 lines max for counting today's messages
+    // This gives a reasonable approximation without reading entire files
+    let lines = read_last_n_lines(path, 1000);
+    lines.iter().filter(|line| line.contains(pattern)).count()
+}
+
 /// Check if debug mode is enabled for a channel
 /// Returns false if the directory path is invalid (safe default)
 fn is_debug_enabled(channel: &crate::session::Channel) -> bool {
@@ -502,10 +601,22 @@ fn is_debug_enabled(channel: &crate::session::Channel) -> bool {
 // ============================================================================
 
 async fn health_view(State(state): State<AdminState>) -> HealthTemplate {
-    let channels = state.session_store.list_all().unwrap_or_default();
+    let channels = match state.session_store.list_all() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list channels for health view");
+            Vec::new()
+        }
+    };
     let active_channels = channels.iter().filter(|c| c.started).count();
 
-    let schedules = state.scheduler_store.list_all().unwrap_or_default();
+    let schedules = match state.scheduler_store.list_all() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list schedules for health view");
+            Vec::new()
+        }
+    };
     let active_schedules = schedules
         .iter()
         .filter(|s| s.status == ScheduleStatus::Active)
@@ -701,8 +812,18 @@ struct MessageLogEntry {
 }
 
 async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplate {
-    let channels = state.session_store.list_all().unwrap_or_default();
+    let channels = match state.session_store.list_all() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list channels for messages view");
+            Vec::new()
+        }
+    };
     let mut all_messages: Vec<MessageEntry> = Vec::new();
+
+    // Only read last 100 lines per channel to avoid loading entire logs
+    // This means we get up to 100 * num_channels messages, then sort and truncate
+    const LINES_PER_CHANNEL: usize = 100;
 
     for channel in channels {
         // Validate directory path to prevent path traversal
@@ -714,34 +835,31 @@ async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplat
             .join(".matrix")
             .join("matrix_messages.log");
 
-        if !log_path.exists() {
-            continue;
-        }
+        // Use efficient tail reading
+        let lines = read_last_n_lines(&log_path, LINES_PER_CHANNEL);
 
-        if let Ok(content) = std::fs::read_to_string(&log_path) {
-            for line in content.lines() {
-                if line.trim().is_empty() {
-                    continue;
-                }
+        for line in lines {
+            if line.trim().is_empty() {
+                continue;
+            }
 
-                if let Ok(entry) = serde_json::from_str::<MessageLogEntry>(line) {
-                    let content_preview: String = entry
-                        .content
-                        .chars()
-                        .take(50)
-                        .collect::<String>()
-                        + if entry.content.len() > 50 { "..." } else { "" };
+            if let Ok(entry) = serde_json::from_str::<MessageLogEntry>(&line) {
+                let content_preview: String = entry
+                    .content
+                    .chars()
+                    .take(50)
+                    .collect::<String>()
+                    + if entry.content.len() > 50 { "..." } else { "" };
 
-                    let timestamp = entry.timestamp.chars().take(19).collect();
+                let timestamp = entry.timestamp.chars().take(19).collect();
 
-                    all_messages.push(MessageEntry {
-                        timestamp,
-                        channel_name: channel.channel_name.clone(),
-                        direction: entry.direction,
-                        sender: entry.sender,
-                        content_preview,
-                    });
-                }
+                all_messages.push(MessageEntry {
+                    timestamp,
+                    channel_name: channel.channel_name.clone(),
+                    direction: entry.direction,
+                    sender: entry.sender,
+                    content_preview,
+                });
             }
         }
     }
@@ -761,13 +879,13 @@ async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplat
 // ============================================================================
 
 async fn schedule_form(State(state): State<AdminState>) -> ScheduleFormTemplate {
-    let channels: Vec<String> = state
-        .session_store
-        .list_all()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|c| c.channel_name)
-        .collect();
+    let channels: Vec<String> = match state.session_store.list_all() {
+        Ok(c) => c.into_iter().map(|c| c.channel_name).collect(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list channels for schedule form");
+            Vec::new()
+        }
+    };
 
     ScheduleFormTemplate {
         title: "New Schedule - gorp Admin".to_string(),
@@ -782,13 +900,20 @@ struct CreateScheduleForm {
     execute_at: String,
 }
 
+/// Maximum prompt length (64KB should be plenty for any reasonable prompt)
+const MAX_PROMPT_LENGTH: usize = 64 * 1024;
+/// Maximum time expression length (cron + natural language should fit in 256 chars)
+const MAX_TIME_EXPRESSION_LENGTH: usize = 256;
+/// Maximum channel name length
+const MAX_CHANNEL_NAME_LENGTH: usize = 64;
+
 async fn schedule_create(
     State(state): State<AdminState>,
     Form(form): Form<CreateScheduleForm>,
 ) -> ToastTemplate {
     use crate::scheduler::{ParsedSchedule, ScheduledPrompt, ScheduleStatus};
 
-    // Validate inputs
+    // Validate inputs with length limits to prevent DoS/memory exhaustion
     let channel = form.channel.trim();
     let prompt = form.prompt.trim();
     let execute_at = form.execute_at.trim();
@@ -800,6 +925,16 @@ async fn schedule_create(
         };
     }
 
+    if channel.len() > MAX_CHANNEL_NAME_LENGTH {
+        return ToastTemplate {
+            message: format!(
+                "Channel name too long (max {} characters)",
+                MAX_CHANNEL_NAME_LENGTH
+            ),
+            is_error: true,
+        };
+    }
+
     if prompt.is_empty() {
         return ToastTemplate {
             message: "Prompt cannot be empty".to_string(),
@@ -807,9 +942,29 @@ async fn schedule_create(
         };
     }
 
+    if prompt.len() > MAX_PROMPT_LENGTH {
+        return ToastTemplate {
+            message: format!(
+                "Prompt too long (max {} characters)",
+                MAX_PROMPT_LENGTH / 1024
+            ) + " KB",
+            is_error: true,
+        };
+    }
+
     if execute_at.is_empty() {
         return ToastTemplate {
             message: "Schedule time is required".to_string(),
+            is_error: true,
+        };
+    }
+
+    if execute_at.len() > MAX_TIME_EXPRESSION_LENGTH {
+        return ToastTemplate {
+            message: format!(
+                "Time expression too long (max {} characters)",
+                MAX_TIME_EXPRESSION_LENGTH
+            ),
             is_error: true,
         };
     }
