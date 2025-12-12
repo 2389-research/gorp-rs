@@ -1,0 +1,8 @@
+# Research Channel Schedules
+# Import with: !schedule import
+
+schedules:
+  # Weekly topic staleness check
+  - time: "0 9 * * MON"
+    prompt: "Check topics.yaml for any research topics that are stale and need updating. Report which topics need attention."
+    status: active

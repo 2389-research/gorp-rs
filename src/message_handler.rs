@@ -174,16 +174,38 @@ pub async fn handle_message(
     // Check if channel is attached
     let Some(channel) = session_store.get_by_room(room.room_id().as_str())? else {
         let help_msg = if is_dm {
-            "👋 Welcome! To get started, create a channel:\n\n\
-            !create <channel-name>\n\n\
-            Example: !create PA\n\
-            This creates a dedicated Claude session in a workspace directory."
+            // Check if this is a new user (no channels at all)
+            let all_channels = session_store.list_all().unwrap_or_default();
+            if all_channels.is_empty() {
+                // New user - show welcome with suggested channels
+                "👋 **Welcome to gorp!**\n\n\
+                I'm your AI assistant with persistent sessions and workspace directories.\n\n\
+                **Get started with these recommended channels:**\n\n\
+                ```\n\
+                !create pa        # Personal assistant for email, calendar, tasks\n\
+                !create news      # News aggregation and curation\n\
+                !create research  # Research projects with auditable citations\n\
+                !create weather   # Weather updates and forecasts\n\
+                ```\n\n\
+                Each channel gets its own workspace with pre-configured settings.\n\n\
+                Type `!help` for all commands or `!list` to see your channels."
+                    .to_string()
+            } else {
+                "👋 To get started, create a channel:\n\n\
+                !create <channel-name>\n\n\
+                Example: !create PA\n\
+                This creates a dedicated Claude session in a workspace directory.\n\n\
+                Type !list to see your existing channels."
+                    .to_string()
+            }
         } else {
             "No Claude channel attached to this room.\n\n\
             💡 DM me to create a channel with: !create <name>\n\n\
             Need help? Send: !help"
+                .to_string()
         };
-        room.send(RoomMessageEventContent::text_plain(help_msg))
+        let help_html = markdown_to_html(&help_msg);
+        room.send(RoomMessageEventContent::text_html(&help_msg, &help_html))
             .await?;
         return Ok(());
     };
@@ -999,11 +1021,20 @@ async fn handle_command(
 
             if channels.is_empty() {
                 let msg = if is_dm {
-                    "📋 No Channels Yet\n\nCreate one with: !create <name>\n\nExample: !create PA"
+                    "📋 **No Channels Yet**\n\n\
+                    Get started with these recommended channels:\n\n\
+                    ```\n\
+                    !create pa        # Personal assistant\n\
+                    !create news      # News curation\n\
+                    !create research  # Research projects\n\
+                    !create weather   # Weather updates\n\
+                    ```\n\n\
+                    Each channel has pre-configured settings ready to go."
                 } else {
                     "📋 No Channels Found\n\nDM me to create a channel!"
                 };
-                room.send(RoomMessageEventContent::text_plain(msg)).await?;
+                let msg_html = markdown_to_html(msg);
+                room.send(RoomMessageEventContent::text_html(msg, &msg_html)).await?;
                 return Ok(());
             }
 

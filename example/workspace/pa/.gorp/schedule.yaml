@@ -1,0 +1,17 @@
+# Personal Assistant Channel Schedules
+# Import with: !schedule import
+
+schedules:
+  # Morning briefing
+  - time: "0 8 * * MON-FRI"
+    prompt: |
+      Good morning! Give me my daily briefing:
+      1. Check my calendar for today's events
+      2. Check for any urgent emails
+      3. List my high-priority todos
+    status: active
+
+  # End of day recap
+  - time: "0 17 * * MON-FRI"
+    prompt: "End of day check - any emails I should handle before tomorrow? Any todos due soon?"
+    status: paused

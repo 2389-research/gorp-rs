@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "prompt",
+        "prompt": "Check chronicle and memory for location preferences, then provide a brief weather update. Keep it concise."
+      }
+    ]
+  }
+}

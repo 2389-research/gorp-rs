@@ -24,3 +24,4 @@ workspace
 output.txt
 app-data/
 app-data-*/
+workspace.tgz

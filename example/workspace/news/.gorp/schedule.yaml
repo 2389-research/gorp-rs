@@ -1,0 +1,13 @@
+# News Channel Schedules
+# Import with: !schedule import
+
+schedules:
+  # Morning news digest
+  - time: "0 8 * * *"
+    prompt: "Give me a brief morning news digest - top 5 headlines from tech, world news, and any breaking stories."
+    status: active
+
+  # Evening summary
+  - time: "0 18 * * *"
+    prompt: "Summarize the day's major news stories. What were the biggest developments?"
+    status: paused

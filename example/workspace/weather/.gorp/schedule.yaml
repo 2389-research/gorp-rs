@@ -1,0 +1,13 @@
+# Weather Channel Schedules
+# Import with: !schedule import
+
+schedules:
+  # Morning weather briefing
+  - time: "0 7 * * *"
+    prompt: "Good morning! Give me today's weather forecast including temperature, conditions, and any alerts."
+    status: active
+
+  # Evening forecast for tomorrow
+  - time: "0 20 * * *"
+    prompt: "What's the weather looking like for tomorrow? Include morning and afternoon conditions."
+    status: paused

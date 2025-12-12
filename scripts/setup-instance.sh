@@ -121,17 +121,23 @@ mkdir -p "$APP_DIR/mcp-data/pagen"
 
 echo "  Created directory: app-data-$INSTANCE_NUM/"
 
-# Copy workspace template if it exists
-TEMPLATE_DIR="$PROJECT_DIR/example/workspace/template"
-if [ -d "$TEMPLATE_DIR" ]; then
-    cp -r "$TEMPLATE_DIR" "$APP_DIR/workspace/"
-    # Update .mcp.json with correct port for this instance
-    MCP_JSON="$APP_DIR/workspace/template/.mcp.json"
-    if [ -f "$MCP_JSON" ]; then
-        sed -i.bak "s/localhost:13000/localhost:$PORT/g" "$MCP_JSON"
-        rm -f "$MCP_JSON.bak"
-    fi
-    echo "  Copied workspace template"
+# Copy all workspace templates if they exist
+EXAMPLE_WORKSPACE="$PROJECT_DIR/example/workspace"
+if [ -d "$EXAMPLE_WORKSPACE" ]; then
+    # Copy each channel template directory
+    for channel_dir in "$EXAMPLE_WORKSPACE"/*; do
+        if [ -d "$channel_dir" ]; then
+            channel_name=$(basename "$channel_dir")
+            cp -r "$channel_dir" "$APP_DIR/workspace/"
+            # Update .mcp.json with correct port for this instance
+            MCP_JSON="$APP_DIR/workspace/$channel_name/.mcp.json"
+            if [ -f "$MCP_JSON" ]; then
+                sed -i.bak "s/localhost:13000/localhost:$PORT/g" "$MCP_JSON"
+                rm -f "$MCP_JSON.bak"
+            fi
+            echo "  Copied workspace: $channel_name"
+        fi
+    done
 fi
 
 # Initialize git repo in workspace for version control
