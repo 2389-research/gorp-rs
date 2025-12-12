@@ -1,0 +1,173 @@
+# ABOUTME: Multi-user Docker Compose for running multiple gorp instances
+# ABOUTME: Each user gets their own app-data directory and port (13001-13010)
+
+x-gorp-common: &gorp-common
+  build: .
+  image: gorp:latest
+  restart: unless-stopped
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  gorp-1:
+    <<: *gorp-common
+    container_name: gorp-1
+    env_file: ./app-data-1/.env
+    ports:
+      - "13001:13000"
+    volumes:
+      - ./app-data-1/config:/home/gorp/.config/gorp
+      - ./app-data-1/claude-config:/home/gorp/.config/claude
+      - ./app-data-1/data:/home/gorp/.local/share/gorp
+      - ./app-data-1/workspace:/home/gorp/workspace
+      - ./app-data-1/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-1/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-1/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-1/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-2:
+    <<: *gorp-common
+    container_name: gorp-2
+    env_file: ./app-data-2/.env
+    ports:
+      - "13002:13000"
+    volumes:
+      - ./app-data-2/config:/home/gorp/.config/gorp
+      - ./app-data-2/claude-config:/home/gorp/.config/claude
+      - ./app-data-2/data:/home/gorp/.local/share/gorp
+      - ./app-data-2/workspace:/home/gorp/workspace
+      - ./app-data-2/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-2/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-2/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-2/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-3:
+    <<: *gorp-common
+    container_name: gorp-3
+    env_file: ./app-data-3/.env
+    ports:
+      - "13003:13000"
+    volumes:
+      - ./app-data-3/config:/home/gorp/.config/gorp
+      - ./app-data-3/claude-config:/home/gorp/.config/claude
+      - ./app-data-3/data:/home/gorp/.local/share/gorp
+      - ./app-data-3/workspace:/home/gorp/workspace
+      - ./app-data-3/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-3/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-3/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-3/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-4:
+    <<: *gorp-common
+    container_name: gorp-4
+    env_file: ./app-data-4/.env
+    ports:
+      - "13004:13000"
+    volumes:
+      - ./app-data-4/config:/home/gorp/.config/gorp
+      - ./app-data-4/claude-config:/home/gorp/.config/claude
+      - ./app-data-4/data:/home/gorp/.local/share/gorp
+      - ./app-data-4/workspace:/home/gorp/workspace
+      - ./app-data-4/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-4/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-4/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-4/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-5:
+    <<: *gorp-common
+    container_name: gorp-5
+    env_file: ./app-data-5/.env
+    ports:
+      - "13005:13000"
+    volumes:
+      - ./app-data-5/config:/home/gorp/.config/gorp
+      - ./app-data-5/claude-config:/home/gorp/.config/claude
+      - ./app-data-5/data:/home/gorp/.local/share/gorp
+      - ./app-data-5/workspace:/home/gorp/workspace
+      - ./app-data-5/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-5/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-5/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-5/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-6:
+    <<: *gorp-common
+    container_name: gorp-6
+    env_file: ./app-data-6/.env
+    ports:
+      - "13006:13000"
+    volumes:
+      - ./app-data-6/config:/home/gorp/.config/gorp
+      - ./app-data-6/claude-config:/home/gorp/.config/claude
+      - ./app-data-6/data:/home/gorp/.local/share/gorp
+      - ./app-data-6/workspace:/home/gorp/workspace
+      - ./app-data-6/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-6/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-6/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-6/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-7:
+    <<: *gorp-common
+    container_name: gorp-7
+    env_file: ./app-data-7/.env
+    ports:
+      - "13007:13000"
+    volumes:
+      - ./app-data-7/config:/home/gorp/.config/gorp
+      - ./app-data-7/claude-config:/home/gorp/.config/claude
+      - ./app-data-7/data:/home/gorp/.local/share/gorp
+      - ./app-data-7/workspace:/home/gorp/workspace
+      - ./app-data-7/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-7/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-7/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-7/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-8:
+    <<: *gorp-common
+    container_name: gorp-8
+    env_file: ./app-data-8/.env
+    ports:
+      - "13008:13000"
+    volumes:
+      - ./app-data-8/config:/home/gorp/.config/gorp
+      - ./app-data-8/claude-config:/home/gorp/.config/claude
+      - ./app-data-8/data:/home/gorp/.local/share/gorp
+      - ./app-data-8/workspace:/home/gorp/workspace
+      - ./app-data-8/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-8/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-8/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-8/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-9:
+    <<: *gorp-common
+    container_name: gorp-9
+    env_file: ./app-data-9/.env
+    ports:
+      - "13009:13000"
+    volumes:
+      - ./app-data-9/config:/home/gorp/.config/gorp
+      - ./app-data-9/claude-config:/home/gorp/.config/claude
+      - ./app-data-9/data:/home/gorp/.local/share/gorp
+      - ./app-data-9/workspace:/home/gorp/workspace
+      - ./app-data-9/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-9/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-9/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-9/mcp-data/pagen:/home/gorp/.local/share/pagen
+
+  gorp-10:
+    <<: *gorp-common
+    container_name: gorp-10
+    env_file: ./app-data-10/.env
+    ports:
+      - "13010:13000"
+    volumes:
+      - ./app-data-10/config:/home/gorp/.config/gorp
+      - ./app-data-10/claude-config:/home/gorp/.config/claude
+      - ./app-data-10/data:/home/gorp/.local/share/gorp
+      - ./app-data-10/workspace:/home/gorp/workspace
+      - ./app-data-10/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data-10/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data-10/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data-10/mcp-data/pagen:/home/gorp/.local/share/pagen
