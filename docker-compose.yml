@@ -18,25 +18,25 @@ services:
     # environment:
     #   - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 
-    # Persistent volumes using XDG directory structure
+    # Persistent volumes - all data under ./app-data/
     volumes:
       # Config directory - put your config.toml here
-      - ./config:/home/gorp/.config/gorp
+      - ./app-data/config:/home/gorp/.config/gorp
 
       # Claude Code config - persists auth across restarts
-      - ./claude-config:/home/gorp/.config/claude
+      - ./app-data/claude-config:/home/gorp/.config/claude
 
       # Data directory (crypto store, logs, scheduled prompts db)
-      - ./data:/home/gorp/.local/share/gorp
+      - ./app-data/data:/home/gorp/.local/share/gorp
 
       # Workspace directory for Claude sessions
-      - ./workspace:/home/gorp/workspace
+      - ./app-data/workspace:/home/gorp/workspace
 
       # MCP tool data directories
-      - ./mcp-data/chronicle:/home/gorp/.local/share/chronicle
-      - ./mcp-data/memory:/home/gorp/.local/share/memory
-      - ./mcp-data/toki:/home/gorp/.local/share/toki
-      - ./mcp-data/pagen:/home/gorp/.local/share/pagen
+      - ./app-data/mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./app-data/mcp-data/memory:/home/gorp/.local/share/memory
+      - ./app-data/mcp-data/toki:/home/gorp/.local/share/toki
+      - ./app-data/mcp-data/pagen:/home/gorp/.local/share/pagen
 
     # Webhook port
     ports:
