@@ -21,17 +21,28 @@ mkdir -p "/home/gorp/.local/share/memory"
 mkdir -p "/home/gorp/.local/share/toki"
 mkdir -p "/home/gorp/.local/share/pagen"
 
-# Configure Claude CLI to use API key helper script (no secrets written to disk)
+# Configure Claude CLI settings with default plugins
 CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
+CLAUDE_SETTINGS_TARBALL="/app/claude-settings.clean.tgz"
 if [ ! -f "$CLAUDE_SETTINGS" ]; then
     if [ -w "$CLAUDE_SETTINGS_DIR" ]; then
-        echo "Configuring Claude CLI..."
-        cat > "$CLAUDE_SETTINGS" << 'EOF'
+        # Extract default claude-settings with plugins if tarball exists
+        if [ -f "$CLAUDE_SETTINGS_TARBALL" ]; then
+            echo "Extracting default Claude settings with plugins..."
+            tar -xzf "$CLAUDE_SETTINGS_TARBALL" -C /tmp/
+            cp -r /tmp/claude-settings.clean/* "$CLAUDE_SETTINGS_DIR/"
+            rm -rf /tmp/claude-settings.clean
+            echo "Claude settings with plugins extracted."
+        else
+            # Fallback to minimal settings (tarball includes apiKeyHelper)
+            echo "Configuring Claude CLI (minimal)..."
+            cat > "$CLAUDE_SETTINGS" << 'EOF'
 {
     "apiKeyHelper": "/usr/local/bin/claude-api-key-helper"
 }
 EOF
-        echo "Claude CLI configured."
+            echo "Claude CLI configured."
+        fi
     else
         echo "Warning: Cannot write to $CLAUDE_SETTINGS_DIR (permission denied)"
     fi

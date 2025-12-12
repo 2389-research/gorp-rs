@@ -139,9 +139,10 @@ RUN echo '#!/bin/sh\necho "$ANTHROPIC_API_KEY"' > /usr/local/bin/claude-api-key-
 # Copy binary from builder
 COPY --from=builder /app/target/release/gorp /usr/local/bin/gorp
 
-# Copy example config and entrypoint
+# Copy example config, entrypoint, and default claude-settings
 COPY config.toml.example /app/config.toml.example
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY claude-settings.clean.tgz /app/claude-settings.clean.tgz
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Set up XDG directory structure for gorp user (including Claude config and MCP tools)

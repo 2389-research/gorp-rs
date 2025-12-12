@@ -120,6 +120,17 @@ mkdir -p "$APP_DIR/mcp-data/memory"
 mkdir -p "$APP_DIR/mcp-data/toki"
 mkdir -p "$APP_DIR/mcp-data/pagen"
 
+# Extract default claude-settings if tarball exists
+CLAUDE_SETTINGS_TARBALL="$PROJECT_DIR/claude-settings.clean.tgz"
+if [ -f "$CLAUDE_SETTINGS_TARBALL" ]; then
+    echo "  Extracting default claude-settings..."
+    tar -xzf "$CLAUDE_SETTINGS_TARBALL" -C "$APP_DIR/"
+    # Move contents from claude-settings.clean/ to claude-settings/
+    mv "$APP_DIR/claude-settings.clean/"* "$APP_DIR/claude-settings/"
+    rmdir "$APP_DIR/claude-settings.clean"
+    echo "  Extracted claude-settings with plugins"
+fi
+
 # Set ownership to UID 1000 (gorp user in container)
 # This allows the container to write to mounted volumes
 if command -v chown &> /dev/null; then
@@ -136,12 +147,8 @@ if [ -d "$EXAMPLE_WORKSPACE" ]; then
         if [ -d "$channel_dir" ]; then
             channel_name=$(basename "$channel_dir")
             cp -r "$channel_dir" "$APP_DIR/workspace/"
-            # Update .mcp.json with correct port for this instance
-            MCP_JSON="$APP_DIR/workspace/$channel_name/.mcp.json"
-            if [ -f "$MCP_JSON" ]; then
-                sed -i.bak "s/localhost:13000/localhost:$PORT/g" "$MCP_JSON"
-                rm -f "$MCP_JSON.bak"
-            fi
+            # Note: .mcp.json files use localhost:13000 which is correct since
+            # they run inside the container where the webhook always listens on 13000
             echo "  Copied workspace: $channel_name"
         fi
     done
