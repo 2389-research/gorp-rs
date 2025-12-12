@@ -284,6 +284,24 @@ fn get_tools() -> Vec<ToolDefinition> {
                 "required": ["user_id"]
             }),
         },
+        ToolDefinition {
+            name: "set_room_avatar".to_string(),
+            description: "Set or change the room's avatar image. Upload an image file to use as the room icon.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to the image file (relative to workspace)"
+                    },
+                    "channel_name": {
+                        "type": "string",
+                        "description": "Channel to set avatar for (optional, defaults to current channel)"
+                    }
+                },
+                "required": ["image_path"]
+            }),
+        },
     ]
 }
 
@@ -385,6 +403,7 @@ async fn handle_tools_call(state: &McpState, request: &JsonRpcRequest) -> JsonRp
         "leave_room" => handle_leave_room(state, &arguments).await,
         "create_channel" => handle_create_channel(state, &arguments).await,
         "invite_to_channel" => handle_invite_to_channel(state, &arguments).await,
+        "set_room_avatar" => handle_set_room_avatar(state, &arguments).await,
         _ => Err(format!("Unknown tool: {}", tool_name)),
     };
 
@@ -995,5 +1014,95 @@ async fn handle_invite_to_channel(state: &McpState, args: &Value) -> Result<Stri
     Ok(format!(
         "Invited {} to channel '{}'",
         user_id, channel_name
+    ))
+}
+
+/// Handle set_room_avatar tool call
+async fn handle_set_room_avatar(state: &McpState, args: &Value) -> Result<String, String> {
+    use matrix_sdk::ruma::{events::room::avatar::RoomAvatarEventContent, OwnedRoomId};
+    use std::path::Path;
+
+    let image_path = args
+        .get("image_path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: image_path")?;
+
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
+
+    // Get channel name from context if not provided
+    let channel_name = match channel_name {
+        Some(name) => name.to_string(),
+        None => {
+            if let Some(workspace_dir) = find_workspace_dir() {
+                if let Some(ctx) = read_context_file(&workspace_dir) {
+                    ctx.channel_name
+                } else {
+                    return Err("channel_name is required (context file not readable)".to_string());
+                }
+            } else {
+                return Err("channel_name is required (no context file found)".to_string());
+            }
+        }
+    };
+
+    let channel = state
+        .session_store
+        .get_by_name(&channel_name)
+        .map_err(|e| format!("Database error: {}", e))?
+        .ok_or_else(|| format!("Channel not found: {}", channel_name))?;
+
+    let room_id: OwnedRoomId = channel
+        .room_id
+        .parse()
+        .map_err(|e| format!("Invalid room ID: {}", e))?;
+
+    let room = state
+        .matrix_client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room not found: {}", channel.room_id))?;
+
+    // Validate image file exists
+    let path = Path::new(image_path);
+    if !path.exists() {
+        return Err(format!("Image file not found: {}", image_path));
+    }
+
+    // Read image data
+    let image_data = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("Failed to read image file: {}", e))?;
+
+    // Detect MIME type
+    let mime_type = mime_guess::from_path(path)
+        .first()
+        .unwrap_or(mime_guess::mime::IMAGE_PNG);
+
+    if mime_type.type_() != "image" {
+        return Err(format!("File is not an image: {}", image_path));
+    }
+
+    // Upload image to Matrix
+    let upload_response = state
+        .matrix_client
+        .media()
+        .upload(&mime_type, image_data, None)
+        .await
+        .map_err(|e| format!("Failed to upload image to Matrix: {}", e))?;
+
+    // Set room avatar
+    let mut content = RoomAvatarEventContent::new();
+    content.url = Some(upload_response.content_uri);
+    room.send_state_event(content)
+        .await
+        .map_err(|e| format!("Failed to set room avatar: {}", e))?;
+
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image");
+
+    Ok(format!(
+        "Set avatar for room '{}' to '{}'",
+        channel.channel_name, filename
     ))
 }
