@@ -21,3 +21,4 @@ test-config.toml
 workspace
 !example/workspace
 *.db
+output.txt
