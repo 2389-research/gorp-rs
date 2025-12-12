@@ -176,8 +176,9 @@ pub struct DirectoryTemplate {
 pub struct FileTemplate {
     pub title: String,
     pub path: String,
+    pub parent_path: String,  // For back navigation
     pub content: String,      // File content (truncated if too large)
-    pub size: u64,
+    pub size_display: String, // Human-readable size
     pub is_truncated: bool,
 }
 

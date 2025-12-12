@@ -3,6 +3,7 @@
 
 use axum::{
     extract::{Path as AxumPath, State},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Form, Router,
 };
@@ -15,9 +16,9 @@ use std::sync::Arc;
 
 use crate::admin::templates::{
     BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate,
-    DashboardTemplate, DirectoryTemplate, ErrorEntry, HealthTemplate, LogViewerTemplate,
-    MessageEntry, MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow, SchedulesTemplate,
-    ToastTemplate,
+    DashboardTemplate, DirectoryTemplate, ErrorEntry, FileTemplate, HealthTemplate,
+    LogViewerTemplate, MessageEntry, MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow,
+    SchedulesTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -1091,23 +1092,109 @@ async fn browse_root(State(state): State<AdminState>) -> Result<DirectoryTemplat
     browse_directory(state, "").await
 }
 
+/// Unified response type for browse endpoints
+enum BrowseResponse {
+    Directory(DirectoryTemplate),
+    File(FileTemplate),
+    Error(ToastTemplate),
+}
+
+impl IntoResponse for BrowseResponse {
+    fn into_response(self) -> Response {
+        match self {
+            BrowseResponse::Directory(t) => t.into_response(),
+            BrowseResponse::File(t) => t.into_response(),
+            BrowseResponse::Error(t) => t.into_response(),
+        }
+    }
+}
+
 /// Browse a specific path in the workspace
 async fn browse_path(
     State(state): State<AdminState>,
     AxumPath(path): AxumPath<String>,
-) -> Result<DirectoryTemplate, ToastTemplate> {
-    // If it's a file, show file content instead
+) -> BrowseResponse {
     let workspace_root = Path::new(&state.config.workspace.path);
-    let full_path = validate_and_resolve_path(workspace_root, &path)?;
+    let full_path = match validate_and_resolve_path(workspace_root, &path) {
+        Ok(p) => p,
+        Err(e) => return BrowseResponse::Error(e),
+    };
 
     if full_path.is_file() {
-        return Err(ToastTemplate {
-            message: "Use file viewer (not yet implemented)".to_string(),
-            is_error: true,
-        });
+        // View file content
+        match view_file(&full_path, &path) {
+            Ok(template) => BrowseResponse::File(template),
+            Err(e) => BrowseResponse::Error(e),
+        }
+    } else {
+        // Browse directory
+        match browse_directory(state, &path).await {
+            Ok(template) => BrowseResponse::Directory(template),
+            Err(e) => BrowseResponse::Error(e),
+        }
     }
+}
 
-    browse_directory(state, &path).await
+/// View file content with size limiting
+fn view_file(full_path: &std::path::Path, relative_path: &str) -> Result<FileTemplate, ToastTemplate> {
+    let metadata = std::fs::metadata(full_path).map_err(|e| ToastTemplate {
+        message: format!("Failed to read file metadata: {}", e),
+        is_error: true,
+    })?;
+
+    let size = metadata.len();
+    let is_truncated = size > MAX_DISPLAY_FILE_SIZE;
+
+    // Read file content (truncated if too large)
+    let content = if is_truncated {
+        let mut file = File::open(full_path).map_err(|e| ToastTemplate {
+            message: format!("Failed to open file: {}", e),
+            is_error: true,
+        })?;
+        let mut buffer = vec![0u8; MAX_DISPLAY_FILE_SIZE as usize];
+        file.read(&mut buffer).map_err(|e| ToastTemplate {
+            message: format!("Failed to read file: {}", e),
+            is_error: true,
+        })?;
+        String::from_utf8_lossy(&buffer).to_string()
+    } else {
+        std::fs::read_to_string(full_path).unwrap_or_else(|_| {
+            // Binary file - show hex preview
+            match std::fs::read(full_path) {
+                Ok(bytes) => {
+                    let preview: String = bytes
+                        .iter()
+                        .take(1024)
+                        .map(|b| format!("{:02x} ", b))
+                        .collect();
+                    format!("[Binary file - hex preview:]\n{}", preview)
+                }
+                Err(e) => format!("[Failed to read file: {}]", e),
+            }
+        })
+    };
+
+    // Calculate parent path for back navigation
+    let parent_path = if relative_path.contains('/') {
+        let segments: Vec<&str> = relative_path.rsplitn(2, '/').collect();
+        segments.get(1).unwrap_or(&"").to_string()
+    } else {
+        String::new() // Root level
+    };
+
+    let file_name = full_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| relative_path.to_string());
+
+    Ok(FileTemplate {
+        title: format!("View: {} - gorp Admin", file_name),
+        path: relative_path.to_string(),
+        parent_path,
+        content,
+        size_display: format_file_size(size),
+        is_truncated,
+    })
 }
 
 /// Validate path and prevent directory traversal attacks
@@ -1201,15 +1288,27 @@ async fn browse_directory(
     let mut browse_entries: Vec<BrowseEntry> = Vec::new();
 
     for entry in entries {
-        let entry = entry.map_err(|e| ToastTemplate {
-            message: format!("Failed to read entry: {}", e),
-            is_error: true,
-        })?;
+        // Skip entries we can't read (permission denied, broken symlinks, etc.)
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to read directory entry, skipping");
+                continue;
+            }
+        };
 
-        let metadata = entry.metadata().map_err(|e| ToastTemplate {
-            message: format!("Failed to read metadata: {}", e),
-            is_error: true,
-        })?;
+        // Skip entries we can't get metadata for
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    path = %entry.path().display(),
+                    error = %e,
+                    "Failed to read metadata, skipping entry"
+                );
+                continue;
+            }
+        };
 
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy().to_string();

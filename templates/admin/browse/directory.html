@@ -23,7 +23,7 @@
                     Back to parent directory
                 </a>
             {% else %}
-                <a href="/admin/browse/{{ parent }}" class="inline-flex items-center text-blue-600 hover:text-blue-800 mb-4">
+                <a href="/admin/browse/{{ parent|urlencode }}" class="inline-flex items-center text-blue-600 hover:text-blue-800 mb-4">
                     <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
                     </svg>
@@ -62,7 +62,7 @@
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     {% for entry in entries %}
-                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='/admin/browse/{{ entry.path }}'">
+                    <tr class="hover:bg-gray-50 cursor-pointer" onclick="window.location='/admin/browse/{{ entry.path|urlencode }}'">
                         <td class="px-6 py-4 whitespace-nowrap text-2xl">
                             {% if entry.is_dir %}
                                 <svg class="w-6 h-6 text-blue-500" fill="currentColor" viewBox="0 0 20 20">
