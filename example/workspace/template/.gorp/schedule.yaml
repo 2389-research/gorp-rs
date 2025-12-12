@@ -1,0 +1,24 @@
+# Gorp Schedule Export
+# Import with: !schedule import
+#
+# Time formats:
+#   - Cron: "0 8 * * *" (8am daily), "0 9 * * MON" (9am Mondays)
+#   - ISO: "2025-12-25T10:00:00" (one-time)
+#
+# Status: active or paused
+
+schedules:
+  # Example: Daily morning greeting
+  # - time: "0 8 * * *"
+  #   prompt: "Good morning! What's on the agenda today?"
+  #   status: active
+
+  # Example: Weekly review
+  # - time: "0 17 * * FRI"
+  #   prompt: "It's Friday! Let's do a quick weekly review. What did we accomplish this week?"
+  #   status: active
+
+  # Example: One-time reminder (uncomment and set date)
+  # - time: "2025-12-25T10:00:00"
+  #   prompt: "Merry Christmas!"
+  #   status: active
