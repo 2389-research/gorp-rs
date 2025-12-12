@@ -4,10 +4,39 @@
 
 {% block content %}
 <div class="bg-white rounded-lg shadow p-6">
-    <h1 class="text-2xl font-bold mb-4">Dashboard</h1>
-    <p class="text-gray-600">Welcome to the gorp admin panel.</p>
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Dashboard</h1>
+        <div>
+            <span class="text-sm text-gray-500" hx-get="/admin" hx-trigger="every 60s" hx-select=".analytics-stats" hx-target=".analytics-stats" hx-swap="outerHTML">Auto-refreshes every 60s</span>
+        </div>
+    </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+    <div class="analytics-stats grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div class="bg-blue-50 rounded-lg p-4">
+            <div class="text-3xl font-bold text-blue-700">{{ total_channels }}</div>
+            <div class="text-sm text-blue-600">Total Channels</div>
+            <div class="text-xs text-blue-500 mt-1">{{ active_channels }} active</div>
+        </div>
+        <div class="bg-green-50 rounded-lg p-4">
+            <div class="text-3xl font-bold text-green-700">{{ active_channels }}</div>
+            <div class="text-sm text-green-600">Active Channels</div>
+            <div class="text-xs text-green-500 mt-1">Currently running</div>
+        </div>
+        <div class="bg-purple-50 rounded-lg p-4">
+            <div class="text-3xl font-bold text-purple-700">{{ total_schedules }}</div>
+            <div class="text-sm text-purple-600">Total Schedules</div>
+            <div class="text-xs text-purple-500 mt-1">Scheduled prompts</div>
+        </div>
+        <div class="bg-orange-50 rounded-lg p-4">
+            <div class="text-3xl font-bold text-orange-700">{{ messages_today }}</div>
+            <div class="text-sm text-orange-600">Messages Today</div>
+            <div class="text-xs text-orange-500 mt-1">Across all channels</div>
+        </div>
+    </div>
+
+    <p class="text-gray-600 mb-6">Welcome to the gorp admin panel.</p>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <a href="/admin/config" class="block p-4 bg-blue-50 rounded-lg hover:bg-blue-100">
             <h2 class="font-semibold text-blue-800">Configuration</h2>
             <p class="text-sm text-blue-600">View and edit settings</p>

@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use crate::admin::templates::{
     ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate, DashboardTemplate,
-    ErrorEntry, HealthTemplate, LogViewerTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
+    ErrorEntry, HealthTemplate, LogViewerTemplate, MessageEntry, MessageHistoryTemplate,
+    ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -52,16 +53,58 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/channels/{name}/logs", get(channel_logs))
         .route("/channels/{name}/delete", post(channel_delete))
         .route("/channels/{name}/debug", post(channel_toggle_debug))
+        .route("/messages", get(messages_view))
         .route("/health", get(health_view))
         .route("/schedules", get(schedules_list))
+        .route("/schedules/new", get(schedule_form))
+        .route("/schedules/create", post(schedule_create))
         .route("/schedules/{id}/cancel", post(schedule_cancel))
         .route("/schedules/{id}/pause", post(schedule_pause))
         .route("/schedules/{id}/resume", post(schedule_resume))
 }
 
-async fn dashboard() -> DashboardTemplate {
+async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
+    // Get channel counts
+    let channels = state.session_store.list_all().unwrap_or_default();
+    let total_channels = channels.len();
+    let active_channels = channels.iter().filter(|c| c.started).count();
+
+    // Get schedule count
+    let schedules = state.scheduler_store.list_all().unwrap_or_default();
+    let total_schedules = schedules.len();
+
+    // Count messages from today across all channels
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let messages_today = channels
+        .iter()
+        .map(|channel| {
+            // Validate directory path for security
+            if channel.validate_directory().is_err() {
+                return 0;
+            }
+
+            let log_path = Path::new(&channel.directory)
+                .join(".matrix")
+                .join("matrix_messages.log");
+
+            if !log_path.exists() {
+                return 0;
+            }
+
+            // Count lines containing today's date
+            match std::fs::read_to_string(&log_path) {
+                Ok(content) => content.lines().filter(|line| line.contains(&today)).count(),
+                Err(_) => 0,
+            }
+        })
+        .sum();
+
     DashboardTemplate {
         title: "gorp Admin".to_string(),
+        total_channels,
+        active_channels,
+        total_schedules,
+        messages_today,
     }
 }
 
@@ -638,6 +681,215 @@ async fn schedule_resume(
         },
         Err(e) => ToastTemplate {
             message: format!("Failed to resume schedule: {}", e),
+            is_error: true,
+        },
+    }
+}
+
+// ============================================================================
+// Message History Handler
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct MessageLogEntry {
+    timestamp: String,
+    direction: String,
+    sender: String,
+    content: String,
+    #[allow(dead_code)]
+    html: Option<String>,
+}
+
+async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplate {
+    let channels = state.session_store.list_all().unwrap_or_default();
+    let mut all_messages: Vec<MessageEntry> = Vec::new();
+
+    for channel in channels {
+        // Validate directory path to prevent path traversal
+        if channel.validate_directory().is_err() {
+            continue;
+        }
+
+        let log_path = Path::new(&channel.directory)
+            .join(".matrix")
+            .join("matrix_messages.log");
+
+        if !log_path.exists() {
+            continue;
+        }
+
+        if let Ok(content) = std::fs::read_to_string(&log_path) {
+            for line in content.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+
+                if let Ok(entry) = serde_json::from_str::<MessageLogEntry>(line) {
+                    let content_preview: String = entry
+                        .content
+                        .chars()
+                        .take(50)
+                        .collect::<String>()
+                        + if entry.content.len() > 50 { "..." } else { "" };
+
+                    let timestamp = entry.timestamp.chars().take(19).collect();
+
+                    all_messages.push(MessageEntry {
+                        timestamp,
+                        channel_name: channel.channel_name.clone(),
+                        direction: entry.direction,
+                        sender: entry.sender,
+                        content_preview,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by timestamp descending (most recent first)
+    all_messages.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    all_messages.truncate(100);
+
+    MessageHistoryTemplate {
+        title: "Message History - gorp Admin".to_string(),
+        messages: all_messages,
+    }
+}
+
+// ============================================================================
+// Schedule Form Handlers
+// ============================================================================
+
+async fn schedule_form(State(state): State<AdminState>) -> ScheduleFormTemplate {
+    let channels: Vec<String> = state
+        .session_store
+        .list_all()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.channel_name)
+        .collect();
+
+    ScheduleFormTemplate {
+        title: "New Schedule - gorp Admin".to_string(),
+        channels,
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateScheduleForm {
+    channel: String,
+    prompt: String,
+    execute_at: String,
+}
+
+async fn schedule_create(
+    State(state): State<AdminState>,
+    Form(form): Form<CreateScheduleForm>,
+) -> ToastTemplate {
+    use crate::scheduler::{ParsedSchedule, ScheduledPrompt, ScheduleStatus};
+
+    // Validate inputs
+    let channel = form.channel.trim();
+    let prompt = form.prompt.trim();
+    let execute_at = form.execute_at.trim();
+
+    if channel.is_empty() {
+        return ToastTemplate {
+            message: "Please select a channel".to_string(),
+            is_error: true,
+        };
+    }
+
+    if prompt.is_empty() {
+        return ToastTemplate {
+            message: "Prompt cannot be empty".to_string(),
+            is_error: true,
+        };
+    }
+
+    if execute_at.is_empty() {
+        return ToastTemplate {
+            message: "Schedule time is required".to_string(),
+            is_error: true,
+        };
+    }
+
+    // Get channel to verify it exists and get room_id
+    let channel_info = match state.session_store.get_by_name(channel) {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            return ToastTemplate {
+                message: format!("Channel not found: {}", channel),
+                is_error: true,
+            };
+        }
+        Err(e) => {
+            return ToastTemplate {
+                message: format!("Database error: {}", e),
+                is_error: true,
+            };
+        }
+    };
+
+    let timezone = &state.config.scheduler.timezone;
+
+    // Check if it's a cron expression (for recurring) or a time expression
+    let is_cron = execute_at.split_whitespace().count() == 5
+        && execute_at.chars().all(|c| c.is_ascii_digit() || " */-,".contains(c));
+
+    // Parse time expression and build schedule
+    let (next_execution_at, cron_expression, execute_at_field) = if is_cron {
+        // For cron, calculate next execution time
+        match crate::scheduler::compute_next_cron_execution_in_tz(execute_at, timezone) {
+            Ok(t) => (t.to_rfc3339(), Some(execute_at.to_string()), None),
+            Err(e) => {
+                return ToastTemplate {
+                    message: format!("Invalid cron expression: {}", e),
+                    is_error: true,
+                };
+            }
+        }
+    } else {
+        // Parse natural language time
+        match crate::scheduler::parse_time_expression(execute_at, timezone) {
+            Ok(ParsedSchedule::OneTime(t)) => (t.to_rfc3339(), None, Some(t.to_rfc3339())),
+            Ok(ParsedSchedule::Recurring { cron, next }) => {
+                (next.to_rfc3339(), Some(cron), None)
+            }
+            Err(e) => {
+                return ToastTemplate {
+                    message: format!("Could not parse time: {}", e),
+                    is_error: true,
+                };
+            }
+        }
+    };
+
+    // Create the scheduled prompt
+    let schedule = ScheduledPrompt {
+        id: uuid::Uuid::new_v4().to_string(),
+        channel_name: channel.to_string(),
+        room_id: channel_info.room_id,
+        prompt: prompt.to_string(),
+        created_by: "admin".to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        execute_at: execute_at_field,
+        cron_expression,
+        last_executed_at: None,
+        next_execution_at,
+        status: ScheduleStatus::Active,
+        error_message: None,
+        execution_count: 0,
+    };
+
+    // Create the schedule
+    match state.scheduler_store.create_schedule(&schedule) {
+        Ok(_) => ToastTemplate {
+            message: "Schedule created successfully".to_string(),
+            is_error: false,
+        },
+        Err(e) => ToastTemplate {
+            message: format!("Failed to create schedule: {}", e),
             is_error: true,
         },
     }

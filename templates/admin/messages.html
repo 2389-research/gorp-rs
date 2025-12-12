@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6">
+    <h1 class="text-2xl font-bold mb-6">Message History</h1>
+
+    {% if messages.is_empty() %}
+    <p class="text-gray-500">No messages logged yet. Messages will appear here as they are sent and received.</p>
+    {% else %}
+    <div class="mb-4 text-sm text-gray-600">
+        <p>Showing the {{ messages.len() }} most recent messages across all channels.</p>
+    </div>
+
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Channel</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">Dir</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sender</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Content</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                {% for message in messages %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500 font-mono">
+                        {{ message.timestamp }}
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm">
+                        <a href="/admin/channels/{{ message.channel_name }}" class="text-blue-600 hover:text-blue-800">
+                            {{ message.channel_name }}
+                        </a>
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm text-center">
+                        {% if message.direction == "sent" %}
+                        <span class="text-blue-600 text-lg" title="Sent">→</span>
+                        {% else %}
+                        <span class="text-green-600 text-lg" title="Received">←</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-700 font-mono max-w-xs truncate">
+                        {{ message.sender }}
+                    </td>
+                    <td class="px-4 py-3 text-sm text-gray-700">
+                        <div class="max-w-md truncate">{{ message.content_preview }}</div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

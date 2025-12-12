@@ -7,6 +7,10 @@ use askama::Template;
 #[template(path = "admin/dashboard.html")]
 pub struct DashboardTemplate {
     pub title: String,
+    pub total_channels: usize,
+    pub active_channels: usize,
+    pub total_schedules: usize,
+    pub messages_today: usize,
 }
 
 #[derive(Template)]
@@ -123,6 +127,30 @@ pub struct LogViewerTemplate {
     pub log_lines: Vec<String>,
 }
 
+/// Message entry for message history view
+#[derive(Clone)]
+pub struct MessageEntry {
+    pub timestamp: String,
+    pub channel_name: String,
+    pub direction: String,
+    pub sender: String,
+    pub content_preview: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin/messages.html")]
+pub struct MessageHistoryTemplate {
+    pub title: String,
+    pub messages: Vec<MessageEntry>,
+}
+
+#[derive(Template)]
+#[template(path = "admin/schedules/new.html")]
+pub struct ScheduleFormTemplate {
+    pub title: String,
+    pub channels: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,11 +159,19 @@ mod tests {
     fn test_dashboard_template_renders() {
         let template = DashboardTemplate {
             title: "Test Dashboard".to_string(),
+            total_channels: 5,
+            active_channels: 3,
+            total_schedules: 10,
+            messages_today: 42,
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("Test Dashboard"));
         assert!(rendered.contains("gorp"));
         assert!(rendered.contains("Configuration"));
+        assert!(rendered.contains("Total Channels"));
+        assert!(rendered.contains("Active Channels"));
+        assert!(rendered.contains("Total Schedules"));
+        assert!(rendered.contains("Messages Today"));
     }
 
     #[test]
