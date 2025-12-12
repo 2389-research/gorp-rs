@@ -1342,6 +1342,10 @@ fn view_file(full_path: &std::path::Path, relative_path: &str) -> Result<FileTem
 fn validate_and_resolve_path(workspace_root: &Path, user_path: &str) -> Result<std::path::PathBuf, ToastTemplate> {
     // Reject paths with ".." to prevent traversal
     if user_path.contains("..") {
+        tracing::warn!(
+            path = user_path,
+            "Path traversal attempt blocked: contains '..'"
+        );
         return Err(ToastTemplate {
             message: "Invalid path: contains path traversal".to_string(),
             is_error: true,
@@ -1372,6 +1376,12 @@ fn validate_and_resolve_path(workspace_root: &Path, user_path: &str) -> Result<s
 
     // Verify the resolved path is within workspace
     if !canonical_full.starts_with(&canonical_workspace) {
+        tracing::warn!(
+            requested_path = user_path,
+            resolved_path = %canonical_full.display(),
+            workspace_root = %canonical_workspace.display(),
+            "Path traversal attempt blocked: resolved path outside workspace"
+        );
         return Err(ToastTemplate {
             message: "Access denied: path outside workspace".to_string(),
             is_error: true,
@@ -1572,6 +1582,22 @@ async fn render_markdown(
         });
     }
 
+    // Check file size before reading (limit to 1MB for markdown rendering)
+    const MAX_MARKDOWN_SIZE: u64 = 1024 * 1024;
+    let metadata = std::fs::metadata(&full_path).map_err(|e| ToastTemplate {
+        message: format!("Failed to read file metadata: {}", e),
+        is_error: true,
+    })?;
+    if metadata.len() > MAX_MARKDOWN_SIZE {
+        return Err(ToastTemplate {
+            message: format!(
+                "File too large to render ({} MB). Maximum is 1 MB.",
+                metadata.len() / (1024 * 1024)
+            ),
+            is_error: true,
+        });
+    }
+
     // Read file content
     let markdown_content = std::fs::read_to_string(&full_path).map_err(|e| ToastTemplate {
         message: format!("Failed to read file: {}", e),
@@ -1701,6 +1727,7 @@ async fn search_workspace(
             &search_query_lower,
             &mut results,
             &mut files_scanned,
+            0, // Start at depth 0
         );
 
         // Stop if we've scanned too many files
@@ -1732,6 +1759,9 @@ async fn search_workspace(
     }
 }
 
+/// Maximum recursion depth for directory search (prevents stack overflow)
+const MAX_SEARCH_DEPTH: usize = 20;
+
 /// Recursively search a directory
 fn search_directory_recursive(
     entries: std::fs::ReadDir,
@@ -1740,7 +1770,13 @@ fn search_directory_recursive(
     query: &str,
     results: &mut Vec<SearchResult>,
     files_scanned: &mut usize,
+    depth: usize,
 ) {
+    // Stop if we've exceeded depth limit
+    if depth > MAX_SEARCH_DEPTH {
+        return;
+    }
+
     for entry in entries {
         // Stop if we've scanned enough files or found enough results
         if *files_scanned >= MAX_FILES_TO_SCAN || results.len() >= MAX_SEARCH_RESULTS {
@@ -1776,6 +1812,7 @@ fn search_directory_recursive(
                     query,
                     results,
                     files_scanned,
+                    depth + 1,
                 );
             }
         } else if metadata.is_file() {
@@ -1794,6 +1831,7 @@ fn search_directory_recursive(
                 results.push(SearchResult {
                     channel_name: channel_name.to_string(),
                     file_path: relative_path.clone(),
+                    browse_path: format!("{}/{}", channel_name, relative_path),
                     file_name: name.to_string(),
                     match_preview: format!("Filename matches: {}", name),
                     line_number: None,
@@ -1868,6 +1906,7 @@ fn search_file_content(
         Some(SearchResult {
             channel_name: channel_name.to_string(),
             file_path: relative_path.to_string(),
+            browse_path: format!("{}/{}", channel_name, relative_path),
             file_name: file_name.to_string(),
             match_preview: preview,
             line_number: Some(line_number),

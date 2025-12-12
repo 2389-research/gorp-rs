@@ -216,7 +216,8 @@ pub struct MatrixDirTemplate {
 #[derive(Clone)]
 pub struct SearchResult {
     pub channel_name: String,
-    pub file_path: String,       // Relative path within channel
+    pub file_path: String,       // Relative path within channel (for display)
+    pub browse_path: String,     // Full path for /admin/browse URL (channel/file_path)
     pub file_name: String,
     pub match_preview: String,   // Context around match
     pub line_number: Option<u32>,

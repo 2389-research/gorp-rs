@@ -13,6 +13,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY templates ./templates
 
+# Copy config.toml.example (needed for include_str! at compile time)
+COPY config.toml.example ./config.toml.example
+
 # Build release binary
 RUN cargo build --release
 
