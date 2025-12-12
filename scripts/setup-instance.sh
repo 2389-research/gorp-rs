@@ -141,6 +141,9 @@ fi
 
 cat >> "$APP_DIR/config/config.toml" << EOF
 
+[claude]
+binary_path = "claude"
+
 [webhook]
 port = 13000
 host = "0.0.0.0"
