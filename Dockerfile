@@ -50,6 +50,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure Chromium for headless Docker environment
+# Create symlinks so tools can find Chrome at common paths
+RUN ln -s /usr/bin/chromium /usr/bin/google-chrome && \
+    ln -s /usr/bin/chromium /usr/bin/chromium-browser
+
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage --headless"
 
