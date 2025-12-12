@@ -94,7 +94,12 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
         .iter()
         .map(|channel| {
             // Validate directory path for security
-            if channel.validate_directory().is_err() {
+            if let Err(e) = channel.validate_directory() {
+                tracing::warn!(
+                    channel = %channel.channel_name,
+                    error = %e,
+                    "Skipping channel with invalid directory in dashboard"
+                );
                 return 0;
             }
 
@@ -514,49 +519,62 @@ fn read_last_n_lines(path: &std::path::Path, n: usize) -> Vec<String> {
     read_last_n_lines_reverse(file, n, metadata.len())
 }
 
+/// Chunk size for backward file reading.
+/// 64KB balances memory usage with syscall overhead for typical log files.
+const REVERSE_READ_CHUNK_SIZE: u64 = 64 * 1024;
+
 /// Read last N lines by seeking backwards from file end.
 /// More efficient for large files when we only need recent entries.
+/// Uses lossy UTF-8 conversion to handle potential multi-byte boundary issues.
 fn read_last_n_lines_reverse(mut file: File, n: usize, file_size: u64) -> Vec<String> {
-    // Start with a reasonable chunk size
-    let chunk_size: u64 = 64 * 1024; // 64KB chunks
     let mut lines: Vec<String> = Vec::new();
     let mut pos = file_size;
-    let mut leftover = String::new();
+    let mut leftover_bytes: Vec<u8> = Vec::new();
+    let mut is_first_chunk = true;
 
     while lines.len() < n && pos > 0 {
-        let read_size = std::cmp::min(chunk_size, pos);
+        let read_size = std::cmp::min(REVERSE_READ_CHUNK_SIZE, pos);
         pos -= read_size;
 
-        if file.seek(SeekFrom::Start(pos)).is_err() {
+        if let Err(e) = file.seek(SeekFrom::Start(pos)) {
+            tracing::debug!(error = %e, pos = pos, "Failed to seek in log file");
             break;
         }
 
         let mut buffer = vec![0u8; read_size as usize];
-        if file.read_exact(&mut buffer).is_err() {
+        if let Err(e) = file.read_exact(&mut buffer) {
+            tracing::debug!(error = %e, "Failed to read chunk from log file");
             break;
         }
 
-        let chunk = match String::from_utf8(buffer) {
-            Ok(s) => s,
-            Err(_) => break, // Invalid UTF-8, stop reading
-        };
+        // Append leftover bytes from previous chunk (they come AFTER this chunk's content)
+        buffer.extend(leftover_bytes.drain(..));
 
-        // Prepend leftover from previous chunk
-        let combined = chunk + &leftover;
-        leftover.clear();
+        // Use lossy conversion to handle UTF-8 boundary issues gracefully
+        // This may replace partial chars at boundaries with replacement char, but won't fail
+        let chunk = String::from_utf8_lossy(&buffer).to_string();
 
         // Split into lines
-        let mut chunk_lines: Vec<&str> = combined.lines().collect();
+        let mut chunk_lines: Vec<&str> = chunk.lines().collect();
 
-        // If we didn't start at beginning of file, first "line" is partial
-        if pos > 0 && !chunk_lines.is_empty() {
-            leftover = chunk_lines.remove(0).to_string();
+        // If we're not at the beginning of the file and this isn't our first chunk,
+        // the first "line" may be partial (continues from earlier in file)
+        if pos > 0 && !chunk_lines.is_empty() && !is_first_chunk {
+            // Save the partial line to prepend to next chunk
+            leftover_bytes = chunk_lines.remove(0).as_bytes().to_vec();
+        } else if pos > 0 && !chunk_lines.is_empty() {
+            // First chunk at end of file - first line might still be partial
+            // if we didn't land exactly on a newline
+            leftover_bytes = chunk_lines.remove(0).as_bytes().to_vec();
         }
+
+        is_first_chunk = false;
 
         // Add lines in reverse order (they'll be reversed at end)
         for line in chunk_lines.into_iter().rev() {
-            if !line.is_empty() {
-                lines.push(line.to_string());
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                lines.push(trimmed.to_string());
                 if lines.len() >= n {
                     break;
                 }
@@ -565,8 +583,12 @@ fn read_last_n_lines_reverse(mut file: File, n: usize, file_size: u64) -> Vec<St
     }
 
     // Include any remaining leftover if we reached start of file
-    if pos == 0 && !leftover.is_empty() && lines.len() < n {
-        lines.push(leftover);
+    if pos == 0 && !leftover_bytes.is_empty() && lines.len() < n {
+        let leftover = String::from_utf8_lossy(&leftover_bytes).to_string();
+        let trimmed = leftover.trim();
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
     }
 
     // Reverse to get chronological order
@@ -821,13 +843,20 @@ async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplat
     };
     let mut all_messages: Vec<MessageEntry> = Vec::new();
 
-    // Only read last 100 lines per channel to avoid loading entire logs
-    // This means we get up to 100 * num_channels messages, then sort and truncate
-    const LINES_PER_CHANNEL: usize = 100;
+    // Scale lines per channel based on channel count to avoid unbounded memory usage
+    // With many channels, read fewer lines each; with few channels, read more
+    // Target: ~200 total messages max before sorting (reasonable for 100 result limit)
+    let num_channels = channels.len().max(1);
+    let lines_per_channel = (200 / num_channels).clamp(10, 100);
 
     for channel in channels {
         // Validate directory path to prevent path traversal
-        if channel.validate_directory().is_err() {
+        if let Err(e) = channel.validate_directory() {
+            tracing::warn!(
+                channel = %channel.channel_name,
+                error = %e,
+                "Skipping channel with invalid directory in messages view"
+            );
             continue;
         }
 
@@ -836,7 +865,7 @@ async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplat
             .join("matrix_messages.log");
 
         // Use efficient tail reading
-        let lines = read_last_n_lines(&log_path, LINES_PER_CHANNEL);
+        let lines = read_last_n_lines(&log_path, lines_per_channel);
 
         for line in lines {
             if line.trim().is_empty() {
@@ -944,10 +973,7 @@ async fn schedule_create(
 
     if prompt.len() > MAX_PROMPT_LENGTH {
         return ToastTemplate {
-            message: format!(
-                "Prompt too long (max {} characters)",
-                MAX_PROMPT_LENGTH / 1024
-            ) + " KB",
+            message: format!("Prompt too long (max {} KB)", MAX_PROMPT_LENGTH / 1024),
             is_error: true,
         };
     }
