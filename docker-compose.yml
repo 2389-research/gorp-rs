@@ -14,10 +14,17 @@ services:
     env_file:
       - .env
 
+    # Claude Code auth - set this OR shell in and run `claude` to login
+    # environment:
+    #   - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
     # Persistent volumes using XDG directory structure
     volumes:
       # Config directory - put your config.toml here
       - ./config:/home/gorp/.config/gorp
+
+      # Claude Code config - persists auth across restarts
+      - ./claude-config:/home/gorp/.config/claude
 
       # Data directory (crypto store, logs, scheduled prompts db)
       - ./data:/home/gorp/.local/share/gorp
