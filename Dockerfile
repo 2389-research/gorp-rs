@@ -72,6 +72,7 @@ RUN chmod +x /app/docker-entrypoint.sh
 # Set up XDG directory structure for gorp user (including Claude config and MCP tools)
 RUN mkdir -p /home/gorp/.config/gorp \
              /home/gorp/.config/claude \
+             /home/gorp/.claude \
              /home/gorp/.local/share/gorp/crypto_store \
              /home/gorp/.local/share/gorp/logs \
              /home/gorp/.local/share/chronicle \

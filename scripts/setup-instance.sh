@@ -120,6 +120,12 @@ mkdir -p "$APP_DIR/mcp-data/memory"
 mkdir -p "$APP_DIR/mcp-data/toki"
 mkdir -p "$APP_DIR/mcp-data/pagen"
 
+# Set ownership to UID 1000 (gorp user in container)
+# This allows the container to write to mounted volumes
+if command -v chown &> /dev/null; then
+    chown -R 1000:1000 "$APP_DIR" 2>/dev/null || echo "  Note: Run with sudo to fix volume permissions"
+fi
+
 echo "  Created directory: app-data-$INSTANCE_NUM/"
 
 # Copy all workspace templates if they exist

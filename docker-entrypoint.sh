@@ -25,15 +25,21 @@ mkdir -p "/home/gorp/.local/share/pagen"
 if [ -n "$ANTHROPIC_API_KEY" ]; then
     CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
     if [ ! -f "$CLAUDE_SETTINGS" ]; then
-        echo "Configuring Claude CLI with API key..."
-        cat > "$CLAUDE_SETTINGS" << EOF
+        # Check if we can write to the directory
+        if [ -w "$CLAUDE_SETTINGS_DIR" ]; then
+            echo "Configuring Claude CLI with API key..."
+            cat > "$CLAUDE_SETTINGS" << EOF
 {
     "env": {
         "ANTHROPIC_API_KEY": "$ANTHROPIC_API_KEY"
     }
 }
 EOF
-        echo "Claude CLI configured."
+            echo "Claude CLI configured."
+        else
+            echo "Warning: Cannot write to $CLAUDE_SETTINGS_DIR (permission denied)"
+            echo "Claude CLI will use ANTHROPIC_API_KEY from environment instead."
+        fi
     fi
 fi
 
