@@ -112,6 +112,7 @@ echo ""
 # Create directory structure
 mkdir -p "$APP_DIR/config"
 mkdir -p "$APP_DIR/claude-config"
+mkdir -p "$APP_DIR/claude-settings"
 mkdir -p "$APP_DIR/data"
 mkdir -p "$APP_DIR/workspace"
 mkdir -p "$APP_DIR/mcp-data/chronicle"
@@ -207,6 +208,7 @@ services:
     volumes:
       - ./config:/home/gorp/.config/gorp
       - ./claude-config:/home/gorp/.config/claude
+      - ./claude-settings:/home/gorp/.claude
       - ./data:/home/gorp/.local/share/gorp
       - ./workspace:/home/gorp/workspace
       - ./mcp-data/chronicle:/home/gorp/.local/share/chronicle

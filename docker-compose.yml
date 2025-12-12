@@ -26,6 +26,9 @@ services:
       # Claude Code config - persists auth across restarts
       - ./app-data/claude-config:/home/gorp/.config/claude
 
+      # Claude CLI settings (API key, preferences)
+      - ./app-data/claude-settings:/home/gorp/.claude
+
       # Data directory (crypto store, logs, scheduled prompts db)
       - ./app-data/data:/home/gorp/.local/share/gorp
 

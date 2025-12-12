@@ -8,16 +8,34 @@ CONFIG_DIR="/home/gorp/.config/gorp"
 DATA_DIR="/home/gorp/.local/share/gorp"
 WORKSPACE_DIR="/home/gorp/workspace"
 CLAUDE_CONFIG="/home/gorp/.claude.json"
+CLAUDE_SETTINGS_DIR="/home/gorp/.claude"
 
 # Create directories if they don't exist
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$DATA_DIR/crypto_store"
 mkdir -p "$DATA_DIR/logs"
 mkdir -p "$WORKSPACE_DIR"
+mkdir -p "$CLAUDE_SETTINGS_DIR"
 mkdir -p "/home/gorp/.local/share/chronicle"
 mkdir -p "/home/gorp/.local/share/memory"
 mkdir -p "/home/gorp/.local/share/toki"
 mkdir -p "/home/gorp/.local/share/pagen"
+
+# Set up Claude CLI settings with API key if provided
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+    CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
+    if [ ! -f "$CLAUDE_SETTINGS" ]; then
+        echo "Configuring Claude CLI with API key..."
+        cat > "$CLAUDE_SETTINGS" << EOF
+{
+    "env": {
+        "ANTHROPIC_API_KEY": "$ANTHROPIC_API_KEY"
+    }
+}
+EOF
+        echo "Claude CLI configured."
+    fi
+fi
 
 # Set up Claude Code MCP servers if not already configured
 if [ ! -f "$CLAUDE_CONFIG" ]; then

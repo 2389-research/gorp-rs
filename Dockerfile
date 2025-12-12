@@ -94,8 +94,9 @@ ENV HOME=/home/gorp
 
 # Volumes for persistent data (XDG-compliant paths)
 # Mount .config/claude to persist Claude Code auth across container restarts
+# Mount .claude for Claude CLI settings (API key)
 # MCP tool data: chronicle, memory, toki, pagen
-VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/workspace"]
+VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/workspace"]
 
 # Expose webhook port
 EXPOSE 13000
