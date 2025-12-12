@@ -401,4 +401,19 @@ impl SessionStore {
         )?;
         Ok(())
     }
+
+    /// Reset a channel's session (new session ID and started=0)
+    pub fn reset_session(&self, channel_name: &str, new_session_id: &str) -> Result<()> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "UPDATE channels SET session_id = ?1, started = 0 WHERE channel_name = ?2",
+            params![new_session_id, channel_name],
+        )?;
+        tracing::info!(
+            channel_name = %channel_name,
+            new_session_id = %new_session_id,
+            "Channel session reset"
+        );
+        Ok(())
+    }
 }

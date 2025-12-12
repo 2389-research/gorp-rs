@@ -1339,6 +1339,46 @@ async fn handle_command(
                 }
             }
         }
+        "reset" => {
+            // Reset Claude session for this channel (generates new session ID)
+            if is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "❌ The !reset command only works in channel rooms.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            let Some(channel) = session_store.get_by_room(room.room_id().as_str())? else {
+                room.send(RoomMessageEventContent::text_plain(
+                    "No channel attached to this room.",
+                ))
+                .await?;
+                return Ok(());
+            };
+
+            // Generate new session ID and reset started flag
+            let new_session_id = uuid::Uuid::new_v4().to_string();
+            session_store.reset_session(&channel.channel_name, &new_session_id)?;
+
+            room.send(RoomMessageEventContent::text_plain(&format!(
+                "🔄 Session Reset\n\n\
+                Channel: {}\n\
+                New Session ID: {}\n\n\
+                Claude will start fresh on next message.\n\
+                MCP tools and settings will be reloaded.",
+                channel.channel_name,
+                &new_session_id[..8]
+            )))
+            .await?;
+
+            tracing::info!(
+                channel = %channel.channel_name,
+                old_session = %channel.session_id,
+                new_session = %new_session_id,
+                "Session reset by user"
+            );
+        }
         _ => {
             let help_msg = if is_dm {
                 "Unknown command. Available commands:\n\
@@ -1352,6 +1392,7 @@ async fn handle_command(
                 "Unknown command. Available commands:\n\
                 !status - Show channel info\n\
                 !debug - Toggle tool usage display\n\
+                !reset - Reset Claude session (reload MCP tools)\n\
                 !schedule <time> <prompt> - Schedule a prompt\n\
                 !schedule list - View schedules\n\
                 !leave - Bot leaves room\n\
