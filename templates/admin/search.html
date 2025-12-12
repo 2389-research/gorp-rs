@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6">
+    <div class="mb-6">
+        <h2 class="text-2xl font-bold text-gray-900 mb-4">Search Workspace</h2>
+
+        <!-- Search form -->
+        <form method="get" action="/admin/search" class="mb-6">
+            <div class="flex gap-4">
+                <input
+                    type="text"
+                    name="q"
+                    value="{{ query }}"
+                    placeholder="Search for files and content across all channels..."
+                    class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    autofocus
+                />
+                <button
+                    type="submit"
+                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                    Search
+                </button>
+            </div>
+            <p class="mt-2 text-sm text-gray-600">
+                Searches file names and content across all channel workspaces
+            </p>
+        </form>
+    </div>
+
+    {% if search_performed %}
+        {% if results.is_empty() %}
+            <!-- No results found -->
+            <div class="text-center py-12">
+                <svg class="mx-auto h-16 w-16 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+                <h3 class="text-lg font-medium text-gray-900 mb-2">No results found</h3>
+                <p class="text-gray-600">Try a different search term or check your spelling</p>
+            </div>
+        {% else %}
+            <!-- Results header -->
+            <div class="mb-4">
+                <p class="text-sm text-gray-600">
+                    Found {{ results.len() }} result{% if results.len() != 1 %}s{% endif %} for "{{ query }}"
+                </p>
+            </div>
+
+            <!-- Results list -->
+            <div class="space-y-4">
+                {% for result in results %}
+                <div class="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition">
+                    <div class="flex items-start justify-between mb-2">
+                        <div class="flex-1">
+                            <!-- Channel badge -->
+                            <span class="inline-block px-2 py-1 text-xs font-semibold text-blue-700 bg-blue-100 rounded mb-2">
+                                {{ result.channel_name }}
+                            </span>
+
+                            <!-- File name and path -->
+                            <h3 class="text-lg font-medium text-gray-900 mb-1">
+                                <a href="/admin/browse/{{ result.channel_name }}/{{ result.file_path|urlencode }}"
+                                   class="hover:text-blue-600">
+                                    {{ result.file_name }}
+                                </a>
+                            </h3>
+
+                            <p class="text-sm text-gray-600 mb-2">
+                                <svg class="inline w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1H8a3 3 0 00-3 3v1.5a1.5 1.5 0 01-3 0V6z" clip-rule="evenodd"/>
+                                    <path d="M6 12a2 2 0 012-2h8a2 2 0 012 2v2a2 2 0 01-2 2H2h2a2 2 0 002-2v-2z"/>
+                                </svg>
+                                {{ result.file_path }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Match preview -->
+                    {% if !result.match_preview.is_empty() %}
+                    <div class="bg-gray-50 rounded p-3 border-l-4 border-blue-500">
+                        <div class="flex items-start">
+                            {% if let Some(line_num) = result.line_number %}
+                            <span class="inline-block text-xs text-gray-500 font-mono mr-3 mt-1">
+                                Line {{ line_num }}:
+                            </span>
+                            {% endif %}
+                            <pre class="text-sm text-gray-800 font-mono flex-1 whitespace-pre-wrap break-words">{{ result.match_preview }}</pre>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Results limit warning -->
+            {% if results.len() >= 100 %}
+            <div class="mt-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <p class="text-sm text-yellow-800">
+                    <svg class="inline w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+                    </svg>
+                    Showing first 100 results. Refine your search for more specific results.
+                </p>
+            </div>
+            {% endif %}
+        {% endif %}
+    {% else %}
+        <!-- Search tips when no search performed -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-6">
+            <h3 class="text-lg font-medium text-blue-900 mb-3">Search Tips</h3>
+            <ul class="list-disc list-inside space-y-2 text-blue-800">
+                <li>Search queries are case-insensitive</li>
+                <li>Results include both file names and file content</li>
+                <li>Only text files are searched (binary files are skipped)</li>
+                <li>Hidden files and .git directories are excluded</li>
+                <li>Results are limited to the first 100 matches</li>
+            </ul>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

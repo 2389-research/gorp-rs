@@ -212,6 +212,25 @@ pub struct MatrixDirTemplate {
     pub debug_enabled: bool,
 }
 
+/// Search result entry
+#[derive(Clone)]
+pub struct SearchResult {
+    pub channel_name: String,
+    pub file_path: String,       // Relative path within channel
+    pub file_name: String,
+    pub match_preview: String,   // Context around match
+    pub line_number: Option<u32>,
+}
+
+#[derive(Template)]
+#[template(path = "admin/search.html")]
+pub struct SearchTemplate {
+    pub title: String,
+    pub query: String,
+    pub results: Vec<SearchResult>,
+    pub search_performed: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

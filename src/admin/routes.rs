@@ -18,7 +18,8 @@ use crate::admin::templates::{
     BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate,
     DashboardTemplate, DirectoryTemplate, ErrorEntry, FileTemplate, HealthTemplate,
     LogViewerTemplate, MarkdownTemplate, MatrixDirTemplate, MatrixFileEntry, MessageEntry,
-    MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
+    MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, SearchResult,
+    SearchTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -69,6 +70,7 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/browse", get(browse_root))
         .route("/browse/*path", get(browse_path))
         .route("/render/*path", get(render_markdown))
+        .route("/search", get(search_workspace))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -1606,4 +1608,271 @@ async fn render_markdown(
         parent_path,
         content_html: html_output,
     })
+}
+
+// ============================================================================
+// Workspace Search Handler
+// ============================================================================
+
+/// Query parameter for search
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// Maximum number of search results to return
+const MAX_SEARCH_RESULTS: usize = 100;
+
+/// Maximum file size to search (100KB)
+const MAX_SEARCH_FILE_SIZE: u64 = 100 * 1024;
+
+/// Maximum number of files to scan
+const MAX_FILES_TO_SCAN: usize = 1000;
+
+/// Context lines to show around matches
+const SEARCH_CONTEXT_CHARS: usize = 150;
+
+/// Search across all channel workspaces for files and content
+async fn search_workspace(
+    State(state): State<AdminState>,
+    axum::extract::Query(query): axum::extract::Query<SearchQuery>,
+) -> SearchTemplate {
+    let search_query = query.q.trim();
+
+    // Return empty search form if no query
+    if search_query.is_empty() {
+        return SearchTemplate {
+            title: "Search Workspace - gorp Admin".to_string(),
+            query: String::new(),
+            results: Vec::new(),
+            search_performed: false,
+        };
+    }
+
+    // Get all channels
+    let channels = match state.session_store.list_all() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list channels for search");
+            Vec::new()
+        }
+    };
+
+    let mut results: Vec<SearchResult> = Vec::new();
+    let mut files_scanned = 0;
+    let search_query_lower = search_query.to_lowercase();
+
+    // Search each channel workspace
+    for channel in channels {
+        // Validate directory path
+        if let Err(e) = channel.validate_directory() {
+            tracing::warn!(
+                channel = %channel.channel_name,
+                error = %e,
+                "Skipping channel with invalid directory in search"
+            );
+            continue;
+        }
+
+        let channel_dir = Path::new(&channel.directory);
+        if !channel_dir.exists() || !channel_dir.is_dir() {
+            continue;
+        }
+
+        // Walk the directory tree
+        let walker = match std::fs::read_dir(channel_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!(
+                    channel = %channel.channel_name,
+                    error = %e,
+                    "Failed to read channel directory for search"
+                );
+                continue;
+            }
+        };
+
+        // Recursively search this channel
+        search_directory_recursive(
+            walker,
+            channel_dir,
+            &channel.channel_name,
+            &search_query_lower,
+            &mut results,
+            &mut files_scanned,
+        );
+
+        // Stop if we've scanned too many files
+        if files_scanned >= MAX_FILES_TO_SCAN {
+            break;
+        }
+
+        // Stop if we've found enough results
+        if results.len() >= MAX_SEARCH_RESULTS {
+            break;
+        }
+    }
+
+    // Sort results by channel name, then file path
+    results.sort_by(|a, b| {
+        a.channel_name
+            .cmp(&b.channel_name)
+            .then_with(|| a.file_path.cmp(&b.file_path))
+    });
+
+    // Limit to MAX_SEARCH_RESULTS
+    results.truncate(MAX_SEARCH_RESULTS);
+
+    SearchTemplate {
+        title: format!("Search: {} - gorp Admin", search_query),
+        query: search_query.to_string(),
+        results,
+        search_performed: true,
+    }
+}
+
+/// Recursively search a directory
+fn search_directory_recursive(
+    entries: std::fs::ReadDir,
+    base_dir: &Path,
+    channel_name: &str,
+    query: &str,
+    results: &mut Vec<SearchResult>,
+    files_scanned: &mut usize,
+) {
+    for entry in entries {
+        // Stop if we've scanned enough files or found enough results
+        if *files_scanned >= MAX_FILES_TO_SCAN || results.len() >= MAX_SEARCH_RESULTS {
+            return;
+        }
+
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+
+        // Skip hidden files/directories
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        if metadata.is_dir() {
+            // Recursively search subdirectory
+            if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                search_directory_recursive(
+                    sub_entries,
+                    base_dir,
+                    channel_name,
+                    query,
+                    results,
+                    files_scanned,
+                );
+            }
+        } else if metadata.is_file() {
+            *files_scanned += 1;
+
+            // Calculate relative path within channel
+            let relative_path = match path.strip_prefix(base_dir) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                Err(_) => continue,
+            };
+
+            let file_name_lower = name.to_lowercase();
+
+            // Check if filename matches
+            if file_name_lower.contains(query) {
+                results.push(SearchResult {
+                    channel_name: channel_name.to_string(),
+                    file_path: relative_path.clone(),
+                    file_name: name.to_string(),
+                    match_preview: format!("Filename matches: {}", name),
+                    line_number: None,
+                });
+                continue;
+            }
+
+            // Skip files that are too large
+            if metadata.len() > MAX_SEARCH_FILE_SIZE {
+                continue;
+            }
+
+            // Try to search file content
+            if let Some(result) =
+                search_file_content(&path, &relative_path, &name, channel_name, query)
+            {
+                results.push(result);
+            }
+        }
+    }
+}
+
+/// Search a file's content for the query
+fn search_file_content(
+    file_path: &Path,
+    relative_path: &str,
+    file_name: &str,
+    channel_name: &str,
+    query: &str,
+) -> Option<SearchResult> {
+    // Try to read file as text
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => {
+            // Try to detect if it's binary
+            if let Ok(bytes) = std::fs::read(file_path) {
+                // Check for null bytes (common in binary files)
+                if bytes.iter().take(512).any(|&b| b == 0) {
+                    return None; // Skip binary files
+                }
+            }
+            return None;
+        }
+    };
+
+    let content_lower = content.to_lowercase();
+
+    // Find first match
+    if let Some(match_pos) = content_lower.find(query) {
+        // Find the line number
+        let line_number = content[..match_pos].lines().count() as u32 + 1;
+
+        // Extract context around the match
+        let start = match_pos.saturating_sub(SEARCH_CONTEXT_CHARS / 2);
+        let end = (match_pos + query.len() + SEARCH_CONTEXT_CHARS / 2).min(content.len());
+
+        let mut preview = content[start..end].to_string();
+
+        // Add ellipsis if truncated
+        if start > 0 {
+            preview = format!("...{}", preview);
+        }
+        if end < content.len() {
+            preview = format!("{}...", preview);
+        }
+
+        // Trim to single line if multi-line
+        if let Some(first_line) = preview.lines().next() {
+            preview = first_line.to_string();
+        }
+
+        Some(SearchResult {
+            channel_name: channel_name.to_string(),
+            file_path: relative_path.to_string(),
+            file_name: file_name.to_string(),
+            match_preview: preview,
+            line_number: Some(line_number),
+        })
+    } else {
+        None
+    }
 }
