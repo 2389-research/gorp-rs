@@ -1,22 +1,33 @@
 # ABOUTME: Multi-stage Dockerfile for gorp Matrix-Claude bridge
-# ABOUTME: Builds Rust binary and creates minimal runtime image with XDG directory structure
+# ABOUTME: Uses dependency caching for fast rebuilds, creates minimal runtime image
 
-# Build stage
+# Build stage - cache dependencies separately from source
 FROM rustlang/rust:nightly-bookworm as builder
 
 WORKDIR /app
 
-# Copy manifests
+# Copy manifests first (changes rarely)
 COPY Cargo.toml Cargo.lock ./
 
-# Copy source code and templates (Askama compiles templates into binary)
+# Create dummy source to build dependencies only
+RUN mkdir src && \
+    echo 'fn main() { println!("dummy"); }' > src/main.rs && \
+    mkdir templates && \
+    echo '' > templates/.gitkeep
+
+# Build dependencies (this layer is cached unless Cargo.toml/lock changes)
+RUN cargo build --release && \
+    rm -rf src templates
+
+# Now copy real source code and templates
 COPY src ./src
 COPY templates ./templates
-
-# Copy config.toml.example (needed for include_str! at compile time)
 COPY config.toml.example ./config.toml.example
 
-# Build release binary
+# Touch main.rs to ensure rebuild (cargo sometimes skips if timestamp is old)
+RUN touch src/main.rs
+
+# Build the actual binary (deps are already cached)
 RUN cargo build --release
 
 # Runtime stage
