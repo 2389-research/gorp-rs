@@ -14,9 +14,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::admin::templates::{
-    ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate, DashboardTemplate,
-    ErrorEntry, HealthTemplate, LogViewerTemplate, MessageEntry, MessageHistoryTemplate,
-    ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, ToastTemplate,
+    BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate,
+    DashboardTemplate, DirectoryTemplate, ErrorEntry, HealthTemplate, LogViewerTemplate,
+    MessageEntry, MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow, SchedulesTemplate,
+    ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -63,6 +64,8 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/schedules/{id}/cancel", post(schedule_cancel))
         .route("/schedules/{id}/pause", post(schedule_pause))
         .route("/schedules/{id}/resume", post(schedule_resume))
+        .route("/browse", get(browse_root))
+        .route("/browse/*path", get(browse_path))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -1074,4 +1077,210 @@ async fn schedule_create(
             is_error: true,
         },
     }
+}
+
+// ============================================================================
+// Workspace Browser Handlers
+// ============================================================================
+
+/// Maximum file size to display in browser (100KB)
+const MAX_DISPLAY_FILE_SIZE: u64 = 100 * 1024;
+
+/// Browse workspace root (list all channel directories)
+async fn browse_root(State(state): State<AdminState>) -> Result<DirectoryTemplate, ToastTemplate> {
+    browse_directory(state, "").await
+}
+
+/// Browse a specific path in the workspace
+async fn browse_path(
+    State(state): State<AdminState>,
+    AxumPath(path): AxumPath<String>,
+) -> Result<DirectoryTemplate, ToastTemplate> {
+    // If it's a file, show file content instead
+    let workspace_root = Path::new(&state.config.workspace.path);
+    let full_path = validate_and_resolve_path(workspace_root, &path)?;
+
+    if full_path.is_file() {
+        return Err(ToastTemplate {
+            message: "Use file viewer (not yet implemented)".to_string(),
+            is_error: true,
+        });
+    }
+
+    browse_directory(state, &path).await
+}
+
+/// Validate path and prevent directory traversal attacks
+fn validate_and_resolve_path(workspace_root: &Path, user_path: &str) -> Result<std::path::PathBuf, ToastTemplate> {
+    // Reject paths with ".." to prevent traversal
+    if user_path.contains("..") {
+        return Err(ToastTemplate {
+            message: "Invalid path: contains path traversal".to_string(),
+            is_error: true,
+        });
+    }
+
+    // Build the full path
+    let full_path = if user_path.is_empty() {
+        workspace_root.to_path_buf()
+    } else {
+        workspace_root.join(user_path)
+    };
+
+    // Canonicalize both paths to resolve symlinks and validate
+    let canonical_workspace = workspace_root
+        .canonicalize()
+        .map_err(|e| ToastTemplate {
+            message: format!("Workspace path error: {}", e),
+            is_error: true,
+        })?;
+
+    let canonical_full = full_path
+        .canonicalize()
+        .map_err(|e| ToastTemplate {
+            message: format!("Path not found: {}", e),
+            is_error: true,
+        })?;
+
+    // Verify the resolved path is within workspace
+    if !canonical_full.starts_with(&canonical_workspace) {
+        return Err(ToastTemplate {
+            message: "Access denied: path outside workspace".to_string(),
+            is_error: true,
+        });
+    }
+
+    Ok(canonical_full)
+}
+
+/// Format file size in human-readable format
+fn format_file_size(size: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if size >= GB {
+        format!("{:.2} GB", size as f64 / GB as f64)
+    } else if size >= MB {
+        format!("{:.2} MB", size as f64 / MB as f64)
+    } else if size >= KB {
+        format!("{:.2} KB", size as f64 / KB as f64)
+    } else {
+        format!("{} B", size)
+    }
+}
+
+/// Format modified time in human-readable format
+fn format_modified_time(modified: std::time::SystemTime) -> String {
+    use chrono::{DateTime, Local};
+    let datetime: DateTime<Local> = modified.into();
+    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Browse a directory and return listing
+async fn browse_directory(
+    state: AdminState,
+    relative_path: &str,
+) -> Result<DirectoryTemplate, ToastTemplate> {
+    let workspace_root = Path::new(&state.config.workspace.path);
+    let full_path = validate_and_resolve_path(workspace_root, relative_path)?;
+
+    if !full_path.is_dir() {
+        return Err(ToastTemplate {
+            message: "Not a directory".to_string(),
+            is_error: true,
+        });
+    }
+
+    // Read directory entries
+    let entries = std::fs::read_dir(&full_path).map_err(|e| ToastTemplate {
+        message: format!("Failed to read directory: {}", e),
+        is_error: true,
+    })?;
+
+    let mut browse_entries: Vec<BrowseEntry> = Vec::new();
+
+    for entry in entries {
+        let entry = entry.map_err(|e| ToastTemplate {
+            message: format!("Failed to read entry: {}", e),
+            is_error: true,
+        })?;
+
+        let metadata = entry.metadata().map_err(|e| ToastTemplate {
+            message: format!("Failed to read metadata: {}", e),
+            is_error: true,
+        })?;
+
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().to_string();
+
+        // Skip hidden files/directories (starting with .)
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let is_dir = metadata.is_dir();
+        let (size_bytes, size_display) = if is_dir {
+            (None, "-".to_string())
+        } else {
+            let bytes = metadata.len();
+            (Some(bytes), format_file_size(bytes))
+        };
+
+        let modified = metadata
+            .modified()
+            .map(format_modified_time)
+            .unwrap_or_else(|_| "Unknown".to_string());
+
+        // Build URL path
+        let url_path = if relative_path.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", relative_path, name)
+        };
+
+        browse_entries.push(BrowseEntry {
+            name,
+            path: url_path,
+            is_dir,
+            size_bytes,
+            size_display,
+            modified,
+        });
+    }
+
+    // Sort: directories first, then files, alphabetically within each group
+    browse_entries.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    // Calculate parent path for breadcrumb navigation
+    let parent_path = if relative_path.is_empty() {
+        None
+    } else {
+        // Get parent by removing last segment
+        let segments: Vec<&str> = relative_path.split('/').collect();
+        if segments.len() == 1 {
+            Some(String::new()) // Back to root
+        } else {
+            Some(segments[..segments.len() - 1].join("/"))
+        }
+    };
+
+    let current_path = if relative_path.is_empty() {
+        "Workspace Root".to_string()
+    } else {
+        relative_path.to_string()
+    };
+
+    Ok(DirectoryTemplate {
+        title: format!("Browse: {} - gorp Admin", current_path),
+        current_path,
+        parent_path,
+        entries: browse_entries,
+    })
 }

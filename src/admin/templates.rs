@@ -151,6 +151,36 @@ pub struct ScheduleFormTemplate {
     pub channels: Vec<String>,
 }
 
+/// Browse entry for workspace directory listing
+#[derive(Clone)]
+pub struct BrowseEntry {
+    pub name: String,
+    pub path: String,        // URL path for linking
+    pub is_dir: bool,
+    pub size_bytes: Option<u64>,   // File size in bytes (None for dirs)
+    pub size_display: String,      // Human-readable size
+    pub modified: String,    // Human-readable date
+}
+
+#[derive(Template)]
+#[template(path = "admin/browse/directory.html")]
+pub struct DirectoryTemplate {
+    pub title: String,
+    pub current_path: String,  // Display path
+    pub parent_path: Option<String>,  // Link to parent (None at root)
+    pub entries: Vec<BrowseEntry>,
+}
+
+#[derive(Template)]
+#[template(path = "admin/browse/file.html")]
+pub struct FileTemplate {
+    pub title: String,
+    pub path: String,
+    pub content: String,      // File content (truncated if too large)
+    pub size: u64,
+    pub is_truncated: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
