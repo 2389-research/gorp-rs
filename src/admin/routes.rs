@@ -68,8 +68,8 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/schedules/{id}/pause", post(schedule_pause))
         .route("/schedules/{id}/resume", post(schedule_resume))
         .route("/browse", get(browse_root))
-        .route("/browse/*path", get(browse_path))
-        .route("/render/*path", get(render_markdown))
+        .route("/browse/{*path}", get(browse_path))
+        .route("/render/{*path}", get(render_markdown))
         .route("/search", get(search_workspace))
 }
 

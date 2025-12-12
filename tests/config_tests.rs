@@ -1,17 +1,30 @@
 // ABOUTME: Tests for configuration loading and validation
 // ABOUTME: Verifies TOML parsing, env var overrides, and required field validation
+//
+// NOTE: These tests use environment variables and may fail when run in parallel.
+// Run with: cargo test --test config_tests -- --test-threads=1
 
 use std::io::Write;
 
-#[test]
-fn test_config_loads_from_toml_file() {
-    // Clear any env vars that might contaminate this test
+/// Helper to clear all config-related env vars
+fn clear_config_env_vars() {
+    std::env::remove_var("GORP_CONFIG_PATH");
     std::env::remove_var("MATRIX_HOME_SERVER");
     std::env::remove_var("MATRIX_PASSWORD");
     std::env::remove_var("MATRIX_USER_ID");
+    std::env::remove_var("MATRIX_ACCESS_TOKEN");
+    std::env::remove_var("MATRIX_DEVICE_NAME");
+    std::env::remove_var("ALLOWED_USERS");
+}
+
+#[test]
+fn test_config_loads_from_toml_file() {
+    // Clear ALL config env vars to prevent test contamination
+    clear_config_env_vars();
 
     let temp_dir = std::env::temp_dir().join("gorp-config-test");
-    let _ = std::fs::create_dir_all(&temp_dir);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
     let config_path = temp_dir.join("config.toml");
 
     let config_content = r#"
@@ -47,14 +60,18 @@ path = "./test-workspace"
     assert_eq!(config.webhook.port, 8080);
 
     // Cleanup
-    std::env::remove_var("GORP_CONFIG_PATH");
+    clear_config_env_vars();
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_config_env_var_overrides() {
+    // Clear ALL config env vars first
+    clear_config_env_vars();
+
     let temp_dir = std::env::temp_dir().join("gorp-config-env-test");
-    let _ = std::fs::create_dir_all(&temp_dir);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
     let config_path = temp_dir.join("config.toml");
 
     let config_content = r#"
@@ -88,8 +105,6 @@ path = "./workspace"
     assert_eq!(config.matrix.password, Some("override-password".to_string()));
 
     // Cleanup
-    std::env::remove_var("GORP_CONFIG_PATH");
-    std::env::remove_var("MATRIX_HOME_SERVER");
-    std::env::remove_var("MATRIX_PASSWORD");
+    clear_config_env_vars();
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

@@ -2,6 +2,30 @@
 // ABOUTME: Templates are compiled into binary at build time
 
 use askama::Template;
+use axum::{
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
+};
+
+/// Macro to implement IntoResponse for askama templates
+/// Replaces the removed askama_axum crate functionality
+macro_rules! impl_into_response {
+    ($($template:ty),* $(,)?) => {
+        $(
+            impl IntoResponse for $template {
+                fn into_response(self) -> Response {
+                    match self.render() {
+                        Ok(html) => Html(html).into_response(),
+                        Err(err) => {
+                            tracing::error!(error = %err, "Failed to render template");
+                            (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", err)).into_response()
+                        }
+                    }
+                }
+            }
+        )*
+    };
+}
 
 #[derive(Template)]
 #[template(path = "admin/dashboard.html")]
@@ -231,6 +255,25 @@ pub struct SearchTemplate {
     pub results: Vec<SearchResult>,
     pub search_performed: bool,
 }
+
+// Implement IntoResponse for all template types
+impl_into_response!(
+    DashboardTemplate,
+    ConfigTemplate,
+    ToastTemplate,
+    ChannelListTemplate,
+    ChannelDetailTemplate,
+    HealthTemplate,
+    SchedulesTemplate,
+    LogViewerTemplate,
+    MessageHistoryTemplate,
+    ScheduleFormTemplate,
+    DirectoryTemplate,
+    FileTemplate,
+    MarkdownTemplate,
+    MatrixDirTemplate,
+    SearchTemplate,
+);
 
 #[cfg(test)]
 mod tests {

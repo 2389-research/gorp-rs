@@ -174,9 +174,18 @@ fn expand_tilde(path: &str) -> String {
 
 impl Config {
     /// Find the config file, checking multiple locations in order:
-    /// 1. ./config.toml (current directory - for development)
-    /// 2. ~/.config/gorp/config.toml (XDG config dir)
+    /// 1. GORP_CONFIG_PATH env var (if set)
+    /// 2. ./config.toml (current directory - for development)
+    /// 3. ~/.config/gorp/config.toml (XDG config dir)
     fn find_config_file() -> Option<PathBuf> {
+        // Check GORP_CONFIG_PATH env var first (useful for testing and deployment)
+        if let Ok(env_path) = std::env::var("GORP_CONFIG_PATH") {
+            let path = PathBuf::from(&env_path);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
         let local_config = PathBuf::from("config.toml");
         if local_config.exists() {
             return Some(local_config);
@@ -191,7 +200,7 @@ impl Config {
     }
 
     /// Load configuration from config.toml with environment variable overrides
-    /// Searches: ./config.toml, then ~/.config/gorp/config.toml
+    /// Searches: GORP_CONFIG_PATH env var, ./config.toml, then ~/.config/gorp/config.toml
     pub fn load() -> Result<Self> {
         // Try to find and load config file
         let mut config = if let Some(config_path) = Self::find_config_file() {

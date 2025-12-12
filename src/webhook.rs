@@ -1,5 +1,5 @@
 // ABOUTME: HTTP webhook server for injecting prompts into Claude sessions
-// ABOUTME: Provides POST /webhook/session/:id endpoint for external triggers like cron jobs
+// ABOUTME: Provides POST /webhook/session/{id} endpoint for external triggers like cron jobs
 
 use anyhow::Result;
 use axum::{
@@ -62,7 +62,7 @@ pub async fn start_webhook_server(
     };
 
     let webhook_routes = Router::new()
-        .route("/webhook/session/:session_id", post(webhook_handler))
+        .route("/webhook/session/{session_id}", post(webhook_handler))
         .with_state(Arc::new(state.clone()));
 
     // Create scheduler store here because it needs the database connection from session_store.
