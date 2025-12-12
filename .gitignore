@@ -22,3 +22,7 @@ workspace
 !example/workspace
 *.db
 output.txt
+mcp-data/
+data/
+config/
+claude-config/

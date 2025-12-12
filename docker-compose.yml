@@ -32,6 +32,12 @@ services:
       # Workspace directory for Claude sessions
       - ./workspace:/home/gorp/workspace
 
+      # MCP tool data directories
+      - ./mcp-data/chronicle:/home/gorp/.local/share/chronicle
+      - ./mcp-data/memory:/home/gorp/.local/share/memory
+      - ./mcp-data/toki:/home/gorp/.local/share/toki
+      - ./mcp-data/pagen:/home/gorp/.local/share/pagen
+
     # Webhook port
     ports:
       - "13000:13000"
