@@ -158,3 +158,37 @@ pub async fn request_verification(_client: &Client, user_id: &str) -> Result<()>
 
     Ok(())
 }
+
+/// Create a direct message room with a user
+pub async fn create_dm_room(client: &Client, user_id: &OwnedUserId) -> Result<OwnedRoomId> {
+    tracing::info!(user_id = %user_id, "Creating DM room");
+
+    // Enable E2E encryption by default
+    let encryption_event = InitialStateEvent::with_empty_state_key(
+        RoomEncryptionEventContent::with_recommended_defaults(),
+    );
+
+    let request = assign!(CreateRoomRequest::new(), {
+        is_direct: true,
+        visibility: matrix_sdk::ruma::api::client::room::Visibility::Private,
+        preset: Some(matrix_sdk::ruma::api::client::room::create_room::v3::RoomPreset::TrustedPrivateChat),
+        initial_state: vec![encryption_event.to_raw_any()],
+        invite: vec![user_id.clone()],
+    });
+
+    let room = client
+        .create_room(request)
+        .await
+        .context("Failed to create DM room")?;
+
+    let room_id = room.room_id().to_owned();
+
+    // Mark as direct message room
+    if let Err(e) = room.set_is_direct(true).await {
+        tracing::warn!(error = %e, "Failed to mark room as direct");
+    }
+
+    tracing::info!(%room_id, user_id = %user_id, "DM room created");
+
+    Ok(room_id)
+}

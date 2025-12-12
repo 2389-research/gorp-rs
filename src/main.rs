@@ -122,7 +122,7 @@ fn is_valid_recovery_key_format(key: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
 }
 
-/// Notify allowed users that the bot is ready
+/// Notify allowed users that the bot is ready (creates DM if needed)
 async fn notify_ready(client: &Client, config: &Config) {
     let ready_messages = [
         "🌅 *stretches digital limbs* I have awakened. The bridge between worlds is open.",
@@ -132,12 +132,25 @@ async fn notify_ready(client: &Client, config: &Config) {
         "🔮 The oracle is online. Ask, and you shall receive (code reviews).",
     ];
 
+    // New user welcome message
+    let welcome_message = "👋 **Welcome to gorp!**\n\n\
+        I'm your AI assistant with persistent sessions and workspace directories.\n\n\
+        **Get started with these recommended channels:**\n\n\
+        ```\n\
+        !create pa        # Personal assistant for email, calendar, tasks\n\
+        !create news      # News aggregation and curation\n\
+        !create research  # Research projects with auditable citations\n\
+        !create weather   # Weather updates and forecasts\n\
+        ```\n\n\
+        Each channel gets its own workspace with pre-configured settings.\n\n\
+        Type `!help` for all commands or `!list` to see your channels.";
+
     // Pick a message based on current time for variety
     let idx = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as usize % ready_messages.len())
         .unwrap_or(0);
-    let message = ready_messages[idx];
+    let ready_message = ready_messages[idx];
 
     for user_id_str in &config.matrix.allowed_users {
         let user_id: OwnedUserId = match user_id_str.parse() {
@@ -163,20 +176,46 @@ async fn notify_ready(client: &Client, config: &Config) {
             }
         }
 
-        if let Some(room) = dm_room {
-            match room
-                .send(RoomMessageEventContent::text_plain(message))
-                .await
-            {
-                Ok(_) => {
-                    tracing::info!(user = %user_id, "Sent ready notification");
+        let (room, is_new) = if let Some(room) = dm_room {
+            (room, false)
+        } else {
+            // Create DM room for this user
+            tracing::info!(user = %user_id, "No DM room found, creating one");
+            match matrix_client::create_dm_room(client, &user_id).await {
+                Ok(room_id) => {
+                    // Get the room we just created
+                    match client.get_room(&room_id) {
+                        Some(room) => (room, true),
+                        None => {
+                            tracing::error!(user = %user_id, "Created DM room but couldn't retrieve it");
+                            continue;
+                        }
+                    }
                 }
                 Err(e) => {
-                    tracing::warn!(user = %user_id, error = %e, "Failed to send ready notification");
+                    tracing::error!(user = %user_id, error = %e, "Failed to create DM room");
+                    continue;
                 }
             }
-        } else {
-            tracing::debug!(user = %user_id, "No existing DM room, skipping notification");
+        };
+
+        // Send appropriate message
+        let message = if is_new { welcome_message } else { ready_message };
+
+        match room
+            .send(RoomMessageEventContent::text_plain(message))
+            .await
+        {
+            Ok(_) => {
+                if is_new {
+                    tracing::info!(user = %user_id, "Sent welcome message to new DM");
+                } else {
+                    tracing::info!(user = %user_id, "Sent ready notification");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(user = %user_id, error = %e, "Failed to send notification");
+            }
         }
     }
 }
