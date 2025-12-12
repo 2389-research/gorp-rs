@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "parallel-search": {
+    "gorp": {
       "type": "http",
-      "url": "https://search-mcp.parallel.ai/mcp"
+      "url": "http://localhost:13000/mcp"
     }
   }
 }

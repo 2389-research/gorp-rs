@@ -121,6 +121,19 @@ mkdir -p "$APP_DIR/mcp-data/pagen"
 
 echo "  Created directory: app-data-$INSTANCE_NUM/"
 
+# Copy workspace template if it exists
+TEMPLATE_DIR="$PROJECT_DIR/example/workspace/template"
+if [ -d "$TEMPLATE_DIR" ]; then
+    cp -r "$TEMPLATE_DIR" "$APP_DIR/workspace/"
+    # Update .mcp.json with correct port for this instance
+    MCP_JSON="$APP_DIR/workspace/template/.mcp.json"
+    if [ -f "$MCP_JSON" ]; then
+        sed -i.bak "s/localhost:13000/localhost:$PORT/g" "$MCP_JSON"
+        rm -f "$MCP_JSON.bak"
+    fi
+    echo "  Copied workspace template"
+fi
+
 # Create config.toml
 cat > "$APP_DIR/config/config.toml" << EOF
 # gorp configuration for instance $INSTANCE_NUM
