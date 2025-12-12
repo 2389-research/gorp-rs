@@ -19,7 +19,13 @@ while [ -d "$PROJECT_DIR/app-data-$INSTANCE_NUM" ]; do
 done
 
 read -p "Instance number [$INSTANCE_NUM]: " INPUT_NUM
-INSTANCE_NUM=${INPUT_NUM:-$INSTANCE_NUM}
+if [ -n "$INPUT_NUM" ]; then
+    if ! [[ "$INPUT_NUM" =~ ^[0-9]+$ ]]; then
+        echo "Error: Instance number must be numeric"
+        exit 1
+    fi
+    INSTANCE_NUM=$INPUT_NUM
+fi
 
 APP_DIR="$PROJECT_DIR/app-data-$INSTANCE_NUM"
 PORT=$((13000 + INSTANCE_NUM))
@@ -44,6 +50,10 @@ if [ -z "$BOT_USER_ID" ]; then
     echo "Error: Bot user ID is required"
     exit 1
 fi
+if ! [[ "$BOT_USER_ID" =~ ^@[^:]+:.+$ ]]; then
+    echo "Error: Invalid Matrix user ID format. Expected @user:server.com"
+    exit 1
+fi
 
 # Extract homeserver from user ID
 HOMESERVER=$(echo "$BOT_USER_ID" | sed 's/.*:\(.*\)/\1/')
@@ -65,6 +75,10 @@ if [ -z "$ROOM_PREFIX" ]; then
     echo "Error: Room prefix is required"
     exit 1
 fi
+if ! [[ "$ROOM_PREFIX" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "Error: Room prefix must be alphanumeric (letters, numbers, underscore, hyphen)"
+    exit 1
+fi
 
 echo ""
 echo "--- User Configuration ---"
@@ -73,6 +87,10 @@ echo ""
 read -p "Allowed Matrix User ID (e.g., @you:matrix.org): " ALLOWED_USER
 if [ -z "$ALLOWED_USER" ]; then
     echo "Error: Allowed user is required"
+    exit 1
+fi
+if ! [[ "$ALLOWED_USER" =~ ^@[^:]+:.+$ ]]; then
+    echo "Error: Invalid Matrix user ID format. Expected @user:server.com"
     exit 1
 fi
 
@@ -134,14 +152,16 @@ path = "/home/gorp/workspace"
 timezone = "America/Chicago"
 EOF
 
-echo "  Created config.toml"
+chmod 600 "$APP_DIR/config/config.toml"
+echo "  Created config.toml (permissions: 600)"
 
 # Create .env file
 cat > "$APP_DIR/.env" << EOF
 ANTHROPIC_API_KEY=$ANTHROPIC_KEY
 EOF
+chmod 600 "$APP_DIR/.env"
 
-echo "  Created .env"
+echo "  Created .env (permissions: 600)"
 
 # Create docker-compose override for this instance
 cat > "$APP_DIR/docker-compose.yml" << EOF

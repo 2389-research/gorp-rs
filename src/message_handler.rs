@@ -1292,12 +1292,34 @@ async fn handle_command(
                         } else {
                             "active"
                         };
-                        // Escape prompt for YAML (simple approach: use literal block if it has special chars)
-                        let prompt_escaped = sched.prompt.replace('\"', "\\\"");
-                        yaml_content.push_str(&format!(
-                            "  - time: \"{}\"\n    prompt: \"{}\"\n    status: {}\n",
-                            time_str, prompt_escaped, status
-                        ));
+                        // Use YAML literal block style (|) for prompts to handle special chars safely
+                        let needs_literal =
+                            sched.prompt.contains(':') ||
+                            sched.prompt.contains('#') ||
+                            sched.prompt.contains('\n') ||
+                            sched.prompt.contains('"') ||
+                            sched.prompt.contains('\'') ||
+                            sched.prompt.contains('[') ||
+                            sched.prompt.contains(']') ||
+                            sched.prompt.contains('{') ||
+                            sched.prompt.contains('}');
+                        if needs_literal {
+                            // Use literal block style with proper indentation
+                            let indented_prompt = sched.prompt
+                                .lines()
+                                .map(|line| format!("      {}", line))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            yaml_content.push_str(&format!(
+                                "  - time: \"{}\"\n    prompt: |\n{}\n    status: {}\n",
+                                time_str, indented_prompt, status
+                            ));
+                        } else {
+                            yaml_content.push_str(&format!(
+                                "  - time: \"{}\"\n    prompt: \"{}\"\n    status: {}\n",
+                                time_str, sched.prompt, status
+                            ));
+                        }
                     }
 
                     // Write to .gorp/schedule.yaml

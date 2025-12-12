@@ -55,5 +55,5 @@ echo "  docker compose -f docker-compose.multi.yml up -d gorp-1 gorp-2"
 echo ""
 echo "Ports:"
 for i in $(seq 1 $NUM_USERS); do
-    echo "  gorp-$i: localhost:1300$i"
+    echo "  gorp-$i: localhost:$((13000 + i))"
 done
