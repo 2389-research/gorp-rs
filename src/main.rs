@@ -15,7 +15,8 @@ use matrix_sdk::{
     config::SyncSettings,
     ruma::{
         events::room::message::{RoomMessageEventContent, SyncRoomMessageEvent},
-        OwnedUserId,
+        events::room::name::RoomNameEventContent,
+        OwnedRoomId, OwnedUserId,
     },
     Client,
 };
@@ -165,6 +166,127 @@ async fn notify_ready(client: &Client, config: &Config) {
             }
         } else {
             tracing::debug!(user = %user_id, "No existing DM room, skipping notification");
+        }
+    }
+}
+
+const SETTING_ROOM_PREFIX: &str = "room_prefix";
+
+/// Check if the room prefix has changed and rename rooms if so
+async fn check_and_rename_rooms_for_prefix_change(
+    client: &Client,
+    config: &Config,
+    session_store: &SessionStore,
+) {
+    let current_prefix = &config.matrix.room_prefix;
+    let stored_prefix = session_store.get_setting(SETTING_ROOM_PREFIX).ok().flatten();
+
+    match &stored_prefix {
+        Some(old_prefix) if old_prefix == current_prefix => {
+            // Prefix unchanged, nothing to do
+            tracing::debug!(prefix = %current_prefix, "Room prefix unchanged");
+        }
+        Some(old_prefix) => {
+            // Prefix changed - rename rooms
+            tracing::info!(
+                old_prefix = %old_prefix,
+                new_prefix = %current_prefix,
+                "Room prefix changed, renaming rooms..."
+            );
+            rename_rooms_with_prefix(client, session_store, old_prefix, current_prefix).await;
+
+            // Update stored prefix
+            if let Err(e) = session_store.set_setting(SETTING_ROOM_PREFIX, current_prefix) {
+                tracing::error!(error = %e, "Failed to save new prefix to database");
+            }
+        }
+        None => {
+            // First run - just store the current prefix
+            tracing::info!(prefix = %current_prefix, "Storing initial room prefix");
+            if let Err(e) = session_store.set_setting(SETTING_ROOM_PREFIX, current_prefix) {
+                tracing::error!(error = %e, "Failed to save initial prefix to database");
+            }
+        }
+    }
+}
+
+/// Rename all gorp-managed rooms from old prefix to new prefix
+async fn rename_rooms_with_prefix(
+    client: &Client,
+    session_store: &SessionStore,
+    old_prefix: &str,
+    new_prefix: &str,
+) {
+    let channels = match session_store.list_all() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list channels for rename");
+            return;
+        }
+    };
+
+    for channel in channels {
+        // Find the room
+        let room_id: OwnedRoomId = match channel.room_id.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    channel = %channel.channel_name,
+                    room_id = %channel.room_id,
+                    error = %e,
+                    "Invalid room ID, skipping"
+                );
+                continue;
+            }
+        };
+
+        let Some(room) = client.get_room(&room_id) else {
+            tracing::warn!(
+                channel = %channel.channel_name,
+                room_id = %channel.room_id,
+                "Room not found (left or kicked?), skipping"
+            );
+            continue;
+        };
+
+        // Get current room name
+        let current_name = room.name().unwrap_or_default();
+        let expected_old_name = format!("{}: {}", old_prefix, channel.channel_name);
+        let new_name = format!("{}: {}", new_prefix, channel.channel_name);
+
+        // Only rename if it matches the old prefix pattern
+        if current_name == expected_old_name {
+            tracing::info!(
+                channel = %channel.channel_name,
+                old_name = %current_name,
+                new_name = %new_name,
+                "Renaming room"
+            );
+
+            let content = RoomNameEventContent::new(new_name.clone());
+            match room.send_state_event(content).await {
+                Ok(_) => {
+                    tracing::info!(
+                        channel = %channel.channel_name,
+                        new_name = %new_name,
+                        "Room renamed successfully"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        channel = %channel.channel_name,
+                        error = %e,
+                        "Failed to rename room"
+                    );
+                }
+            }
+        } else {
+            tracing::debug!(
+                channel = %channel.channel_name,
+                current_name = %current_name,
+                expected = %expected_old_name,
+                "Room name doesn't match old prefix pattern, skipping"
+            );
         }
     }
 }
@@ -568,6 +690,9 @@ async fn run_start() -> Result<()> {
         tracing::warn!("Device is UNVERIFIED - other users will see security warnings");
         tracing::warn!("Encrypted messaging will still work, but messages show as unverified");
     }
+
+    // Check if room prefix changed and rename rooms if needed
+    check_and_rename_rooms_for_prefix_change(&client, &config_arc, &session_store_arc).await;
 
     // NOW register event handlers after encryption is established
     // This prevents handlers from firing before the client is ready

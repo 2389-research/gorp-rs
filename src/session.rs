@@ -96,6 +96,15 @@ impl SessionStore {
             [],
         )?;
 
+        // Create settings table for storing app state like last-used prefix
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         tracing::info!(
             workspace = %workspace_path.display(),
             db = %db_path.display(),
@@ -367,5 +376,29 @@ impl SessionStore {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Get a setting value by key
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        let value = stmt.query_row(params![key], |row| row.get::<_, String>(0));
+
+        match value {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Set a setting value (upserts)
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = ?2",
+            params![key, value],
+        )?;
+        Ok(())
     }
 }
