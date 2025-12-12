@@ -116,6 +116,19 @@ Remember important things across conversations.
 
 **Important:** When the user states a preference (likes, dislikes, how they want things done), store it immediately using memory. Don't wait to be asked.
 
+### Browser Automation
+
+If you need to browse the web, interact with websites, or scrape content:
+
+1. **Use the `superpowers-chrome:browsing` skill** - Invoke it with the Skill tool before attempting browser actions
+2. **Chrome may need to be started first** - Run the startup script if the browser isn't already running:
+   ```bash
+   ./scripts/start-chrome.sh
+   ```
+3. The skill teaches Chrome DevTools Protocol for controlling browser sessions, multi-tab management, and content extraction
+
+**When to use:** Web research, filling forms, extracting data from pages, testing web apps, anything requiring a real browser.
+
 ### Tools to AVOID
 
 - **Private Journal** (`mcp__private-journal__*`) - Don't use. Chronicle covers logging needs.
