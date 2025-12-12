@@ -134,6 +134,10 @@ if [ -d "$TEMPLATE_DIR" ]; then
     echo "  Copied workspace template"
 fi
 
+# Initialize git repo in workspace for version control
+(cd "$APP_DIR/workspace" && git init -q && git add -A && git commit -q -m "Initial workspace setup" 2>/dev/null || true)
+echo "  Initialized git repo in workspace"
+
 # Create config.toml
 cat > "$APP_DIR/config/config.toml" << EOF
 # gorp configuration for instance $INSTANCE_NUM

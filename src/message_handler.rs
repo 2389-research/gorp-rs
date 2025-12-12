@@ -24,6 +24,13 @@ use crate::{
 use chrono::Utc;
 use std::path::Path;
 
+/// Help documentation loaded at compile time
+const HELP_MD: &str = include_str!("../docs/HELP.md");
+/// Message of the day shown on boot
+const MOTD_MD: &str = include_str!("../docs/MOTD.md");
+/// Changelog documentation
+const CHANGELOG_MD: &str = include_str!("../docs/CHANGELOG.md");
+
 /// Check if debug mode is enabled for a channel directory
 /// Debug mode is enabled by creating an empty file: .gorp/enable-debug
 fn is_debug_enabled(channel_dir: &str) -> bool {
@@ -492,62 +499,21 @@ async fn handle_command(
 
     match command {
         "help" => {
-            let help_text = format!(
-                "📚 Claude Channel System Help\n\n\
-                ## What are Channels?\n\
-                Channels are persistent Claude conversations backed by workspace directories.\n\
-                Each channel has its own Matrix room, Claude session, and working directory.\n\n\
-                ## DM Commands (Orchestrator)\n\
-                !create <name> - Create a new channel\n\
-                  Example: !create PA\n\
-                  Creates: workspace/PA/ directory + Matrix room + Claude session\n\
-                  (Reuses existing directory if present)\n\n\
-                !delete <name> - Remove channel from bot\n\
-                  Bot leaves room, removes from database\n\
-                  Workspace directory is preserved\n\n\
-                !list - Show all your channels\n\
-                !help - Show this help message\n\n\
-                ## Room Commands\n\
-                !status - Show current channel info\n\
-                !debug - Toggle tool usage display (on/off)\n\
-                !leave - Bot leaves this room (preserves workspace)\n\
-                !schedule <time> <prompt> - Schedule a prompt\n\
-                !schedule list - View scheduled prompts\n\
-                !help - Show this help message\n\n\
-                ## How It Works\n\
-                1. DM the bot: !create PA\n\
-                2. Bot creates:\n\
-                   - workspace/PA/ directory\n\
-                   - Matrix room named \"{}: PA\"\n\
-                   - Persistent Claude session\n\
-                3. Join the room and start chatting!\n\
-                4. All conversation history is preserved\n\n\
-                ## Webhook Support\n\
-                Each channel has a webhook URL for external triggers:\n\
-                  POST http://{}:{}/webhook/session/<session-id>\n\
-                  {{\"prompt\": \"your message here\"}}\n\n\
-                Use this for scheduled tasks, cron jobs, etc.\n\n\
-                ## Scheduling\n\
-                Schedule prompts to run at specific times:\n\
-                  !schedule in 2 hours check my inbox\n\
-                  !schedule tomorrow 9am summarize my calendar\n\
-                  !schedule every monday 8am weekly standup\n\
-                  !schedule list - View scheduled prompts\n\
-                  !schedule delete <id> - Remove a schedule\n\
-                  !schedule export - Export to .gorp/schedule.yaml\n\
-                  !schedule import - Import from .gorp/schedule.yaml\n\n\
-                ## Features\n\
-                ✅ Persistent conversation history\n\
-                ✅ Dedicated workspace per channel\n\
-                ✅ Smart session reuse\n\
-                ✅ Webhook integration for automation\n\
-                ✅ Scheduled prompts (one-time and recurring)\n\
-                ✅ One channel = one ongoing conversation\n\n\
-                Need more help? Just ask!",
-                config.matrix.room_prefix, config.webhook.host, config.webhook.port
-            );
-
-            room.send(RoomMessageEventContent::text_plain(&help_text))
+            // Send help as HTML (converted from markdown)
+            let help_html = markdown_to_html(HELP_MD);
+            room.send(RoomMessageEventContent::text_html(HELP_MD, &help_html))
+                .await?;
+        }
+        "changelog" => {
+            // Send changelog as HTML (converted from markdown)
+            let changelog_html = markdown_to_html(CHANGELOG_MD);
+            room.send(RoomMessageEventContent::text_html(CHANGELOG_MD, &changelog_html))
+                .await?;
+        }
+        "motd" => {
+            // Send message of the day as HTML
+            let motd_html = markdown_to_html(MOTD_MD);
+            room.send(RoomMessageEventContent::text_html(MOTD_MD, &motd_html))
                 .await?;
         }
         "debug" => {
