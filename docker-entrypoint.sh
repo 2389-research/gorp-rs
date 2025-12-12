@@ -21,25 +21,19 @@ mkdir -p "/home/gorp/.local/share/memory"
 mkdir -p "/home/gorp/.local/share/toki"
 mkdir -p "/home/gorp/.local/share/pagen"
 
-# Set up Claude CLI settings with API key if provided
-if [ -n "$ANTHROPIC_API_KEY" ]; then
-    CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
-    if [ ! -f "$CLAUDE_SETTINGS" ]; then
-        # Check if we can write to the directory
-        if [ -w "$CLAUDE_SETTINGS_DIR" ]; then
-            echo "Configuring Claude CLI with API key..."
-            cat > "$CLAUDE_SETTINGS" << EOF
+# Configure Claude CLI to use API key helper script (no secrets written to disk)
+CLAUDE_SETTINGS="$CLAUDE_SETTINGS_DIR/settings.json"
+if [ ! -f "$CLAUDE_SETTINGS" ]; then
+    if [ -w "$CLAUDE_SETTINGS_DIR" ]; then
+        echo "Configuring Claude CLI..."
+        cat > "$CLAUDE_SETTINGS" << 'EOF'
 {
-    "env": {
-        "ANTHROPIC_API_KEY": "$ANTHROPIC_API_KEY"
-    }
+    "apiKeyHelper": "/usr/local/bin/claude-api-key-helper"
 }
 EOF
-            echo "Claude CLI configured."
-        else
-            echo "Warning: Cannot write to $CLAUDE_SETTINGS_DIR (permission denied)"
-            echo "Claude CLI will use ANTHROPIC_API_KEY from environment instead."
-        fi
+        echo "Claude CLI configured."
+    else
+        echo "Warning: Cannot write to $CLAUDE_SETTINGS_DIR (permission denied)"
     fi
 fi
 

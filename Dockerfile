@@ -61,6 +61,10 @@ RUN curl -fsSL https://github.com/harperreed/chronicle/releases/download/v1.1.4/
 # Create non-root user with home directory
 RUN useradd --create-home --shell /bin/bash gorp
 
+# Create Claude API key helper script (reads from env var, no secrets on disk)
+RUN echo '#!/bin/sh\necho "$ANTHROPIC_API_KEY"' > /usr/local/bin/claude-api-key-helper && \
+    chmod +x /usr/local/bin/claude-api-key-helper
+
 # Copy binary from builder
 COPY --from=builder /app/target/release/gorp /usr/local/bin/gorp
 
