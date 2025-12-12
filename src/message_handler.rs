@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use matrix_sdk::{
-    media::MediaRequest,
+    media::{MediaFormat, MediaRequestParameters},
     room::Room,
     ruma::events::room::message::{
         MessageType, RoomMessageEventContent,
@@ -80,14 +80,14 @@ async fn download_attachment(
     let file_path = attachments_dir.join(&unique_filename);
 
     // Download the media
-    let request = MediaRequest {
+    let request = MediaRequestParameters {
         source: source.clone(),
-        format: matrix_sdk::media::MediaFormat::File,
+        format: MediaFormat::File,
     };
 
     let data = client
         .media()
-        .get_media_content(&request, true)
+        .get_media_content(&request, true) // use_cache=true
         .await
         .map_err(|e| anyhow::anyhow!("Failed to download media: {}", e))?;
 

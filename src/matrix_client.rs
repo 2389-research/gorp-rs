@@ -4,13 +4,14 @@
 use crate::paths;
 use anyhow::{Context, Result};
 use matrix_sdk::{
+    authentication::{matrix::MatrixSession, SessionTokens},
     ruma::{
         api::client::room::create_room::v3::Request as CreateRoomRequest,
         assign,
-        events::{room::encryption::RoomEncryptionEventContent, EmptyStateKey, InitialStateEvent},
+        events::{room::encryption::RoomEncryptionEventContent, InitialStateEvent},
         OwnedRoomId, OwnedUserId,
     },
-    Client,
+    AuthSession, Client, SessionMeta,
 };
 
 /// Convert a string to a filesystem-safe slug
@@ -62,12 +63,12 @@ pub async fn login(
     if let Some(token) = access_token {
         tracing::info!("Logging in with access token");
         let user_id: OwnedUserId = user_id.parse()?;
-        let session = matrix_sdk::AuthSession::Matrix(matrix_sdk::matrix_auth::MatrixSession {
-            meta: matrix_sdk::SessionMeta {
+        let session = AuthSession::Matrix(MatrixSession {
+            meta: SessionMeta {
                 user_id,
                 device_id: device_name.to_string().into(),
             },
-            tokens: matrix_sdk::matrix_auth::MatrixSessionTokens {
+            tokens: SessionTokens {
                 access_token: token.to_string(),
                 refresh_token: None,
             },
@@ -100,10 +101,9 @@ pub async fn create_room(client: &Client, room_name: &str) -> Result<OwnedRoomId
     tracing::info!(room_name, "Creating new private encrypted room");
 
     // Enable E2E encryption by default (uses MegolmV1AesSha2)
-    let encryption_event = InitialStateEvent {
-        content: RoomEncryptionEventContent::with_recommended_defaults(),
-        state_key: EmptyStateKey,
-    };
+    let encryption_event = InitialStateEvent::with_empty_state_key(
+        RoomEncryptionEventContent::with_recommended_defaults(),
+    );
 
     let request = assign!(CreateRoomRequest::new(), {
         name: Some(room_name.to_string()),

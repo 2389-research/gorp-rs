@@ -576,7 +576,7 @@ async fn handle_send_attachment(state: &McpState, args: &Value) -> Result<String
     let upload_response = state
         .matrix_client
         .media()
-        .upload(&mime_type, file_data)
+        .upload(&mime_type, file_data, None) // None = default RequestConfig
         .await
         .map_err(|e| format!("Failed to upload to Matrix: {}", e))?;
 
