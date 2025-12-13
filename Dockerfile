@@ -117,21 +117,10 @@ RUN curl https://mise.run | sh && \
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install MCP tools (chronicle, memory, toki, pagen, gsuite-mcp, digest)
-RUN curl -fsSL https://github.com/harperreed/chronicle/releases/download/v1.1.4/chronicle-linux-amd64.tar.gz | tar -xz -C /tmp && \
-    mv /tmp/chronicle-linux-amd64 /usr/local/bin/chronicle && \
-    curl -fsSL https://github.com/harperreed/memory/releases/download/v0.3.4/memory_v0.3.4_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
-    mv /tmp/memory-linux-amd64 /usr/local/bin/memory && \
-    curl -fsSL https://github.com/harperreed/toki/releases/download/v0.3.6/toki_0.3.6_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
-    mv /tmp/toki_0.3.6_Linux_x86_64/toki /usr/local/bin/toki && \
-    rm -rf /tmp/toki_0.3.6_Linux_x86_64 && \
-    curl -fsSL https://github.com/harperreed/pagen/releases/download/v0.4.4/pagen_v0.4.4_linux_amd64.tar.gz | tar -xz -C /tmp && \
-    mv /tmp/pagen /usr/local/bin/pagen && \
-    curl -fsSL https://github.com/2389-research/gsuite-mcp/releases/download/v1.1.0/gsuite-mcp_1.1.0_linux_amd64.tar.gz | tar -xz -C /tmp && \
-    mv /tmp/gsuite-mcp /usr/local/bin/gsuite-mcp && \
-    curl -fsSL https://github.com/harperreed/digest/releases/download/v0.6.0/digest_0.6.0_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
-    mv /tmp/digest /usr/local/bin/digest && \
-    chmod +x /usr/local/bin/chronicle /usr/local/bin/memory /usr/local/bin/toki /usr/local/bin/pagen /usr/local/bin/gsuite-mcp /usr/local/bin/digest
+# Install MCP tools and CLI utilities via script
+# Edit scripts/install-tools.sh to add/update tools
+COPY scripts/install-tools.sh /tmp/install-tools.sh
+RUN chmod +x /tmp/install-tools.sh && /tmp/install-tools.sh && rm /tmp/install-tools.sh
 
 # Create non-root user with home directory
 RUN useradd --create-home --shell /bin/bash gorp
