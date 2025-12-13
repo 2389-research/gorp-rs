@@ -122,6 +122,76 @@ fn is_valid_recovery_key_format(key: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
 }
 
+/// Announce startup to the management room
+/// This lets humans know when bots come online
+async fn announce_startup_to_management(client: &Client) {
+    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+
+    const MANAGEMENT_ROOM_ID: &str = "!llllhqZbfveDbueMJZ:matrix.org";
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+
+    // Get bot user ID for identification
+    let bot_id = client
+        .user_id()
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let message = format!("🤖 **Reporting for service**\n\nBot: `{}`\nTime: {}", bot_id, timestamp);
+
+    // Parse the management room ID
+    let room_id: matrix_sdk::ruma::OwnedRoomId = match MANAGEMENT_ROOM_ID.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = %e, "Invalid management room ID");
+            return;
+        }
+    };
+
+    // Try to get the room - if we're not in it or only invited, try to join
+    let room = match client.get_room(&room_id) {
+        Some(r) if r.state() == matrix_sdk::RoomState::Joined => r,
+        Some(r) if r.state() == matrix_sdk::RoomState::Invited => {
+            // We have an invite, accept it
+            tracing::info!("Accepting invite to management room: {}", MANAGEMENT_ROOM_ID);
+            match r.join().await {
+                Ok(_) => {
+                    // Need to get the room again after joining
+                    match client.get_room(&room_id) {
+                        Some(joined) => joined,
+                        None => {
+                            tracing::warn!("Room disappeared after joining");
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to accept invite to management room");
+                    return;
+                }
+            }
+        }
+        _ => {
+            // Try to join the room by ID
+            tracing::info!("Attempting to join management room: {}", MANAGEMENT_ROOM_ID);
+            match client.join_room_by_id(&room_id).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to join management room - bot may need to be invited");
+                    return;
+                }
+            }
+        }
+    };
+
+    // Send startup announcement
+    if let Err(e) = room.send(RoomMessageEventContent::text_plain(&message)).await {
+        tracing::warn!(error = %e, "Failed to send startup announcement to management room");
+    } else {
+        tracing::info!("Startup announced to management room");
+    }
+}
+
 /// Notify allowed users that the bot is ready (creates DM if needed)
 async fn notify_ready(client: &Client, config: &Config) {
     let ready_messages = [
@@ -839,6 +909,9 @@ async fn run_start() -> Result<()> {
     tracing::info!("Event handlers registered");
 
     tracing::info!("Bot ready - DM me to create Claude rooms!");
+
+    // Announce startup to management room
+    announce_startup_to_management(&client).await;
 
     // Notify allowed users that the bot is ready
     notify_ready(&client, &config_arc).await;
