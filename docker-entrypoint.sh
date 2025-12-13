@@ -78,6 +78,12 @@ if [ ! -f "$CLAUDE_CONFIG" ]; then
       "args": ["mcp"],
       "env": {}
     },
+    "gsuite": {
+      "type": "stdio",
+      "command": "gsuite-mcp",
+      "args": ["mcp"],
+      "env": {}
+    },
     "gorp": {
       "type": "http",
       "url": "http://localhost:13000/mcp"

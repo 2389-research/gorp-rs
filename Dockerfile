@@ -117,7 +117,7 @@ RUN curl https://mise.run | sh && \
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install MCP tools (chronicle, memory, toki, pagen)
+# Install MCP tools (chronicle, memory, toki, pagen, gsuite-mcp)
 RUN curl -fsSL https://github.com/harperreed/chronicle/releases/download/v1.1.4/chronicle-linux-amd64.tar.gz | tar -xz -C /tmp && \
     mv /tmp/chronicle-linux-amd64 /usr/local/bin/chronicle && \
     curl -fsSL https://github.com/harperreed/memory/releases/download/v0.3.3/memory_v0.3.3_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
@@ -127,7 +127,9 @@ RUN curl -fsSL https://github.com/harperreed/chronicle/releases/download/v1.1.4/
     rm -rf /tmp/toki_0.3.6_Linux_x86_64 && \
     curl -fsSL https://github.com/harperreed/pagen/releases/download/v0.4.4/pagen_v0.4.4_linux_amd64.tar.gz | tar -xz -C /tmp && \
     mv /tmp/pagen /usr/local/bin/pagen && \
-    chmod +x /usr/local/bin/chronicle /usr/local/bin/memory /usr/local/bin/toki /usr/local/bin/pagen
+    curl -fsSL https://github.com/2389-research/gsuite-mcp/releases/download/v1.1.0/gsuite-mcp_1.1.0_linux_amd64.tar.gz | tar -xz -C /tmp && \
+    mv /tmp/gsuite-mcp /usr/local/bin/gsuite-mcp && \
+    chmod +x /usr/local/bin/chronicle /usr/local/bin/memory /usr/local/bin/toki /usr/local/bin/pagen /usr/local/bin/gsuite-mcp
 
 # Create non-root user with home directory
 RUN useradd --create-home --shell /bin/bash gorp
@@ -149,6 +151,7 @@ RUN chmod +x /app/docker-entrypoint.sh /usr/local/bin/fix-mcp-ports
 # Set up XDG directory structure for gorp user (including Claude config and MCP tools)
 RUN mkdir -p /home/gorp/.config/gorp \
              /home/gorp/.config/claude \
+             /home/gorp/.config/gsuite-mcp \
              /home/gorp/.claude \
              /home/gorp/.local/share/gorp/crypto_store \
              /home/gorp/.local/share/gorp/logs \
@@ -173,8 +176,8 @@ ENV HOME=/home/gorp
 # Volumes for persistent data (XDG-compliant paths)
 # Mount .config/claude to persist Claude Code auth across container restarts
 # Mount .claude for Claude CLI settings (API key)
-# MCP tool data: chronicle, memory, toki, pagen
-VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/workspace"]
+# MCP tool data: chronicle, memory, toki, pagen, gsuite-mcp
+VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.config/gsuite-mcp", "/home/gorp/.claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/workspace"]
 
 # Expose webhook port
 EXPOSE 13000

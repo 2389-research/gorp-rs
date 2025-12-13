@@ -119,6 +119,7 @@ mkdir -p "$APP_DIR/mcp-data/chronicle"
 mkdir -p "$APP_DIR/mcp-data/memory"
 mkdir -p "$APP_DIR/mcp-data/toki"
 mkdir -p "$APP_DIR/mcp-data/pagen"
+mkdir -p "$APP_DIR/mcp-data/gsuite-mcp"
 
 # Extract default claude-settings if tarball exists
 CLAUDE_SETTINGS_TARBALL="$PROJECT_DIR/claude-settings.clean.tgz"
@@ -222,6 +223,7 @@ services:
       - ./config:/home/gorp/.config/gorp
       - ./claude-config:/home/gorp/.config/claude
       - ./claude-settings:/home/gorp/.claude
+      - ./mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
       - ./data:/home/gorp/.local/share/gorp
       - ./workspace:/home/gorp/workspace
       - ./mcp-data/chronicle:/home/gorp/.local/share/chronicle

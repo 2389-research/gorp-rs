@@ -40,6 +40,7 @@ services:
       - ./app-data/mcp-data/memory:/home/gorp/.local/share/memory
       - ./app-data/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data/mcp-data/pagen:/home/gorp/.local/share/pagen
+      - ./app-data/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
 
     # Webhook port
     ports:
