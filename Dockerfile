@@ -121,7 +121,7 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN curl -fsSL https://github.com/harperreed/chronicle/releases/download/v1.1.4/chronicle-linux-amd64.tar.gz | tar -xz -C /tmp && \
     mv /tmp/chronicle-linux-amd64 /usr/local/bin/chronicle && \
     curl -fsSL https://github.com/harperreed/memory/releases/download/v0.3.4/memory_v0.3.4_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
-    mv /tmp/memory /usr/local/bin/memory && \
+    mv /tmp/memory-linux-amd64 /usr/local/bin/memory && \
     curl -fsSL https://github.com/harperreed/toki/releases/download/v0.3.6/toki_0.3.6_Linux_x86_64.tar.gz | tar -xz -C /tmp && \
     mv /tmp/toki_0.3.6_Linux_x86_64/toki /usr/local/bin/toki && \
     rm -rf /tmp/toki_0.3.6_Linux_x86_64 && \
