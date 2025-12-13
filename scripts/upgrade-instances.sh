@@ -118,7 +118,7 @@ for num in "${INSTANCES[@]}"; do
                 mkdir -p "$host_dir"
                 echo "  ✅ Created: mcp-data/$subdir/"
             fi
-            ((dirs_created++))
+            dirs_created=$((dirs_created + 1))
         fi
 
         # Check if volume mount exists in docker-compose.yml
@@ -141,7 +141,7 @@ for num in "${INSTANCES[@]}"; do
                 ' "$compose_file" > "$compose_file.tmp" && mv "$compose_file.tmp" "$compose_file"
                 echo "  ✅ Added mount: $mount_line"
             fi
-            ((mounts_added++))
+            mounts_added=$((mounts_added + 1))
         fi
     done
 
