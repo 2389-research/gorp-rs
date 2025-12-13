@@ -120,6 +120,7 @@ mkdir -p "$APP_DIR/mcp-data/memory"
 mkdir -p "$APP_DIR/mcp-data/toki"
 mkdir -p "$APP_DIR/mcp-data/pagen"
 mkdir -p "$APP_DIR/mcp-data/gsuite-mcp"
+mkdir -p "$APP_DIR/mcp-data/digest"
 
 # Extract default claude-settings if tarball exists
 CLAUDE_SETTINGS_TARBALL="$PROJECT_DIR/claude-settings.clean.tgz"
@@ -230,6 +231,7 @@ services:
       - ./mcp-data/memory:/home/gorp/.local/share/memory
       - ./mcp-data/toki:/home/gorp/.local/share/toki
       - ./mcp-data/pagen:/home/gorp/.local/share/pagen
+      - ./mcp-data/digest:/home/gorp/.local/share/digest
     logging:
       driver: "json-file"
       options:

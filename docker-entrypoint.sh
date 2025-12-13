@@ -84,6 +84,12 @@ if [ ! -f "$CLAUDE_CONFIG" ]; then
       "args": ["mcp"],
       "env": {}
     },
+    "digest": {
+      "type": "stdio",
+      "command": "digest",
+      "args": ["mcp"],
+      "env": {}
+    },
     "gorp": {
       "type": "http",
       "url": "http://localhost:13000/mcp"
