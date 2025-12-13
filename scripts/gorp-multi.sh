@@ -202,7 +202,7 @@ cmd_remove() {
         echo "Stopping gorp-$num..."
         (cd "$dir" && docker compose down)
     else
-        # Try to remove any stopped container
+        # Try to remove any stopped container (may not exist, so || true is acceptable)
         if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^gorp-$num$"; then
             echo "Removing stopped container gorp-$num..."
             docker rm "gorp-$num" 2>/dev/null || true
@@ -217,8 +217,12 @@ cmd_remove() {
     read -p "Also delete app-data-$num directory? (y/N): " DELETE_DATA
     if [ "$DELETE_DATA" = "y" ] || [ "$DELETE_DATA" = "Y" ]; then
         echo "Deleting $dir..."
-        rm -rf "$dir"
-        echo "Instance $num completely removed."
+        if rm -rf "$dir"; then
+            echo "Instance $num completely removed."
+        else
+            echo "⚠️ Failed to delete directory (check permissions)"
+            exit 1
+        fi
     else
         echo "Data preserved. To fully remove later: rm -rf $dir"
     fi

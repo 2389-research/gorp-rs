@@ -1079,6 +1079,14 @@ async fn handle_command(
                     continue;
                 }
 
+                // Verify this looks like a valid workspace (has .claude/ or CLAUDE.md)
+                let claude_dir = path.join(".claude");
+                let claude_md = path.join("CLAUDE.md");
+                if !claude_dir.exists() && !claude_md.exists() {
+                    skipped.push(format!("{} (not a workspace)", dir_name));
+                    continue;
+                }
+
                 // Check if channel already exists in database
                 let channel_name = dir_name.to_lowercase();
                 if session_store.get_by_name(&channel_name)?.is_some() {
@@ -1091,18 +1099,26 @@ async fn handle_command(
                 match matrix_client::create_room(client, &room_name).await {
                     Ok(new_room_id) => {
                         // Invite user to the room
-                        if let Err(e) = matrix_client::invite_user(client, &new_room_id, sender).await {
-                            tracing::warn!(
-                                channel = %channel_name,
-                                error = %e,
-                                "Failed to invite user to restored room"
-                            );
-                        }
+                        let invite_failed = match matrix_client::invite_user(client, &new_room_id, sender).await {
+                            Ok(_) => false,
+                            Err(e) => {
+                                tracing::warn!(
+                                    channel = %channel_name,
+                                    error = %e,
+                                    "Failed to invite user to restored room"
+                                );
+                                true
+                            }
+                        };
 
                         // Create channel in database (inherits existing directory)
                         match session_store.create_channel(&channel_name, new_room_id.as_str()) {
                             Ok(_channel) => {
-                                restored.push(channel_name.clone());
+                                if invite_failed {
+                                    restored.push(format!("{} (invite failed)", channel_name));
+                                } else {
+                                    restored.push(channel_name.clone());
+                                }
                                 tracing::info!(
                                     channel = %channel_name,
                                     room_id = %new_room_id,
@@ -1525,22 +1541,39 @@ async fn handle_command(
                     let mut current_prompt: Option<String> = None;
                     let mut current_status = "active";
                     let mut in_literal_block = false;
+                    let mut literal_indent: usize = 0; // Minimum indent of literal block
                     let mut literal_lines: Vec<String> = Vec::new();
 
                     for line in yaml_content.lines() {
                         let trimmed = line.trim();
 
-                        // Handle literal block continuation (lines starting with 6+ spaces)
+                        // Handle literal block continuation
                         if in_literal_block {
-                            if line.starts_with("      ") {
-                                // Continuation of literal block (6 spaces = block indent)
-                                literal_lines.push(line[6..].to_string());
+                            // Calculate current line's leading spaces
+                            let leading_spaces = line.len() - line.trim_start().len();
+
+                            // Empty lines are preserved in literal blocks
+                            if trimmed.is_empty() {
+                                literal_lines.push(String::new());
                                 continue;
-                            } else {
-                                // End of literal block
+                            }
+
+                            // On first content line, detect the indent level
+                            if literal_indent == 0 && !trimmed.is_empty() {
+                                literal_indent = leading_spaces;
+                            }
+
+                            // Continue if line is indented at least as much as the block
+                            if leading_spaces >= literal_indent && literal_indent > 0 {
+                                // Strip the block's base indentation
+                                literal_lines.push(line[literal_indent..].to_string());
+                                continue;
+                            } else if !trimmed.is_empty() {
+                                // Non-empty line with less indent = end of block
                                 in_literal_block = false;
-                                current_prompt = Some(literal_lines.join("\n"));
+                                current_prompt = Some(literal_lines.join("\n").trim_end().to_string());
                                 literal_lines.clear();
+                                literal_indent = 0;
                             }
                         }
 
@@ -1557,7 +1590,7 @@ async fn handle_command(
                                     scheduler_store,
                                 ) {
                                     Ok(_) => imported_count += 1,
-                                    Err(e) => errors.push(format!("'{}': {}", prompt.chars().take(20).collect::<String>(), e)),
+                                    Err(e) => errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e)),
                                 }
                             }
                             current_status = "active";
@@ -1573,6 +1606,7 @@ async fn handle_command(
                                 // Start of literal block style
                                 in_literal_block = true;
                                 literal_lines.clear();
+                                literal_indent = 0;
                             } else {
                                 // Inline prompt value
                                 current_prompt = Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
@@ -1585,7 +1619,7 @@ async fn handle_command(
 
                     // Handle any remaining literal block
                     if in_literal_block && !literal_lines.is_empty() {
-                        current_prompt = Some(literal_lines.join("\n"));
+                        current_prompt = Some(literal_lines.join("\n").trim_end().to_string());
                     }
 
                     // Don't forget the last one
@@ -1600,7 +1634,7 @@ async fn handle_command(
                             scheduler_store,
                         ) {
                             Ok(_) => imported_count += 1,
-                            Err(e) => errors.push(format!("'{}': {}", prompt.chars().take(20).collect::<String>(), e)),
+                            Err(e) => errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e)),
                         }
                     }
 
@@ -1778,6 +1812,8 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 }
 
 /// Check if a string looks like a cron expression (5 fields: minute hour day month weekday)
+/// This is a heuristic, not strict validation - invalid cron expressions will be caught
+/// by the cron parser later with a proper error message.
 fn looks_like_cron(s: &str) -> bool {
     let parts: Vec<&str> = s.split_whitespace().collect();
     // Cron has 5 fields, each containing digits, *, -, /, or ,

@@ -18,6 +18,7 @@ These commands work in direct messages to the bot:
 - `!join <name>` - Get invited to an existing channel
 - `!delete <name>` - Remove channel (keeps workspace files)
 - `!cleanup` - Leave orphaned rooms
+- `!restore-rooms` - Restore channels from workspace directories
 - `!list` - Show all your channels
 - `!help` - Show this help
 
