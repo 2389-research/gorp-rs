@@ -320,6 +320,31 @@ fn get_tools() -> Vec<ToolDefinition> {
                 "required": ["topic"]
             }),
         },
+        // Management reporting tool
+        ToolDefinition {
+            name: "report_to_management".to_string(),
+            description: "Report an issue, concern, bug, or safety problem to human management. Use this to escalate problems, report your own errors or bad behavior, flag safety concerns, or communicate anything that needs human attention. Messages go to a dedicated management channel staffed by humans.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The report message - describe the issue, concern, or problem in detail"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["bug", "safety", "concern", "behavior", "error", "feedback", "other"],
+                        "description": "Category of the report (optional, defaults to 'other')"
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "critical"],
+                        "description": "Severity level (optional, defaults to 'medium')"
+                    }
+                },
+                "required": ["message"]
+            }),
+        },
     ]
 }
 
@@ -423,6 +448,7 @@ async fn handle_tools_call(state: &McpState, request: &JsonRpcRequest) -> JsonRp
         "invite_to_channel" => handle_invite_to_channel(state, &arguments).await,
         "set_room_avatar" => handle_set_room_avatar(state, &arguments).await,
         "set_room_topic" => handle_set_room_topic(state, &arguments).await,
+        "report_to_management" => handle_report_to_management(state, &arguments).await,
         _ => Err(format!("Unknown tool: {}", tool_name)),
     };
 
@@ -1178,5 +1204,141 @@ async fn handle_set_room_topic(state: &McpState, args: &Value) -> Result<String,
     Ok(format!(
         "Set topic for room '{}' to: {}",
         channel.channel_name, topic
+    ))
+}
+
+/// Handle report_to_management tool call
+/// Sends a report to a dedicated management room for human review
+async fn handle_report_to_management(state: &McpState, args: &Value) -> Result<String, String> {
+    use matrix_sdk::ruma::{
+        events::room::message::RoomMessageEventContent, OwnedRoomId, RoomId,
+    };
+
+    // Hardcoded management room - this is where all agent reports go
+    const MANAGEMENT_ROOM_ID: &str = "!llllhqZbfveDbueMJZ:matrix.org";
+
+    let message = args
+        .get("message")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: message")?;
+
+    let category = args
+        .get("category")
+        .and_then(|v| v.as_str())
+        .unwrap_or("other");
+
+    let severity = args
+        .get("severity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("medium");
+
+    // Get source context (which channel is reporting)
+    let source_info = if let Some(workspace_dir) = find_workspace_dir() {
+        if let Some(ctx) = read_context_file(&workspace_dir) {
+            format!("Channel: {} ({})", ctx.channel_name, ctx.room_id)
+        } else {
+            "Channel: unknown (no context)".to_string()
+        }
+    } else {
+        "Channel: unknown (no workspace)".to_string()
+    };
+
+    // Parse the management room ID
+    let room_id: OwnedRoomId = MANAGEMENT_ROOM_ID
+        .parse()
+        .map_err(|e| format!("Invalid management room ID: {}", e))?;
+
+    // Try to get the room - if we're not in it, try to join
+    let room = match state.matrix_client.get_room(&room_id) {
+        Some(r) => r,
+        None => {
+            // Try to join the room
+            tracing::info!("Attempting to join management room: {}", MANAGEMENT_ROOM_ID);
+            let room_id_ref: &RoomId = room_id.as_ref();
+            state
+                .matrix_client
+                .join_room_by_id(room_id_ref)
+                .await
+                .map_err(|e| format!("Failed to join management room: {}. The bot may need to be invited first.", e))?;
+
+            // Get the room after joining
+            state
+                .matrix_client
+                .get_room(&room_id)
+                .ok_or_else(|| "Failed to access management room after joining".to_string())?
+        }
+    };
+
+    // Get severity emoji
+    let severity_emoji = match severity {
+        "critical" => "🚨",
+        "high" => "🔴",
+        "medium" => "🟡",
+        "low" => "🟢",
+        _ => "⚪",
+    };
+
+    // Get category emoji
+    let category_emoji = match category {
+        "bug" => "🐛",
+        "safety" => "🛡️",
+        "concern" => "⚠️",
+        "behavior" => "🤖",
+        "error" => "❌",
+        "feedback" => "💬",
+        _ => "📋",
+    };
+
+    // Get current timestamp
+    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+
+    // Format the report message
+    let plain_text = format!(
+        "{} AGENT REPORT {}\n\nCategory: {} {}\nSeverity: {} {}\nSource: {}\nTime: {}\n\n{}\n\n---",
+        severity_emoji,
+        severity_emoji,
+        category_emoji,
+        category.to_uppercase(),
+        severity_emoji,
+        severity.to_uppercase(),
+        source_info,
+        timestamp,
+        message
+    );
+
+    let html = format!(
+        r#"<h3>{} AGENT REPORT {}</h3>
+<p><strong>Category:</strong> {} {}</p>
+<p><strong>Severity:</strong> {} {}</p>
+<p><strong>Source:</strong> {}</p>
+<p><strong>Time:</strong> {}</p>
+<hr>
+<p>{}</p>
+<hr>"#,
+        severity_emoji,
+        severity_emoji,
+        category_emoji,
+        category.to_uppercase(),
+        severity_emoji,
+        severity.to_uppercase(),
+        source_info,
+        timestamp,
+        message.replace('\n', "<br>")
+    );
+
+    // Send to management room
+    room.send(RoomMessageEventContent::text_html(&plain_text, &html))
+        .await
+        .map_err(|e| format!("Failed to send report to management: {}", e))?;
+
+    tracing::info!(
+        category = %category,
+        severity = %severity,
+        "Report sent to management room"
+    );
+
+    Ok(format!(
+        "Report submitted to management.\nCategory: {}\nSeverity: {}\n\nHumans will review your report.",
+        category, severity
     ))
 }
