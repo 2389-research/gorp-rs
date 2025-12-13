@@ -34,6 +34,7 @@ usage() {
     echo "  status       Show status of all instances"
     echo "  logs N       Follow logs for instance N"
     echo "  shell N      Open shell in instance N"
+    echo "  remove N     Remove instance N (stops container, optionally deletes data)"
     echo "  list         List all configured instances"
     echo ""
     echo "Examples:"
@@ -41,6 +42,7 @@ usage() {
     echo "  $0 start 3         # Start only instance 3"
     echo "  $0 update          # Rebuild image and restart all"
     echo "  $0 logs 1          # Follow logs for instance 1"
+    echo "  $0 remove 2        # Remove instance 2"
     echo "  $0 status          # Show status of all instances"
 }
 
@@ -178,6 +180,50 @@ cmd_shell() {
     docker exec -it "gorp-$num" /bin/bash
 }
 
+cmd_remove() {
+    local num=$1
+    if [ -z "$num" ]; then
+        echo "Error: Instance number required"
+        echo "Usage: $0 remove <instance-num>"
+        exit 1
+    fi
+
+    local dir="$PROJECT_DIR/app-data-$num"
+    if [ ! -d "$dir" ]; then
+        echo "Error: Instance $num not found (no app-data-$num directory)"
+        exit 1
+    fi
+
+    echo "=== Remove Instance gorp-$num ==="
+    echo ""
+
+    # Stop and remove container if running
+    if is_running "$num"; then
+        echo "Stopping gorp-$num..."
+        (cd "$dir" && docker compose down)
+    else
+        # Try to remove any stopped container
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^gorp-$num$"; then
+            echo "Removing stopped container gorp-$num..."
+            docker rm "gorp-$num" 2>/dev/null || true
+        fi
+    fi
+
+    echo ""
+    echo "Container removed."
+    echo ""
+    echo "Data directory: $dir"
+    echo ""
+    read -p "Also delete app-data-$num directory? (y/N): " DELETE_DATA
+    if [ "$DELETE_DATA" = "y" ] || [ "$DELETE_DATA" = "Y" ]; then
+        echo "Deleting $dir..."
+        rm -rf "$dir"
+        echo "Instance $num completely removed."
+    else
+        echo "Data preserved. To fully remove later: rm -rf $dir"
+    fi
+}
+
 cmd_list() {
     local instances=$(get_instances)
 
@@ -224,6 +270,9 @@ case "${1:-}" in
         ;;
     shell)
         cmd_shell "$2"
+        ;;
+    remove)
+        cmd_remove "$2"
         ;;
     list)
         cmd_list
