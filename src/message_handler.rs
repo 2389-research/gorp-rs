@@ -503,6 +503,7 @@ async fn handle_command(
             !join <name> - Get invited to a channel\n\
             !delete <name> - Remove channel (keeps workspace)\n\
             !cleanup - Leave orphaned rooms\n\
+            !restore-rooms - Restore channels from workspace directories\n\
             !list - Show all channels\n\
             !help - Show detailed help"
         } else {
@@ -1016,6 +1017,152 @@ async fn handle_command(
                 "Cleanup completed"
             );
         }
+        "restore-rooms" => {
+            if !is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "❌ The !restore-rooms command only works in DMs.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            room.send(RoomMessageEventContent::text_plain(
+                "🔄 Scanning workspace for directories to restore...",
+            ))
+            .await?;
+
+            let workspace_path = &config.workspace.path;
+            let mut restored = Vec::new();
+            let mut skipped = Vec::new();
+            let mut errors = Vec::new();
+
+            // Read workspace directory
+            let entries = match std::fs::read_dir(workspace_path) {
+                Ok(e) => e,
+                Err(e) => {
+                    room.send(RoomMessageEventContent::text_plain(&format!(
+                        "⚠️ Failed to read workspace directory: {}",
+                        e
+                    )))
+                    .await?;
+                    return Ok(());
+                }
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                // Skip non-directories and special items
+                if !path.is_dir() {
+                    continue;
+                }
+
+                let dir_name = match entry.file_name().to_str() {
+                    Some(name) => name.to_string(),
+                    None => continue,
+                };
+
+                // Skip special directories
+                if dir_name == "template"
+                    || dir_name.starts_with('.')
+                    || dir_name == "attachments"
+                {
+                    continue;
+                }
+
+                // Validate channel name format
+                if !dir_name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
+                    skipped.push(format!("{} (invalid name)", dir_name));
+                    continue;
+                }
+
+                // Check if channel already exists in database
+                let channel_name = dir_name.to_lowercase();
+                if session_store.get_by_name(&channel_name)?.is_some() {
+                    skipped.push(format!("{} (already exists)", channel_name));
+                    continue;
+                }
+
+                // Create Matrix room for this workspace
+                let room_name = format!("{}: {}", config.matrix.room_prefix, channel_name);
+                match matrix_client::create_room(client, &room_name).await {
+                    Ok(new_room_id) => {
+                        // Invite user to the room
+                        if let Err(e) = matrix_client::invite_user(client, &new_room_id, sender).await {
+                            tracing::warn!(
+                                channel = %channel_name,
+                                error = %e,
+                                "Failed to invite user to restored room"
+                            );
+                        }
+
+                        // Create channel in database (inherits existing directory)
+                        match session_store.create_channel(&channel_name, new_room_id.as_str()) {
+                            Ok(_channel) => {
+                                restored.push(channel_name.clone());
+                                tracing::info!(
+                                    channel = %channel_name,
+                                    room_id = %new_room_id,
+                                    "Restored channel from workspace"
+                                );
+                            }
+                            Err(e) => {
+                                errors.push(format!("{}: {}", channel_name, e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(format!("{}: failed to create room - {}", channel_name, e));
+                    }
+                }
+            }
+
+            // Build response
+            let response = if restored.is_empty() && skipped.is_empty() && errors.is_empty() {
+                "📂 No workspace directories found to restore.".to_string()
+            } else {
+                let mut msg = String::new();
+                if !restored.is_empty() {
+                    msg.push_str(&format!(
+                        "✅ Restored {} channel(s):\n",
+                        restored.len()
+                    ));
+                    for name in &restored {
+                        msg.push_str(&format!("  • {}\n", name));
+                    }
+                    msg.push_str("\nCheck your room invites!\n");
+                }
+                if !skipped.is_empty() {
+                    msg.push_str(&format!(
+                        "\n⏭️ Skipped {} item(s):\n",
+                        skipped.len()
+                    ));
+                    for name in &skipped {
+                        msg.push_str(&format!("  • {}\n", name));
+                    }
+                }
+                if !errors.is_empty() {
+                    msg.push_str(&format!("\n⚠️ {} error(s):\n", errors.len()));
+                    for err in &errors {
+                        msg.push_str(&format!("  • {}\n", err));
+                    }
+                }
+                msg
+            };
+
+            room.send(RoomMessageEventContent::text_plain(&response))
+                .await?;
+
+            tracing::info!(
+                restored = restored.len(),
+                skipped = skipped.len(),
+                errors = errors.len(),
+                "Restore-rooms completed"
+            );
+        }
         "list" => {
             let channels = session_store.list_all()?;
 
@@ -1371,15 +1518,32 @@ async fn handle_command(
                         }
                     };
 
-                    // Parse YAML (simple parsing - look for time: and prompt: lines)
+                    // Parse YAML (handles both inline and literal block style prompts)
                     let mut imported_count = 0;
                     let mut errors: Vec<String> = Vec::new();
                     let mut current_time: Option<String> = None;
                     let mut current_prompt: Option<String> = None;
                     let mut current_status = "active";
+                    let mut in_literal_block = false;
+                    let mut literal_lines: Vec<String> = Vec::new();
 
                     for line in yaml_content.lines() {
                         let trimmed = line.trim();
+
+                        // Handle literal block continuation (lines starting with 6+ spaces)
+                        if in_literal_block {
+                            if line.starts_with("      ") {
+                                // Continuation of literal block (6 spaces = block indent)
+                                literal_lines.push(line[6..].to_string());
+                                continue;
+                            } else {
+                                // End of literal block
+                                in_literal_block = false;
+                                current_prompt = Some(literal_lines.join("\n"));
+                                literal_lines.clear();
+                            }
+                        }
+
                         if trimmed.starts_with("- time:") {
                             // Save previous schedule if complete
                             if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take()) {
@@ -1405,11 +1569,23 @@ async fn handle_command(
                             current_time = Some(time_val.trim_matches('"').to_string());
                         } else if trimmed.starts_with("prompt:") {
                             let prompt_val = trimmed.strip_prefix("prompt:").unwrap().trim();
-                            current_prompt = Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
+                            if prompt_val == "|" {
+                                // Start of literal block style
+                                in_literal_block = true;
+                                literal_lines.clear();
+                            } else {
+                                // Inline prompt value
+                                current_prompt = Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
+                            }
                         } else if trimmed.starts_with("status:") {
                             let status_val = trimmed.strip_prefix("status:").unwrap().trim();
                             current_status = status_val.trim();
                         }
+                    }
+
+                    // Handle any remaining literal block
+                    if in_literal_block && !literal_lines.is_empty() {
+                        current_prompt = Some(literal_lines.join("\n"));
                     }
 
                     // Don't forget the last one
@@ -1567,6 +1743,7 @@ async fn handle_command(
                 !join <name> - Get invited to channel\n\
                 !delete <name> - Remove channel\n\
                 !cleanup - Leave orphaned rooms\n\
+                !restore-rooms - Restore channels from workspace\n\
                 !list - Show all channels\n\
                 !help - Show detailed help"
             } else {
@@ -1600,6 +1777,17 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Check if a string looks like a cron expression (5 fields: minute hour day month weekday)
+fn looks_like_cron(s: &str) -> bool {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    // Cron has 5 fields, each containing digits, *, -, /, or ,
+    parts.len() == 5
+        && parts.iter().all(|p| {
+            p.chars()
+                .all(|c| c.is_ascii_digit() || c == '*' || c == '-' || c == '/' || c == ',')
+        })
+}
+
 /// Import a single schedule from YAML data
 fn import_schedule(
     time: &str,
@@ -1610,8 +1798,19 @@ fn import_schedule(
     timezone: &str,
     scheduler_store: &SchedulerStore,
 ) -> anyhow::Result<()> {
-    // Try parsing the time expression
-    let parsed = parse_time_expression(time, timezone)?;
+    // Check if time is a raw cron expression (exported from recurring schedule)
+    let parsed = if looks_like_cron(time) {
+        // Parse as raw cron expression
+        use crate::scheduler::compute_next_cron_execution_in_tz;
+        let next = compute_next_cron_execution_in_tz(time, timezone)?;
+        ParsedSchedule::Recurring {
+            cron: time.to_string(),
+            next,
+        }
+    } else {
+        // Try parsing as natural language time expression
+        parse_time_expression(time, timezone)?
+    };
 
     let schedule_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
