@@ -7,6 +7,7 @@ x-gorp-common: &gorp-common
   restart: unless-stopped
   environment:
     - WEBHOOK_BIND_ADDRESS=0.0.0.0
+    - TZ=America/Chicago
   logging:
     driver: "json-file"
     options:
