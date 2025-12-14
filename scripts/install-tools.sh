@@ -22,7 +22,7 @@ TOOLS=(
     "pagen|harperreed/pagen|v0.4.4|https://github.com/{repo}/releases/download/{version}/pagen_{version}_linux_amd64.tar.gz|pagen"
     "gsuite-mcp|2389-research/gsuite-mcp|v1.1.0|https://github.com/{repo}/releases/download/{version}/gsuite-mcp_{version_num}_linux_amd64.tar.gz|gsuite-mcp"
     "digest|harperreed/digest|v0.6.0|https://github.com/{repo}/releases/download/{version}/digest_{version_num}_Linux_x86_64.tar.gz|digest"
-    "memo|harperreed/memo|v0.1.0|https://github.com/{repo}/releases/download/{version}/memo_{version_num}_Linux_x86_64.tar.gz|memo_{version_num}_Linux_x86_64/memo"
+    "memo|harperreed/memo|v0.2.0|https://github.com/{repo}/releases/download/{version}/memo_{version_num}_Linux_x86_64.tar.gz|memo_{version_num}_Linux_x86_64/memo"
     # CLI tools
     "pop|charmbracelet/pop|v0.2.0|https://github.com/{repo}/releases/download/{version}/pop_{version_num}_Linux_x86_64.tar.gz|pop"
 )
