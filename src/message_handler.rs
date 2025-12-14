@@ -402,8 +402,26 @@ pub async fn handle_message(
                     }
                 }
             }
-            ClaudeEvent::Result(result) => {
-                final_response = Some(result);
+            ClaudeEvent::Result { text, usage } => {
+                // Record token usage metrics
+                metrics::record_claude_tokens(
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    usage.cache_creation_tokens,
+                );
+                // Convert dollars to cents and record
+                let cost_cents = (usage.total_cost_usd * 100.0).round() as u64;
+                metrics::record_claude_cost_cents(cost_cents);
+
+                tracing::info!(
+                    input_tokens = usage.input_tokens,
+                    output_tokens = usage.output_tokens,
+                    cost_usd = usage.total_cost_usd,
+                    "Claude usage recorded"
+                );
+
+                final_response = Some(text);
             }
             ClaudeEvent::Error(error) => {
                 let _ = typing_tx.send(());

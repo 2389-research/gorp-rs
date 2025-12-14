@@ -8,13 +8,23 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+/// Usage statistics from a Claude invocation
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_cost_usd: f64,
+}
+
 /// Events emitted during Claude streaming execution
 #[derive(Debug, Clone)]
 pub enum ClaudeEvent {
     /// Claude is calling a tool
     ToolUse { name: String, input_preview: String },
-    /// Final result text
-    Result(String),
+    /// Final result text with usage statistics
+    Result { text: String, usage: ClaudeUsage },
     /// Error occurred
     Error(String),
 }
@@ -387,8 +397,17 @@ pub async fn invoke_claude_streaming(
                                 .to_string()
                         };
 
-                        tracing::debug!(result_len = result.len(), "Sending result");
-                        let _ = tx.send(ClaudeEvent::Result(result)).await;
+                        // Extract usage statistics from the result event
+                        let usage = extract_usage(&json);
+
+                        tracing::debug!(
+                            result_len = result.len(),
+                            input_tokens = usage.input_tokens,
+                            output_tokens = usage.output_tokens,
+                            cost_usd = usage.total_cost_usd,
+                            "Sending result with usage"
+                        );
+                        let _ = tx.send(ClaudeEvent::Result { text: result, usage }).await;
                     }
                 }
                 _ => {}
@@ -405,6 +424,62 @@ pub async fn invoke_claude_streaming(
     });
 
     Ok(rx)
+}
+
+/// Extract usage statistics from a result event JSON
+fn extract_usage(json: &Value) -> ClaudeUsage {
+    let mut usage = ClaudeUsage::default();
+
+    // Get total cost
+    if let Some(cost) = json.get("total_cost_usd").and_then(|v| v.as_f64()) {
+        usage.total_cost_usd = cost;
+    }
+
+    // Get usage object for token counts
+    if let Some(usage_obj) = json.get("usage") {
+        usage.input_tokens = usage_obj
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        usage.output_tokens = usage_obj
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        usage.cache_read_tokens = usage_obj
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        usage.cache_creation_tokens = usage_obj
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+    }
+
+    // Also check modelUsage for aggregated token counts if usage is empty
+    if usage.input_tokens == 0 && usage.output_tokens == 0 {
+        if let Some(model_usage) = json.get("modelUsage").and_then(|v| v.as_object()) {
+            for (_model, stats) in model_usage {
+                usage.input_tokens += stats
+                    .get("inputTokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                usage.output_tokens += stats
+                    .get("outputTokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                usage.cache_read_tokens += stats
+                    .get("cacheReadInputTokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                usage.cache_creation_tokens += stats
+                    .get("cacheCreationInputTokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+            }
+        }
+    }
+
+    usage
 }
 
 /// Get a brief preview of tool input for display
