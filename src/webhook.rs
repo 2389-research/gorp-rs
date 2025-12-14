@@ -128,7 +128,9 @@ pub async fn start_webhook_server(
         .merge(metrics_routes)
         .layer(TraceLayer::new_for_http());
 
-    let addr = format!("127.0.0.1:{}", port);
+    // Default to localhost, but allow override for Docker (needs 0.0.0.0)
+    let bind_addr = std::env::var("WEBHOOK_BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr = format!("{}:{}", bind_addr, port);
     tracing::info!(addr = %addr, "Starting webhook server");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -5,6 +5,8 @@ x-gorp-common: &gorp-common
   build: .
   image: gorp:latest
   restart: unless-stopped
+  environment:
+    - WEBHOOK_BIND_ADDRESS=0.0.0.0
   logging:
     driver: "json-file"
     options:

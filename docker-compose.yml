@@ -14,9 +14,9 @@ services:
     env_file:
       - .env
 
-    # Claude Code auth - set this OR shell in and run `claude` to login
-    # environment:
-    #   - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    # Required for Docker: bind to all interfaces so port forwarding works
+    environment:
+      - WEBHOOK_BIND_ADDRESS=0.0.0.0
 
     # Persistent volumes - all data under ./app-data/
     volumes:
