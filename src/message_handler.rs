@@ -15,6 +15,7 @@ use crate::{
     claude::{self, ClaudeEvent},
     config::Config,
     matrix_client,
+    metrics,
     scheduler::{
         parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
     },
@@ -119,6 +120,8 @@ pub async fn handle_message(
     session_store: SessionStore,
     scheduler_store: SchedulerStore,
 ) -> Result<()> {
+    let start_time = std::time::Instant::now();
+
     // Only work with joined rooms
     if room.state() != RoomState::Joined {
         return Ok(());
@@ -158,7 +161,8 @@ pub async fn handle_message(
             && body.chars().nth(1).map_or(false, |c| c.is_alphabetic()));
 
     if is_command {
-        return handle_command(
+        metrics::record_message_received("command");
+        let result = handle_command(
             room,
             body,
             &session_store,
@@ -169,7 +173,13 @@ pub async fn handle_message(
             &config,
         )
         .await;
+        let duration = start_time.elapsed().as_secs_f64();
+        metrics::record_message_processing_duration(duration);
+        return result;
     }
+
+    // Regular chat message
+    metrics::record_message_received("chat");
 
     // Check if channel is attached
     let Some(channel) = session_store.get_by_room(room.room_id().as_str())? else {
@@ -313,6 +323,8 @@ pub async fn handle_message(
     });
 
     // Invoke Claude with streaming to show tool usage
+    let claude_start = std::time::Instant::now();
+    metrics::record_claude_invocation("matrix");
     let mut event_rx = match claude::invoke_claude_streaming(
         &config.claude.binary_path,
         config.claude.sdk_url.as_deref(),
@@ -325,6 +337,7 @@ pub async fn handle_message(
         Ok(rx) => rx,
         Err(e) => {
             tracing::error!(error = %e, "Claude invocation failed");
+            metrics::record_error("claude_invocation");
             let error_msg = format!("⚠️ Claude error: {}", e);
 
             let _ = typing_tx.send(());
@@ -355,6 +368,7 @@ pub async fn handle_message(
                 input_preview,
             } => {
                 tools_used.push(name.clone());
+                metrics::record_tool_used(&name);
 
                 // Only send tool notifications if debug mode is enabled
                 if debug_enabled {
@@ -396,6 +410,7 @@ pub async fn handle_message(
                 typing_handle.abort();
                 room.typing_notice(false).await?;
 
+                metrics::record_error("claude_streaming");
                 let error_msg = format!("⚠️ Claude error: {}", error);
                 room.send(RoomMessageEventContent::text_plain(&error_msg))
                     .await?;
@@ -406,6 +421,9 @@ pub async fn handle_message(
 
     let response = match final_response {
         Some(r) => {
+            let claude_duration = claude_start.elapsed().as_secs_f64();
+            metrics::record_claude_duration(claude_duration);
+            metrics::record_claude_response_length(r.len());
             tracing::info!(
                 response_length = r.len(),
                 tools_count = tools_used.len(),
@@ -418,6 +436,7 @@ pub async fn handle_message(
             typing_handle.abort();
             room.typing_notice(false).await?;
 
+            metrics::record_error("claude_no_response");
             room.send(RoomMessageEventContent::text_plain(
                 "⚠️ Claude finished without a response",
             ))
@@ -443,6 +462,7 @@ pub async fn handle_message(
         let html = markdown_to_html(&chunk);
         room.send(RoomMessageEventContent::text_html(&chunk, &html))
             .await?;
+        metrics::record_message_sent();
 
         // Log the Matrix message
         log_matrix_message(
@@ -465,6 +485,10 @@ pub async fn handle_message(
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
+
+    // Record total message processing time
+    let total_duration = start_time.elapsed().as_secs_f64();
+    metrics::record_message_processing_duration(total_duration);
 
     tracing::info!(chunk_count, "Response sent successfully");
 
@@ -519,6 +543,7 @@ async fn handle_command(
     }
 
     let command = command_parts[0];
+    metrics::record_command(command);
 
     match command {
         "help" => {
@@ -712,12 +737,14 @@ async fn handle_command(
             // Create Matrix room
             let room_name = format!("{}: {}", config.matrix.room_prefix, channel_name);
             let new_room_id = matrix_client::create_room(client, &room_name).await?;
+            metrics::record_room_created();
 
             // Invite user
             matrix_client::invite_user(client, &new_room_id, sender).await?;
 
             // Create channel in database (this also creates the directory)
             let channel = session_store.create_channel(&channel_name, new_room_id.as_str())?;
+            metrics::increment_active_channels();
 
             let response = format!(
                 "✅ Created Channel: {}\n\n\
@@ -861,6 +888,7 @@ async fn handle_command(
 
             // Remove from database (keeps directory)
             session_store.delete_channel(&channel_name)?;
+            metrics::decrement_active_channels();
 
             let response = format!(
                 "✅ Deleted channel: {}\n\n\
@@ -884,6 +912,9 @@ async fn handle_command(
 
             // Check if this room is tracked
             let channel_name = session_store.delete_by_room(&room_id)?;
+            if channel_name.is_some() {
+                metrics::decrement_active_channels();
+            }
 
             let goodbye = if let Some(name) = &channel_name {
                 format!(
@@ -950,6 +981,9 @@ async fn handle_command(
                 if members.len() <= 1 {
                     // Get channel name if tracked
                     let channel_name = session_store.delete_by_room(&room_id).ok().flatten();
+                    if channel_name.is_some() {
+                        metrics::decrement_active_channels();
+                    }
 
                     // Leave the room
                     if let Err(e) = joined_room.leave().await {
@@ -968,6 +1002,7 @@ async fn handle_command(
                     if !joined_room_ids.contains(&channel.room_id) {
                         // Bot is not in this room anymore, clean up DB entry
                         if session_store.delete_by_room(&channel.room_id).is_ok() {
+                            metrics::decrement_active_channels();
                             cleaned_db.push(channel.channel_name);
                         }
                     }
@@ -1114,6 +1149,7 @@ async fn handle_command(
                         // Create channel in database (inherits existing directory)
                         match session_store.create_channel(&channel_name, new_room_id.as_str()) {
                             Ok(_channel) => {
+                                metrics::increment_active_channels();
                                 if invite_failed {
                                     restored.push(format!("{} (invite failed)", channel_name));
                                 } else {

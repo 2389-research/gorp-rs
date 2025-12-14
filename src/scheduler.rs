@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
+use crate::metrics;
+
 /// Represents a scheduled prompt in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledPrompt {
@@ -1079,6 +1081,8 @@ async fn execute_schedule(
             "Failed to mark schedule as executed"
         );
     } else {
+        // Record successful execution metric here (after we know it worked)
+        metrics::record_schedule_executed();
         let status = if next_execution.is_some() {
             "rescheduled"
         } else {

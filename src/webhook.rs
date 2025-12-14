@@ -1,7 +1,7 @@
 // ABOUTME: HTTP webhook server for injecting prompts into Claude sessions
 // ABOUTME: Provides POST /webhook/session/{id} endpoint for external triggers like cron jobs
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -23,10 +23,12 @@ use crate::{
     claude,
     config::Config,
     mcp::{mcp_handler, McpState},
+    metrics,
     scheduler::SchedulerStore,
     session::SessionStore,
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
 };
+use metrics_exporter_prometheus::PrometheusHandle;
 
 #[derive(Clone)]
 pub struct WebhookState {
@@ -55,6 +57,10 @@ pub async fn start_webhook_server(
     matrix_client: Client,
     config: Arc<Config>,
 ) -> Result<()> {
+    // Initialize Prometheus metrics
+    let metrics_handle = metrics::init_metrics()
+        .context("Failed to initialize Prometheus metrics")?;
+
     let state = WebhookState {
         session_store,
         matrix_client,
@@ -70,6 +76,17 @@ pub async fn start_webhook_server(
     // and MCP routes (for creating schedules via Claude). It must be created after
     // session_store is available but before admin_state and mcp_state are constructed.
     let scheduler_store = SchedulerStore::new(state.session_store.db_connection());
+
+    // Initialize gauge metrics from current state (default to 0 on error)
+    let channel_count = state.session_store.list_all()
+        .map(|ch| ch.len())
+        .unwrap_or(0);
+    metrics::set_active_channels(channel_count as u64);
+
+    let active_schedule_count = scheduler_store.list_all()
+        .map(|s| s.iter().filter(|s| s.status == crate::scheduler::ScheduleStatus::Active).count())
+        .unwrap_or(0);
+    metrics::set_active_schedules(active_schedule_count as u64);
 
     let admin_state = AdminState {
         config: Arc::clone(&state.config),
@@ -98,11 +115,17 @@ pub async fn start_webhook_server(
         .route("/mcp", post(mcp_handler))
         .with_state(Arc::new(mcp_state));
 
+    // Metrics endpoint - renders Prometheus text format
+    let metrics_routes = Router::new()
+        .route("/metrics", get(metrics_handler))
+        .with_state(Arc::new(metrics_handle));
+
     let app = Router::new()
         .route("/", get(|| async { Redirect::permanent("/admin") }))
         .nest("/admin", admin_routes)
         .merge(mcp_routes)
         .merge(webhook_routes)
+        .merge(metrics_routes)
         .layer(TraceLayer::new_for_http());
 
     let addr = format!("127.0.0.1:{}", port);
@@ -124,6 +147,8 @@ async fn webhook_handler(
     Path(session_id): Path<String>,
     Json(payload): Json<WebhookRequest>,
 ) -> impl IntoResponse {
+    let start_time = std::time::Instant::now();
+
     tracing::info!(
         session_id = %session_id,
         prompt_preview = %payload.prompt.chars().take(50).collect::<String>(),
@@ -138,6 +163,8 @@ async fn webhook_handler(
             }
             _ => {
                 tracing::warn!(session_id = %session_id, "Webhook authentication failed");
+                metrics::record_webhook_request("auth_failed");
+                metrics::record_error("webhook_auth");
                 return (
                     StatusCode::UNAUTHORIZED,
                     Json(WebhookResponse {
@@ -152,6 +179,8 @@ async fn webhook_handler(
     // Validate prompt is not empty
     if payload.prompt.trim().is_empty() {
         tracing::warn!(session_id = %session_id, "Webhook received empty prompt");
+        metrics::record_webhook_request("bad_request");
+        metrics::record_error("webhook_empty_prompt");
         return (
             StatusCode::BAD_REQUEST,
             Json(WebhookResponse {
@@ -166,6 +195,8 @@ async fn webhook_handler(
         Ok(Some(c)) => c,
         Ok(None) => {
             tracing::warn!(session_id = %session_id, "Session not found");
+            metrics::record_webhook_request("not_found");
+            metrics::record_error("webhook_session_not_found");
             return (
                 StatusCode::NOT_FOUND,
                 Json(WebhookResponse {
@@ -176,6 +207,8 @@ async fn webhook_handler(
         }
         Err(e) => {
             tracing::error!(error = %e, "Database error");
+            metrics::record_webhook_request("error");
+            metrics::record_error("webhook_database");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
@@ -191,6 +224,8 @@ async fn webhook_handler(
         Ok(id) => id,
         Err(e) => {
             tracing::error!(error = %e, room_id = %channel.room_id, "Invalid room ID");
+            metrics::record_webhook_request("error");
+            metrics::record_error("webhook_invalid_room_id");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
@@ -203,6 +238,8 @@ async fn webhook_handler(
 
     let Some(room) = state.matrix_client.get_room(&room_id) else {
         tracing::warn!(room_id = %channel.room_id, "Room not found");
+        metrics::record_webhook_request("not_found");
+        metrics::record_error("webhook_room_not_found");
         return (
             StatusCode::NOT_FOUND,
             Json(WebhookResponse {
@@ -221,6 +258,8 @@ async fn webhook_handler(
         .await
     {
         tracing::error!(error = %e, "Failed to send webhook prompt to room");
+        metrics::record_webhook_request("error");
+        metrics::record_error("webhook_send_failed");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(WebhookResponse {
@@ -229,8 +268,11 @@ async fn webhook_handler(
             }),
         );
     }
+    metrics::record_message_sent();
 
     // 2. Invoke Claude directly
+    let claude_start = std::time::Instant::now();
+    metrics::record_claude_invocation("webhook");
     let claude_response = match claude::invoke_claude(
         &state.config.claude.binary_path,
         state.config.claude.sdk_url.as_deref(),
@@ -240,9 +282,16 @@ async fn webhook_handler(
     )
     .await
     {
-        Ok(resp) => resp,
+        Ok(resp) => {
+            let claude_duration = claude_start.elapsed().as_secs_f64();
+            metrics::record_claude_duration(claude_duration);
+            metrics::record_claude_response_length(resp.len());
+            resp
+        }
         Err(e) => {
             tracing::error!(error = %e, "Claude invocation failed");
+            metrics::record_webhook_request("error");
+            metrics::record_error("webhook_claude_failed");
             let error_msg = format!("⚠️ Claude error: {}", e);
             let _ = room
                 .send(RoomMessageEventContent::text_plain(&error_msg))
@@ -267,6 +316,8 @@ async fn webhook_handler(
             .await
         {
             tracing::error!(error = %e, chunk = i, "Failed to send Claude response chunk");
+            metrics::record_webhook_request("error");
+            metrics::record_error("webhook_response_send_failed");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
@@ -275,6 +326,7 @@ async fn webhook_handler(
                 }),
             );
         }
+        metrics::record_message_sent();
 
         // Log the Matrix message
         log_matrix_message(
@@ -310,6 +362,11 @@ async fn webhook_handler(
         "Webhook processed successfully"
     );
 
+    // Record success metrics
+    let total_duration = start_time.elapsed().as_secs_f64();
+    metrics::record_webhook_request("success");
+    metrics::record_webhook_duration(total_duration);
+
     (
         StatusCode::OK,
         Json(WebhookResponse {
@@ -317,4 +374,11 @@ async fn webhook_handler(
             message: "Message sent and Claude responded successfully".to_string(),
         }),
     )
+}
+
+/// Handle GET /metrics - returns Prometheus text format
+async fn metrics_handler(
+    State(handle): State<Arc<PrometheusHandle>>,
+) -> impl IntoResponse {
+    handle.render()
 }
