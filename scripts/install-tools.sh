@@ -27,6 +27,7 @@ TOOLS=(
     "pop|charmbracelet/pop|v0.2.0|https://github.com/{repo}/releases/download/{version}/pop_{version_num}_Linux_x86_64.tar.gz|pop"
     "push|harperreed/push-cli|v0.0.2|https://github.com/{repo}/releases/download/{version}/push_{version_num}_Linux_x86_64.tar.gz|push_{version_num}_Linux_x86_64/push"
     "position|harperreed/position|v0.3.0|https://github.com/{repo}/releases/download/{version}/position_{version_num}_Linux_x86_64.tar.gz|position_{version_num}_Linux_x86_64/position"
+    "sweet|harperreed/sweet|v0.1.3|https://github.com/{repo}/releases/download/{version}/sweet_{version_num}_Linux_x86_64.tar.gz|sweet_{version_num}_Linux_x86_64/sweet"
 )
 
 install_tool() {
