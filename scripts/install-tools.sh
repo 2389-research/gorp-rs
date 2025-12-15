@@ -25,6 +25,7 @@ TOOLS=(
     "memo|harperreed/memo|v0.2.0|https://github.com/{repo}/releases/download/{version}/memo_{version_num}_Linux_x86_64.tar.gz|memo_{version_num}_Linux_x86_64/memo"
     # CLI tools
     "pop|charmbracelet/pop|v0.2.0|https://github.com/{repo}/releases/download/{version}/pop_{version_num}_Linux_x86_64.tar.gz|pop"
+    "push|harperreed/push-cli|v0.0.2|https://github.com/{repo}/releases/download/{version}/push_{version_num}_Linux_x86_64.tar.gz|push_{version_num}_Linux_x86_64/push"
 )
 
 install_tool() {
