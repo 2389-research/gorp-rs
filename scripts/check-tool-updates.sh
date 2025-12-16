@@ -20,7 +20,7 @@ TOOLS=(
     "memory|harperreed/memory|v0.3.4"
     "toki|harperreed/toki|v0.3.6"
     "pagen|harperreed/pagen|v0.4.4"
-    "gsuite-mcp|2389-research/gsuite-mcp|v1.2.1"
+    "gsuite-mcp|2389-research/gsuite-mcp|v1.2.3"
     "digest|harperreed/digest|v0.6.0"
     "memo|harperreed/memo|v0.2.0"
     "pop|charmbracelet/pop|v0.2.0"
