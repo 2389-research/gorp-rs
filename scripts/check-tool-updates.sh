@@ -27,6 +27,7 @@ TOOLS=(
     "push|harperreed/push-cli|v0.0.2"
     "position|harperreed/position|v0.5.0"
     "sweet|harperreed/sweet|v0.2.5"
+    "bbs|harperreed/bbs-mcp|v1.0.0"
 )
 
 # Check if gh CLI is available
