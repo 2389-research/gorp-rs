@@ -24,6 +24,7 @@ services:
     volumes:
       - ./app-data-1/config:/home/gorp/.config/gorp
       - ./app-data-1/claude-config:/home/gorp/.config/claude
+      - ./app-data-1/claude-settings:/home/gorp/.claude
       - ./app-data-1/data:/home/gorp/.local/share/gorp
       - ./app-data-1/workspace:/home/gorp/workspace
       - ./app-data-1/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -40,6 +41,7 @@ services:
     volumes:
       - ./app-data-2/config:/home/gorp/.config/gorp
       - ./app-data-2/claude-config:/home/gorp/.config/claude
+      - ./app-data-2/claude-settings:/home/gorp/.claude
       - ./app-data-2/data:/home/gorp/.local/share/gorp
       - ./app-data-2/workspace:/home/gorp/workspace
       - ./app-data-2/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -56,6 +58,7 @@ services:
     volumes:
       - ./app-data-3/config:/home/gorp/.config/gorp
       - ./app-data-3/claude-config:/home/gorp/.config/claude
+      - ./app-data-3/claude-settings:/home/gorp/.claude
       - ./app-data-3/data:/home/gorp/.local/share/gorp
       - ./app-data-3/workspace:/home/gorp/workspace
       - ./app-data-3/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -72,6 +75,7 @@ services:
     volumes:
       - ./app-data-4/config:/home/gorp/.config/gorp
       - ./app-data-4/claude-config:/home/gorp/.config/claude
+      - ./app-data-4/claude-settings:/home/gorp/.claude
       - ./app-data-4/data:/home/gorp/.local/share/gorp
       - ./app-data-4/workspace:/home/gorp/workspace
       - ./app-data-4/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -88,6 +92,7 @@ services:
     volumes:
       - ./app-data-5/config:/home/gorp/.config/gorp
       - ./app-data-5/claude-config:/home/gorp/.config/claude
+      - ./app-data-5/claude-settings:/home/gorp/.claude
       - ./app-data-5/data:/home/gorp/.local/share/gorp
       - ./app-data-5/workspace:/home/gorp/workspace
       - ./app-data-5/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -104,6 +109,7 @@ services:
     volumes:
       - ./app-data-6/config:/home/gorp/.config/gorp
       - ./app-data-6/claude-config:/home/gorp/.config/claude
+      - ./app-data-6/claude-settings:/home/gorp/.claude
       - ./app-data-6/data:/home/gorp/.local/share/gorp
       - ./app-data-6/workspace:/home/gorp/workspace
       - ./app-data-6/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -120,6 +126,7 @@ services:
     volumes:
       - ./app-data-7/config:/home/gorp/.config/gorp
       - ./app-data-7/claude-config:/home/gorp/.config/claude
+      - ./app-data-7/claude-settings:/home/gorp/.claude
       - ./app-data-7/data:/home/gorp/.local/share/gorp
       - ./app-data-7/workspace:/home/gorp/workspace
       - ./app-data-7/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -136,6 +143,7 @@ services:
     volumes:
       - ./app-data-8/config:/home/gorp/.config/gorp
       - ./app-data-8/claude-config:/home/gorp/.config/claude
+      - ./app-data-8/claude-settings:/home/gorp/.claude
       - ./app-data-8/data:/home/gorp/.local/share/gorp
       - ./app-data-8/workspace:/home/gorp/workspace
       - ./app-data-8/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -152,6 +160,7 @@ services:
     volumes:
       - ./app-data-9/config:/home/gorp/.config/gorp
       - ./app-data-9/claude-config:/home/gorp/.config/claude
+      - ./app-data-9/claude-settings:/home/gorp/.claude
       - ./app-data-9/data:/home/gorp/.local/share/gorp
       - ./app-data-9/workspace:/home/gorp/workspace
       - ./app-data-9/mcp-data/chronicle:/home/gorp/.local/share/chronicle
@@ -168,6 +177,7 @@ services:
     volumes:
       - ./app-data-10/config:/home/gorp/.config/gorp
       - ./app-data-10/claude-config:/home/gorp/.config/claude
+      - ./app-data-10/claude-settings:/home/gorp/.claude
       - ./app-data-10/data:/home/gorp/.local/share/gorp
       - ./app-data-10/workspace:/home/gorp/workspace
       - ./app-data-10/mcp-data/chronicle:/home/gorp/.local/share/chronicle

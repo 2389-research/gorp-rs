@@ -27,6 +27,8 @@ pub enum ClaudeEvent {
     Result { text: String, usage: ClaudeUsage },
     /// Error occurred
     Error(String),
+    /// Session is orphaned (Claude CLI can't find the conversation)
+    OrphanedSession,
 }
 
 #[derive(Debug, Deserialize)]
@@ -234,6 +236,7 @@ pub async fn invoke_claude_streaming(
     // Clone working_dir for the async task
     let log_dir = working_dir.map(|d| d.to_string());
     let stderr_log_dir = log_dir.clone();
+    let stderr_tx = tx.clone();
 
     // Spawn task to read stderr and log it
     tokio::spawn(async move {
@@ -259,6 +262,13 @@ pub async fn invoke_claude_streaming(
         while let Ok(Some(line)) = lines.next_line().await {
             if !line.is_empty() {
                 tracing::warn!(stderr = %line, "Claude CLI stderr");
+
+                // Check for orphaned session error
+                if line.contains("No conversation found with session ID") {
+                    tracing::warn!("Detected orphaned session - will trigger reset");
+                    let _ = stderr_tx.send(ClaudeEvent::OrphanedSession).await;
+                }
+
                 // Log to file with STDERR prefix
                 if let Some(ref mut file) = log_file {
                     use tokio::io::AsyncWriteExt;

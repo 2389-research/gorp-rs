@@ -999,6 +999,20 @@ async fn execute_schedule(
                 had_error = true;
                 // Don't return yet - we might have captured text before the error
             }
+            claude::ClaudeEvent::OrphanedSession => {
+                tracing::warn!("Scheduled task hit orphaned session");
+                // Reset the session so future executions start fresh
+                if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
+                    tracing::error!(error = %e, "Failed to reset orphaned session in scheduler");
+                }
+                let _ = room
+                    .send(RoomMessageEventContent::text_plain(
+                        "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
+                    ))
+                    .await;
+                let _ = scheduler_store.mark_failed(&schedule.id, "Session was orphaned");
+                return;
+            }
         }
     }
 

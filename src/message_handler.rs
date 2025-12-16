@@ -434,6 +434,23 @@ pub async fn handle_message(
                     .await?;
                 return Ok(());
             }
+            ClaudeEvent::OrphanedSession => {
+                let _ = typing_tx.send(());
+                typing_handle.abort();
+                room.typing_notice(false).await?;
+
+                // Reset the session so next message starts fresh
+                if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
+                    tracing::error!(error = %e, "Failed to reset orphaned session");
+                }
+
+                metrics::record_error("orphaned_session");
+                room.send(RoomMessageEventContent::text_plain(
+                    "🔄 Session was reset (conversation data was lost). Please send your message again.",
+                ))
+                .await?;
+                return Ok(());
+            }
         }
     }
 

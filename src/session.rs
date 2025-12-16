@@ -349,6 +349,23 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Reset an orphaned session (generates new session_id and sets started = false)
+    /// Use this when a session becomes orphaned (e.g., Claude CLI loses conversation data)
+    pub fn reset_orphaned_session(&self, room_id: &str) -> Result<()> {
+        let new_session_id = uuid::Uuid::new_v4().to_string();
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "UPDATE channels SET session_id = ?1, started = 0 WHERE room_id = ?2",
+            params![new_session_id, room_id],
+        )?;
+        tracing::info!(
+            room_id = %room_id,
+            new_session_id = %new_session_id,
+            "Session reset due to orphaned conversation"
+        );
+        Ok(())
+    }
+
     /// Get channel by session ID (for webhook lookups)
     pub fn get_by_session_id(&self, session_id: &str) -> Result<Option<Channel>> {
         let db = self.db.lock().unwrap();
