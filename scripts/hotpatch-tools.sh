@@ -76,6 +76,32 @@ patch_tool_in_container() {
     url="${url//\{version\}/$version}"
     url="${url//\{version_num\}/$version_num}"
 
+    # Check if already at target version by comparing file sizes
+    # Get expected size from GitHub release asset
+    local expected_size=$(curl -sI "$url" | grep -i content-length | tail -1 | awk '{print $2}' | tr -d '\r')
+
+    # Get current installed size
+    local current_size=$(docker exec "$container" stat -c%s /usr/local/bin/$name 2>/dev/null || echo "0")
+
+    # For archives, we need to check the binary inside, not the archive size
+    # So we'll use a checksum approach instead - store expected checksums
+    # For now, just check if binary exists and skip detailed check if --force not used
+
+    if [[ -n "$SKIP_CHECK" ]]; then
+        : # Force update
+    elif docker exec "$container" test -f /usr/local/bin/$name 2>/dev/null; then
+        # Get MD5 of installed binary
+        local installed_md5=$(docker exec "$container" md5sum /usr/local/bin/$name 2>/dev/null | awk '{print $1}')
+
+        # Get MD5 of new binary (download to temp, extract, hash, cleanup)
+        local new_md5=$(curl -sL "$url" | tar -xzO $name 2>/dev/null | md5sum | awk '{print $1}')
+
+        if [[ "$installed_md5" == "$new_md5" ]] && [[ -n "$installed_md5" ]]; then
+            echo -e "${GREEN}✓ $tool_name already at $version in $container (skipped)${NC}"
+            return 0
+        fi
+    fi
+
     echo -e "${YELLOW}Patching $tool_name to $version in $container${NC}"
     echo "  URL: $url"
 
@@ -123,6 +149,7 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --all              Patch all tools to latest in all containers"
+    echo "  --force            Force update even if already at target version"
     echo "  --list             List available tools"
     echo "  --check            Check for updates (like check-tool-updates.sh)"
     echo ""
@@ -157,6 +184,13 @@ fi
 
 if [[ "$1" == "--check" ]]; then
     exec "$SCRIPT_DIR/check-tool-updates.sh"
+fi
+
+# Handle --force flag
+SKIP_CHECK=""
+if [[ "$1" == "--force" ]]; then
+    SKIP_CHECK=1
+    shift
 fi
 
 if [[ "$1" == "--all" ]]; then
