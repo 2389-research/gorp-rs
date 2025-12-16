@@ -20,14 +20,14 @@ TOOLS=(
     "memory|harperreed/memory|v0.3.4|https://github.com/{repo}/releases/download/{version}/memory_{version}_Linux_x86_64.tar.gz|memory-linux-amd64"
     "toki|harperreed/toki|v0.3.6|https://github.com/{repo}/releases/download/{version}/toki_{version_num}_Linux_x86_64.tar.gz|toki_{version_num}_Linux_x86_64/toki"
     "pagen|harperreed/pagen|v0.4.4|https://github.com/{repo}/releases/download/{version}/pagen_{version}_linux_amd64.tar.gz|pagen"
-    "gsuite-mcp|2389-research/gsuite-mcp|v1.1.0|https://github.com/{repo}/releases/download/{version}/gsuite-mcp_{version_num}_linux_amd64.tar.gz|gsuite-mcp"
+    "gsuite-mcp|2389-research/gsuite-mcp|v1.2.1|https://github.com/{repo}/releases/download/{version}/gsuite-mcp_{version_num}_linux_amd64.tar.gz|gsuite-mcp"
     "digest|harperreed/digest|v0.6.0|https://github.com/{repo}/releases/download/{version}/digest_{version_num}_Linux_x86_64.tar.gz|digest"
     "memo|harperreed/memo|v0.2.0|https://github.com/{repo}/releases/download/{version}/memo_{version_num}_Linux_x86_64.tar.gz|memo_{version_num}_Linux_x86_64/memo"
     # CLI tools
     "pop|charmbracelet/pop|v0.2.0|https://github.com/{repo}/releases/download/{version}/pop_{version_num}_Linux_x86_64.tar.gz|pop"
     "push|harperreed/push-cli|v0.0.2|https://github.com/{repo}/releases/download/{version}/push_{version_num}_Linux_x86_64.tar.gz|push_{version_num}_Linux_x86_64/push"
-    "position|harperreed/position|v0.3.0|https://github.com/{repo}/releases/download/{version}/position_{version_num}_Linux_x86_64.tar.gz|position_{version_num}_Linux_x86_64/position"
-    "sweet|harperreed/sweet|v0.1.3|https://github.com/{repo}/releases/download/{version}/sweet_{version_num}_Linux_x86_64.tar.gz|sweet_{version_num}_Linux_x86_64/sweet"
+    "position|harperreed/position|v0.5.0|https://github.com/{repo}/releases/download/{version}/position_{version_num}_Linux_x86_64.tar.gz|position_{version_num}_Linux_x86_64/position"
+    "sweet|harperreed/sweet|v0.2.5|https://github.com/{repo}/releases/download/{version}/sweet_{version_num}_Linux_x86_64.tar.gz|sweet_{version_num}_Linux_x86_64/sweet"
 )
 
 install_tool() {
