@@ -81,14 +81,27 @@ patch_tool_in_container() {
 
     # Download and extract in container (as root to write to /usr/local/bin)
     docker exec -u root "$container" bash -c "
-        cd /tmp && \
-        rm -rf patch-$name && \
-        mkdir -p patch-$name && \
-        curl -fsSL '$url' | tar -xz -C patch-$name && \
-        find patch-$name -type f -executable -name '$name*' | head -1 | xargs -I{} cp {} /usr/local/bin/$name && \
-        chmod +x /usr/local/bin/$name && \
-        rm -rf patch-$name && \
-        echo 'Installed:' && /usr/local/bin/$name --version 2>/dev/null || /usr/local/bin/$name version 2>/dev/null || echo '(version check not supported)'
+        set -e
+        cd /tmp
+        rm -rf patch-$name
+        mkdir -p patch-$name
+        curl -fsSL '$url' | tar -xz -C patch-$name
+        # Find the binary - try exact name first, then glob
+        if [ -f patch-$name/$name ]; then
+            cp patch-$name/$name /usr/local/bin/$name
+        else
+            BINARY=\$(find patch-$name -type f -executable -name '$name*' | head -1)
+            if [ -n \"\$BINARY\" ]; then
+                cp \"\$BINARY\" /usr/local/bin/$name
+            else
+                echo 'ERROR: Binary not found'
+                exit 1
+            fi
+        fi
+        chmod +x /usr/local/bin/$name
+        rm -rf patch-$name
+        echo 'Installed:'
+        /usr/local/bin/$name --version 2>/dev/null || /usr/local/bin/$name version 2>/dev/null || echo '(version check not supported)'
     "
 
     if [[ $? -eq 0 ]]; then
