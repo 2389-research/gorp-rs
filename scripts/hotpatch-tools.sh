@@ -79,8 +79,8 @@ patch_tool_in_container() {
     echo -e "${YELLOW}Patching $tool_name to $version in $container${NC}"
     echo "  URL: $url"
 
-    # Download and extract in container
-    docker exec "$container" bash -c "
+    # Download and extract in container (as root to write to /usr/local/bin)
+    docker exec -u root "$container" bash -c "
         cd /tmp && \
         rm -rf patch-$name && \
         mkdir -p patch-$name && \
