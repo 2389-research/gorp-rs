@@ -282,13 +282,43 @@ impl AcpClient {
     }
 
     /// Send a prompt and receive streaming events
-    pub async fn prompt(&self, _session_id: &str, _text: &str) -> Result<mpsc::Receiver<AcpEvent>> {
-        todo!("implement prompt")
+    pub async fn prompt(&self, session_id: &str, text: &str) -> Result<mpsc::Receiver<AcpEvent>> {
+        let (tx, rx) = mpsc::channel(32);
+        self.handler.set_event_sender(tx.clone());
+
+        tracing::debug!(session_id = %session_id, prompt_len = text.len(), "Sending prompt");
+
+        let result = self
+            .conn
+            .prompt(acp::PromptRequest::new(
+                acp::SessionId::new(session_id.to_string()),
+                vec![acp::ContentBlock::Text(acp::TextContent::new(text.to_string()))],
+            ))
+            .await;
+
+        match result {
+            Ok(response) => {
+                // The response only contains stop_reason; content is streamed via session_notification
+                let final_text = format!("Completed: {:?}", response.stop_reason);
+                let _ = tx.send(AcpEvent::Result { text: final_text }).await;
+            }
+            Err(e) => {
+                let error_msg = format!("ACP prompt error: {}", e);
+                tracing::error!(%error_msg);
+                let _ = tx.send(AcpEvent::Error(error_msg)).await;
+            }
+        }
+
+        Ok(rx)
     }
 
     /// Cancel the current operation
-    pub async fn cancel(&self) -> Result<()> {
-        todo!("implement cancel")
+    pub async fn cancel(&self, session_id: &str) -> Result<()> {
+        self.conn
+            .cancel(acp::CancelNotification::new(acp::SessionId::new(session_id.to_string())))
+            .await
+            .context("Failed to cancel ACP operation")?;
+        Ok(())
     }
 }
 
