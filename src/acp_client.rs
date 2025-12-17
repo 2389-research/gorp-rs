@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -419,6 +420,16 @@ impl Drop for AcpTaskHandle {
     }
 }
 
+/// Helper to poll cancellation flag periodically
+async fn wait_for_cancellation(cancelled: &AtomicBool) {
+    loop {
+        if cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Invoke ACP agent with streaming - returns immediately with event receiver
 ///
 /// This function spawns the ACP task and returns immediately, allowing the caller
@@ -445,37 +456,50 @@ pub async fn invoke_acp(
 
     // Cancellation flag shared between caller and task
     let cancelled = Arc::new(AtomicBool::new(false));
-    let cancelled_clone = Arc::clone(&cancelled);
+    let cancelled_for_task = Arc::clone(&cancelled);
+    let cancelled_for_timeout = Arc::clone(&cancelled);
 
     let working_dir = working_dir.to_path_buf();
     let agent_binary = agent_binary.to_string();
     let session_id_owned = session_id.map(|s| s.to_string());
     let prompt_text = prompt.to_string();
+    let event_tx_for_timeout = event_tx.clone();
 
     // Spawn the ACP task - returns immediately
     let task_handle = tokio::task::spawn(async move {
-        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+        let timeout_duration = Duration::from_secs(timeout_secs);
 
-        // Run the ACP operation with timeout
-        let result = tokio::time::timeout(timeout_duration, async {
-            run_acp_blocking(
-                event_tx.clone(),
-                cancelled_clone,
+        // Spawn the blocking task
+        let blocking_handle = tokio::task::spawn_blocking(move || {
+            run_acp_sync(
+                event_tx,
+                cancelled_for_task,
                 working_dir,
                 agent_binary,
                 session_id_owned,
                 started,
                 prompt_text,
             )
-            .await
-        })
-        .await;
+        });
 
-        match result {
-            Ok(inner_result) => inner_result,
-            Err(_) => {
-                // Timeout - send error event
-                let _ = event_tx.try_send(AcpEvent::Error(format!(
+        // Race between: blocking task completion, timeout, and external cancellation
+        tokio::select! {
+            result = blocking_handle => {
+                // Normal completion
+                match result {
+                    Ok(inner) => inner,
+                    Err(e) if e.is_cancelled() => {
+                        Err(anyhow::anyhow!("ACP blocking task was cancelled"))
+                    }
+                    Err(e) => {
+                        Err(anyhow::anyhow!("ACP blocking task panicked: {}", e))
+                    }
+                }
+            }
+            _ = tokio::time::sleep(timeout_duration) => {
+                // Timeout - signal cancellation so blocking task stops
+                cancelled_for_timeout.store(true, Ordering::SeqCst);
+                let _ = event_tx_for_timeout.try_send(AcpEvent::Error(format!(
                     "ACP operation timed out after {} seconds",
                     timeout_secs
                 )));
@@ -496,8 +520,8 @@ pub async fn invoke_acp(
     ))
 }
 
-/// Internal function to run the ACP operation in a blocking context
-async fn run_acp_blocking(
+/// Synchronous function to run the ACP operation inside spawn_blocking
+fn run_acp_sync(
     event_tx: mpsc::Sender<AcpEvent>,
     cancelled: Arc<AtomicBool>,
     working_dir: PathBuf,
@@ -506,130 +530,136 @@ async fn run_acp_blocking(
     started: bool,
     prompt_text: String,
 ) -> Result<Option<String>> {
-    // ACP requires spawn_local which isn't Send, so use spawn_blocking with a new runtime
-    let result = tokio::task::spawn_blocking(move || {
-        // Check cancellation before starting
-        if cancelled.load(Ordering::SeqCst) {
-            return Err(anyhow::anyhow!("ACP operation cancelled before start"));
+    // Check cancellation before starting
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(anyhow::anyhow!("ACP operation cancelled before start"));
+    }
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to create tokio runtime for ACP invocation");
+            let _ = event_tx.try_send(AcpEvent::Error(format!(
+                "Failed to create runtime: {}",
+                e
+            )));
+            return Err(anyhow::anyhow!("Failed to create runtime: {}", e));
         }
+    };
 
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to create tokio runtime for ACP invocation");
-                let _ = event_tx.try_send(AcpEvent::Error(format!(
-                    "Failed to create runtime: {}",
-                    e
-                )));
-                return Err(anyhow::anyhow!("Failed to create runtime: {}", e));
-            }
-        };
-
-        rt.block_on(async {
-            let local = tokio::task::LocalSet::new();
-            local
-                .run_until(async move {
-                    // Spawn ACP client with the event sender
-                    let client = match AcpClient::spawn(&working_dir, &agent_binary, event_tx.clone())
-                        .await
-                    {
+    rt.block_on(async {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                // Spawn ACP client with the event sender
+                let client =
+                    match AcpClient::spawn(&working_dir, &agent_binary, event_tx.clone()).await {
                         Ok(c) => c,
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to spawn ACP client");
-                            let _ = event_tx
-                                .try_send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e)));
+                            let _ = event_tx.try_send(AcpEvent::Error(format!(
+                                "Failed to spawn ACP client: {}",
+                                e
+                            )));
                             return Err(e);
                         }
                     };
 
-                    // Check cancellation
-                    if cancelled.load(Ordering::SeqCst) {
-                        return Err(anyhow::anyhow!("ACP operation cancelled"));
-                    }
+                // Check cancellation
+                if cancelled.load(Ordering::SeqCst) {
+                    tracing::info!("ACP operation cancelled after spawn");
+                    return Err(anyhow::anyhow!("ACP operation cancelled"));
+                }
 
-                    // Initialize ACP connection
-                    if let Err(e) = client.initialize().await {
-                        tracing::error!(error = %e, "Failed to initialize ACP connection");
-                        let _ = event_tx
-                            .try_send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e)));
-                        return Err(e);
-                    }
+                // Initialize ACP connection
+                if let Err(e) = client.initialize().await {
+                    tracing::error!(error = %e, "Failed to initialize ACP connection");
+                    let _ = event_tx
+                        .try_send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e)));
+                    return Err(e);
+                }
 
-                    // Check cancellation
-                    if cancelled.load(Ordering::SeqCst) {
-                        return Err(anyhow::anyhow!("ACP operation cancelled"));
-                    }
+                // Check cancellation
+                if cancelled.load(Ordering::SeqCst) {
+                    tracing::info!("ACP operation cancelled after initialize");
+                    return Err(anyhow::anyhow!("ACP operation cancelled"));
+                }
 
-                    // Create or load session
-                    let active_session_id = if !started {
-                        // New session - create it (event is sent inside new_session)
+                // Create or load session
+                let active_session_id = if !started {
+                    // New session - create it (event is sent inside new_session)
+                    match client.new_session().await {
+                        Ok(new_id) => {
+                            tracing::info!(session_id = %new_id, "Created new ACP session");
+                            new_id
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to create new ACP session");
+                            let _ = event_tx.try_send(AcpEvent::Error(format!(
+                                "Failed to create session: {}",
+                                e
+                            )));
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    // Existing session - load it
+                    let existing_session_id = session_id_owned.clone().unwrap_or_default();
+                    if let Err(e) = client.load_session(&existing_session_id).await {
+                        tracing::warn!(error = %e, session_id = %existing_session_id, "Failed to load existing session, will create new one");
+                        // Try creating new session instead
                         match client.new_session().await {
                             Ok(new_id) => {
-                                tracing::info!(session_id = %new_id, "Created new ACP session");
+                                tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
                                 new_id
                             }
-                            Err(e) => {
-                                tracing::error!(error = %e, "Failed to create new ACP session");
+                            Err(e2) => {
+                                tracing::error!(error = %e2, "Failed to create fallback session");
                                 let _ = event_tx.try_send(AcpEvent::Error(format!(
                                     "Failed to create session: {}",
-                                    e
+                                    e2
                                 )));
-                                return Err(e);
+                                return Err(e2);
                             }
                         }
                     } else {
-                        // Existing session - load it
-                        let existing_session_id = session_id_owned.clone().unwrap_or_default();
-                        if let Err(e) = client.load_session(&existing_session_id).await {
-                            tracing::warn!(error = %e, session_id = %existing_session_id, "Failed to load existing session, will create new one");
-                            // Try creating new session instead
-                            match client.new_session().await {
-                                Ok(new_id) => {
-                                    tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
-                                    new_id
-                                }
-                                Err(e2) => {
-                                    tracing::error!(error = %e2, "Failed to create fallback session");
-                                    let _ = event_tx.try_send(AcpEvent::Error(format!(
-                                        "Failed to create session: {}",
-                                        e2
-                                    )));
-                                    return Err(e2);
-                                }
-                            }
-                        } else {
-                            existing_session_id.clone()
-                        }
-                    };
-
-                    // Check cancellation before sending prompt
-                    if cancelled.load(Ordering::SeqCst) {
-                        return Err(anyhow::anyhow!("ACP operation cancelled"));
+                        existing_session_id.clone()
                     }
+                };
 
-                    // Send prompt - events stream via session_notification callback
-                    // This is where the actual work happens; events are sent directly to event_tx
-                    client.prompt(&active_session_id, &prompt_text).await?;
+                // Check cancellation before sending prompt
+                if cancelled.load(Ordering::SeqCst) {
+                    tracing::info!("ACP operation cancelled before prompt");
+                    return Err(anyhow::anyhow!("ACP operation cancelled"));
+                }
 
-                    // Return the session ID if it was newly created
-                    if !started {
-                        Ok(Some(active_session_id))
-                    } else {
-                        Ok(None)
+                // Send prompt with cancellation support
+                // Use select! to race prompt against cancellation check
+                let prompt_result = tokio::select! {
+                    result = client.prompt(&active_session_id, &prompt_text) => {
+                        result
                     }
-                })
-                .await
-        })
+                    _ = wait_for_cancellation(&cancelled) => {
+                        // Cancelled during prompt - try to send cancel notification
+                        tracing::info!("ACP operation cancelled during prompt, sending cancel notification");
+                        let _ = client.cancel(&active_session_id).await;
+                        // Client will be dropped here, killing the child process
+                        return Err(anyhow::anyhow!("ACP operation cancelled during prompt"));
+                    }
+                };
+
+                // Handle prompt result
+                prompt_result?;
+
+                // Return the session ID if it was newly created
+                if !started {
+                    Ok(Some(active_session_id))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
     })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(e) => {
-            tracing::error!(error = %e, "ACP blocking task failed");
-            Err(anyhow::anyhow!("ACP blocking task failed: {}", e))
-        }
-    }
 }
 
 #[cfg(test)]
