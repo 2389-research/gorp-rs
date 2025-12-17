@@ -4,6 +4,7 @@
 use acp::Agent as _;
 use agent_client_protocol as acp;
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -241,6 +242,7 @@ impl AcpClient {
         working_dir: &Path,
         agent_binary: &str,
         event_tx: mpsc::Sender<AcpEvent>,
+        env_vars: &HashMap<String, String>,
     ) -> Result<Self> {
         // Validate inputs
         if agent_binary.contains("..") || agent_binary.contains('\0') {
@@ -257,6 +259,7 @@ impl AcpClient {
 
         let mut child = Command::new(agent_binary)
             .current_dir(working_dir)
+            .envs(env_vars)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -465,6 +468,10 @@ pub async fn invoke_acp(
     let prompt_text = prompt.to_string();
     let event_tx_for_timeout = event_tx.clone();
 
+    // Capture environment variables BEFORE entering spawn_blocking
+    // This ensures PATH and other env vars are available to the child process
+    let env_vars: HashMap<String, String> = std::env::vars().collect();
+
     // Spawn the ACP task - returns immediately
     let task_handle = tokio::task::spawn(async move {
         let timeout_duration = Duration::from_secs(timeout_secs);
@@ -479,6 +486,7 @@ pub async fn invoke_acp(
                 session_id_owned,
                 started,
                 prompt_text,
+                env_vars,
             )
         });
 
@@ -521,6 +529,7 @@ pub async fn invoke_acp(
 }
 
 /// Synchronous function to run the ACP operation inside spawn_blocking
+#[allow(clippy::too_many_arguments)]
 fn run_acp_sync(
     event_tx: mpsc::Sender<AcpEvent>,
     cancelled: Arc<AtomicBool>,
@@ -529,6 +538,7 @@ fn run_acp_sync(
     session_id_owned: Option<String>,
     started: bool,
     prompt_text: String,
+    env_vars: HashMap<String, String>,
 ) -> Result<Option<String>> {
     // Check cancellation before starting
     if cancelled.load(Ordering::SeqCst) {
@@ -550,7 +560,7 @@ fn run_acp_sync(
             .run_until(async {
                 // Spawn ACP client with the event sender
                 let client =
-                    match AcpClient::spawn(&working_dir, &agent_binary, event_tx.clone()).await {
+                    match AcpClient::spawn(&working_dir, &agent_binary, event_tx.clone(), &env_vars).await {
                         Ok(c) => c,
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to spawn ACP client");
