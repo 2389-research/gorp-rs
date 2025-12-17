@@ -2,10 +2,12 @@
 // ABOUTME: It replaces direct Claude CLI spawning with the standardized ACP protocol over stdio.
 
 use agent_client_protocol as acp;
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, Mutex};
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Events emitted during ACP agent execution
 #[derive(Debug, Clone)]
@@ -180,13 +182,59 @@ impl acp::Client for AcpClientHandler {
 
 /// ACP client for communicating with an agent process
 pub struct AcpClient {
-    // TODO: implement
+    _child: Child,
+    conn: acp::ClientSideConnection,
+    handler: Arc<AcpClientHandler>,
+    working_dir: PathBuf,
 }
 
 impl AcpClient {
     /// Spawn a new agent process and establish ACP connection
-    pub async fn spawn(_working_dir: &Path, _agent_binary: &str) -> Result<Self> {
-        todo!("implement spawn")
+    pub async fn spawn(working_dir: &Path, agent_binary: &str) -> Result<Self> {
+        // Validate inputs
+        if agent_binary.contains("..") || agent_binary.contains('\0') {
+            anyhow::bail!("Invalid agent binary path");
+        }
+        if !working_dir.exists() {
+            anyhow::bail!("Working directory does not exist: {}", working_dir.display());
+        }
+
+        tracing::info!(binary = %agent_binary, cwd = %working_dir.display(), "Spawning ACP agent");
+
+        let mut child = Command::new(agent_binary)
+            .current_dir(working_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .context("Failed to spawn ACP agent")?;
+
+        let stdin = child.stdin.take().context("Failed to get stdin")?;
+        let stdout = child.stdout.take().context("Failed to get stdout")?;
+
+        let handler = Arc::new(AcpClientHandler::new());
+        let handler_clone = Arc::clone(&handler);
+
+        // Create ACP connection
+        let (conn, handle_io) = acp::ClientSideConnection::new(
+            (*handler_clone).clone(),
+            stdin.compat_write(),
+            stdout.compat(),
+            |fut| {
+                tokio::task::spawn_local(fut);
+            },
+        );
+
+        // Spawn I/O handler
+        tokio::task::spawn_local(handle_io);
+
+        Ok(Self {
+            _child: child,
+            conn,
+            handler,
+            working_dir: working_dir.to_path_buf(),
+        })
     }
 
     /// Initialize the ACP connection
