@@ -514,7 +514,11 @@ fn run_config(action: ConfigAction) -> Result<()> {
             println!("\n[workspace]");
             println!("path = \"{}\"", config.workspace.path);
             println!("\n[claude]");
-            println!("binary_path = \"{}\"", config.claude.binary_path);
+            if let Some(ref binary) = config.acp.agent_binary {
+                println!("agent_binary = \"{}\"", binary);
+            } else {
+                println!("agent_binary = \"claude\" # Not configured, using default");
+            }
             println!("\n[webhook]");
             println!("port = {}", config.webhook.port);
             println!("\n[scheduler]");

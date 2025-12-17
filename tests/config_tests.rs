@@ -1,9 +1,7 @@
 // ABOUTME: Tests for configuration loading and validation
 // ABOUTME: Verifies TOML parsing, env var overrides, and required field validation
-//
-// NOTE: These tests use environment variables and may fail when run in parallel.
-// Run with: cargo test --test config_tests -- --test-threads=1
 
+use serial_test::serial;
 use std::io::Write;
 
 /// Helper to clear all config-related env vars
@@ -18,6 +16,7 @@ fn clear_config_env_vars() {
 }
 
 #[test]
+#[serial]
 fn test_config_loads_from_toml_file() {
     // Clear ALL config env vars to prevent test contamination
     clear_config_env_vars();
@@ -34,8 +33,8 @@ user_id = "@bot:test.matrix.org"
 password = "secret123"
 allowed_users = ["@user1:test.matrix.org", "@user2:test.matrix.org"]
 
-[claude]
-binary_path = "claude"
+[acp]
+agent_binary = "claude"
 
 [webhook]
 port = 8080
@@ -65,6 +64,7 @@ path = "./test-workspace"
 }
 
 #[test]
+#[serial]
 fn test_config_env_var_overrides() {
     // Clear ALL config env vars first
     clear_config_env_vars();
@@ -81,8 +81,8 @@ user_id = "@bot:original.matrix.org"
 password = "original-password"
 allowed_users = ["@user:original.matrix.org"]
 
-[claude]
-binary_path = "claude"
+[acp]
+agent_binary = "claude"
 
 [webhook]
 port = 8080

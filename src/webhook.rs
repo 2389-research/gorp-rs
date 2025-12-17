@@ -19,8 +19,8 @@ use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 
 use crate::{
+    acp_client::{AcpClient, AcpEvent},
     admin::{admin_router, auth_middleware, AdminState},
-    claude,
     config::Config,
     mcp::{mcp_handler, McpState},
     metrics,
@@ -148,7 +148,7 @@ async fn webhook_handler(
     State(state): State<Arc<WebhookState>>,
     Path(session_id): Path<String>,
     Json(payload): Json<WebhookRequest>,
-) -> impl IntoResponse {
+) -> (StatusCode, Json<WebhookResponse>) {
     let start_time = std::time::Instant::now();
 
     tracing::info!(
@@ -272,18 +272,128 @@ async fn webhook_handler(
     }
     metrics::record_message_sent();
 
-    // 2. Invoke Claude directly
+    // 2. Invoke ACP agent directly
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("webhook");
-    let claude_response = match claude::invoke_claude(
-        &state.config.claude.binary_path,
-        state.config.claude.sdk_url.as_deref(),
-        channel.cli_args(),
-        &payload.prompt,
-        Some(&channel.directory),
-    )
-    .await
-    {
+
+    // Check if agent binary is configured
+    let agent_binary = match state.config.acp.agent_binary.as_ref() {
+        Some(b) => b.clone(),
+        None => {
+            tracing::error!("ACP agent binary not configured");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(WebhookResponse {
+                    success: false,
+                    message: "ACP agent binary not configured".to_string(),
+                }),
+            );
+        }
+    };
+
+    let acp_response = {
+        let working_dir = std::path::Path::new(&channel.directory).to_path_buf();
+        let session_id = channel.session_id.clone();
+        let prompt_text = payload.prompt.clone();
+        let started = channel.started;
+        let agent_binary_clone = agent_binary.clone();
+
+        // ACP requires spawn_local which isn't Send, so use spawn_blocking with a new runtime
+        tokio::task::spawn_blocking(move || {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to create tokio runtime for webhook");
+                    return Err(anyhow::anyhow!("Failed to create runtime: {}", e));
+                }
+            };
+            rt.block_on(async {
+                let local = tokio::task::LocalSet::new();
+                local.run_until(async move {
+            // Spawn ACP client
+            let client = match AcpClient::spawn(&working_dir, &agent_binary_clone).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to spawn ACP client for webhook");
+                    return Err(anyhow::anyhow!("Failed to spawn ACP client: {}", e));
+                }
+            };
+
+            // Initialize ACP connection
+            if let Err(e) = client.initialize().await {
+                tracing::error!(error = %e, "Failed to initialize ACP for webhook");
+                return Err(anyhow::anyhow!("Failed to initialize ACP: {}", e));
+            }
+
+            // Create or load session
+            let active_session_id = if !started {
+                match client.new_session().await {
+                    Ok(new_id) => {
+                        tracing::info!(session_id = %new_id, "Created new ACP session for webhook");
+                        new_id
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to create new ACP session for webhook");
+                        return Err(anyhow::anyhow!("Failed to create session: {}", e));
+                    }
+                }
+            } else {
+                if let Err(e) = client.load_session(&session_id).await {
+                    tracing::warn!(error = %e, session_id = %session_id, "Failed to load session for webhook, creating new one");
+                    match client.new_session().await {
+                        Ok(new_id) => {
+                            tracing::info!(session_id = %new_id, "Created new ACP session for webhook after load failure");
+                            new_id
+                        }
+                        Err(e2) => {
+                            tracing::error!(error = %e2, "Failed to create fallback session for webhook");
+                            return Err(anyhow::anyhow!("Failed to create session: {}", e2));
+                        }
+                    }
+                } else {
+                    session_id.clone()
+                }
+            };
+
+            // Send prompt and collect response
+            let mut rx = match client.prompt(&active_session_id, &prompt_text).await {
+                Ok(rx) => rx,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to send prompt for webhook");
+                    return Err(anyhow::anyhow!("Failed to send prompt: {}", e));
+                }
+            };
+
+            let mut response = String::new();
+            while let Some(event) = rx.recv().await {
+                match event {
+                    AcpEvent::Text(text) => {
+                        response.push_str(&text);
+                    }
+                    AcpEvent::Result { text } => {
+                        if response.is_empty() {
+                            response = text;
+                        }
+                    }
+                    AcpEvent::Error(e) => {
+                        return Err(anyhow::anyhow!("ACP error: {}", e));
+                    }
+                    AcpEvent::InvalidSession => {
+                        return Err(anyhow::anyhow!("Invalid session"));
+                    }
+                    AcpEvent::ToolUse { .. } => {
+                        // Ignore tool use events in webhook context
+                    }
+                }
+            }
+
+            Ok(response)
+                }).await
+            })
+        }).await.expect("spawn_blocking failed")
+    };
+
+    let acp_response = match acp_response {
         Ok(resp) => {
             let claude_duration = claude_start.elapsed().as_secs_f64();
             metrics::record_claude_duration(claude_duration);
@@ -291,10 +401,10 @@ async fn webhook_handler(
             resp
         }
         Err(e) => {
-            tracing::error!(error = %e, "Claude invocation failed");
+            tracing::error!(error = %e, "ACP invocation failed");
             metrics::record_webhook_request("error");
-            metrics::record_error("webhook_claude_failed");
-            let error_msg = format!("⚠️ Claude error: {}", e);
+            metrics::record_error("webhook_acp_failed");
+            let error_msg = format!("⚠️ ACP error: {}", e);
             let _ = room
                 .send(RoomMessageEventContent::text_plain(&error_msg))
                 .await;
@@ -302,14 +412,14 @@ async fn webhook_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
                     success: false,
-                    message: format!("Claude error: {}", e),
+                    message: format!("ACP error: {}", e),
                 }),
             );
         }
     };
 
-    // 3. Send Claude's response to room with markdown formatting and chunking
-    let chunks = chunk_message(&claude_response, MAX_CHUNK_SIZE);
+    // 3. Send ACP's response to room with markdown formatting and chunking
+    let chunks = chunk_message(&acp_response, MAX_CHUNK_SIZE);
     let chunk_count = chunks.len();
     for (i, chunk) in chunks.iter().enumerate() {
         let html = markdown_to_html(chunk);

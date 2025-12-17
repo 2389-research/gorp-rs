@@ -751,7 +751,7 @@ impl SchedulerStore {
 
 // Background scheduler execution module
 use crate::{
-    claude,
+    acp_client::{AcpClient, AcpEvent},
     config::Config,
     session::{Channel, SessionStore},
     utils::{chunk_message, expand_slash_command, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
@@ -937,32 +937,105 @@ async fn execute_schedule(
     // Start typing indicator
     let _ = room.typing_notice(true).await;
 
-    // Use streaming mode to capture actual response even if session ends with errors
-    let mut rx = match claude::invoke_claude_streaming(
-        &config.claude.binary_path,
-        config.claude.sdk_url.as_deref(),
-        channel.cli_args(),
-        &prompt,
-        Some(&channel.directory),
-    )
-    .await
-    {
-        Ok(rx) => rx,
-        Err(e) => {
-            let _ = room.typing_notice(false).await;
-            tracing::error!(
-                schedule_id = %schedule.id,
-                error = %e,
-                "Failed to spawn Claude for scheduled task"
-            );
-            let error_msg = format!("⚠️ Scheduled task failed: {}", e);
-            let _ = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await;
-            let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
-            return;
-        }
-    };
+    // Use ACP client for scheduled task execution - create channel for events
+    let (event_tx, mut rx) = tokio::sync::mpsc::channel(32);
+
+    let working_dir = std::path::Path::new(&channel.directory).to_path_buf();
+
+    if config.acp.agent_binary.is_none() {
+        tracing::error!("ACP agent binary not configured");
+        let _ = event_tx.send(AcpEvent::Error("ACP agent binary not configured".to_string())).await;
+        drop(event_tx);
+        // Continue to process events (will get the error we just sent)
+    } else if let Some(ref binary) = config.acp.agent_binary {
+        let session_id = channel.session_id.clone();
+        let prompt_text = prompt.clone();
+        let started = channel.started;
+        let binary = binary.clone();
+
+        // Spawn a blocking task that will run LocalSet
+        tokio::task::spawn_blocking(move || {
+            // Create a new tokio runtime for this blocking task
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to create tokio runtime for scheduled task");
+                    // Can't send to async channel from sync context, error is already logged
+                    return;
+                }
+            };
+            rt.block_on(async {
+                let local = tokio::task::LocalSet::new();
+                local.run_until(async move {
+                    // Spawn ACP client
+                    let client = match AcpClient::spawn(&working_dir, &binary).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to spawn ACP client for scheduled task");
+                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e))).await;
+                            return;
+                        }
+                    };
+
+                    // Initialize ACP connection
+                    if let Err(e) = client.initialize().await {
+                        tracing::error!(error = %e, "Failed to initialize ACP for scheduled task");
+                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e))).await;
+                        return;
+                    }
+
+                    // Create or load session
+                    let active_session_id = if !started {
+                        match client.new_session().await {
+                            Ok(new_id) => {
+                                tracing::info!(session_id = %new_id, "Created new ACP session for scheduled task");
+                                new_id
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to create new ACP session for scheduled task");
+                                let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e))).await;
+                                return;
+                            }
+                        }
+                    } else {
+                        if let Err(e) = client.load_session(&session_id).await {
+                            tracing::warn!(error = %e, session_id = %session_id, "Failed to load session for scheduled task, creating new one");
+                            match client.new_session().await {
+                                Ok(new_id) => {
+                                    tracing::info!(session_id = %new_id, "Created new ACP session for scheduled task after load failure");
+                                    new_id
+                                }
+                                Err(e2) => {
+                                    tracing::error!(error = %e2, "Failed to create fallback session for scheduled task");
+                                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e2))).await;
+                                    return;
+                                }
+                            }
+                        } else {
+                            session_id.clone()
+                        }
+                    };
+
+                    // Send prompt
+                    let mut prompt_rx = match client.prompt(&active_session_id, &prompt_text).await {
+                        Ok(rx) => rx,
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to send prompt for scheduled task");
+                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to send prompt: {}", e))).await;
+                            return;
+                        }
+                    };
+
+                    // Forward events from prompt_rx to event_tx
+                    while let Some(event) = prompt_rx.recv().await {
+                        if event_tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                }).await;
+            });
+        });
+    }
 
     // Collect response from stream
     let mut response = String::new();
@@ -970,47 +1043,37 @@ async fn execute_schedule(
 
     while let Some(event) = rx.recv().await {
         match event {
-            claude::ClaudeEvent::ToolUse { name, input_preview } => {
+            AcpEvent::ToolUse { name, input_preview } => {
                 tracing::debug!(tool = %name, preview = %input_preview, "Scheduled task tool use");
             }
-            claude::ClaudeEvent::Result { text, usage } => {
-                // Record token usage metrics
-                metrics::record_claude_tokens(
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cache_read_tokens,
-                    usage.cache_creation_tokens,
-                );
-                // Convert dollars to cents and record
-                let cost_cents = (usage.total_cost_usd * 100.0).round() as u64;
-                metrics::record_claude_cost_cents(cost_cents);
-
-                tracing::info!(
-                    input_tokens = usage.input_tokens,
-                    output_tokens = usage.output_tokens,
-                    cost_usd = usage.total_cost_usd,
-                    "Scheduled task usage recorded"
-                );
-
-                response = text;
+            AcpEvent::Text(text) => {
+                // Accumulate text chunks
+                response.push_str(&text);
             }
-            claude::ClaudeEvent::Error(e) => {
-                tracing::warn!(error = %e, "Scheduled task Claude error");
+            AcpEvent::Result { text } => {
+                // If we haven't accumulated text, use the result text
+                if response.is_empty() {
+                    response = text;
+                }
+                tracing::info!(response_len = response.len(), "Scheduled task ACP completed");
+            }
+            AcpEvent::Error(e) => {
+                tracing::warn!(error = %e, "Scheduled task ACP error");
                 had_error = true;
                 // Don't return yet - we might have captured text before the error
             }
-            claude::ClaudeEvent::OrphanedSession => {
-                tracing::warn!("Scheduled task hit orphaned session");
+            AcpEvent::InvalidSession => {
+                tracing::warn!("Scheduled task hit invalid session");
                 // Reset the session so future executions start fresh
                 if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
-                    tracing::error!(error = %e, "Failed to reset orphaned session in scheduler");
+                    tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
                 }
                 let _ = room
                     .send(RoomMessageEventContent::text_plain(
                         "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
                     ))
                     .await;
-                let _ = scheduler_store.mark_failed(&schedule.id, "Session was orphaned");
+                let _ = scheduler_store.mark_failed(&schedule.id, "Session was invalid");
                 return;
             }
         }
@@ -1025,24 +1088,24 @@ async fn execute_schedule(
             tracing::error!(
                 schedule_id = %schedule.id,
                 prompt = %schedule.prompt,
-                "Claude returned empty response with error for scheduled task"
+                "ACP returned empty response with error for scheduled task"
             );
-            let error_msg = "⚠️ Scheduled task failed: Claude encountered an error and returned no response.";
+            let error_msg = "⚠️ Scheduled task failed: ACP encountered an error and returned no response.";
             let _ = room
                 .send(RoomMessageEventContent::text_plain(error_msg))
                 .await;
-            let _ = scheduler_store.mark_failed(&schedule.id, "Claude error with empty response");
+            let _ = scheduler_store.mark_failed(&schedule.id, "ACP error with empty response");
         } else {
             tracing::error!(
                 schedule_id = %schedule.id,
                 prompt = %schedule.prompt,
-                "Claude returned empty response for scheduled task"
+                "ACP returned empty response for scheduled task"
             );
-            let error_msg = "⚠️ Scheduled task failed: Claude returned an empty response. This may indicate a session issue or prompt problem.";
+            let error_msg = "⚠️ Scheduled task failed: ACP returned an empty response. This may indicate a session issue or prompt problem.";
             let _ = room
                 .send(RoomMessageEventContent::text_plain(error_msg))
                 .await;
-            let _ = scheduler_store.mark_failed(&schedule.id, "Empty response from Claude");
+            let _ = scheduler_store.mark_failed(&schedule.id, "Empty response from ACP");
         }
         return;
     }
@@ -1131,7 +1194,7 @@ async fn execute_schedule(
     if had_error {
         tracing::warn!(
             schedule_id = %schedule.id,
-            "Scheduled task completed with warnings (Claude encountered non-fatal errors)"
+            "Scheduled task completed with warnings (ACP encountered non-fatal errors)"
         );
     }
 }

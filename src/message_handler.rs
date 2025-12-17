@@ -12,7 +12,7 @@ use matrix_sdk::{
 };
 
 use crate::{
-    claude::{self, ClaudeEvent},
+    acp_client::{AcpClient, AcpEvent},
     config::Config,
     matrix_client,
     metrics,
@@ -281,7 +281,7 @@ pub async fn handle_message(
         }
     };
 
-    let channel_args = channel.cli_args();
+    let _channel_args = channel.cli_args(); // Kept for potential future use
 
     // Write context file for MCP tools (before Claude invocation)
     if let Err(e) = write_context_file(
@@ -322,33 +322,106 @@ pub async fn handle_message(
         }
     });
 
-    // Invoke Claude with streaming to show tool usage
+    // Invoke ACP agent with streaming to show tool usage
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("matrix");
-    let mut event_rx = match claude::invoke_claude_streaming(
-        &config.claude.binary_path,
-        config.claude.sdk_url.as_deref(),
-        channel_args,
-        &prompt,
-        Some(&channel.directory),
-    )
-    .await
+
+    // Setup ACP invocation
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(32);
+
     {
-        Ok(rx) => rx,
-        Err(e) => {
-            tracing::error!(error = %e, "Claude invocation failed");
-            metrics::record_error("claude_invocation");
-            let error_msg = format!("⚠️ Claude error: {}", e);
+        let working_dir = std::path::Path::new(&channel.directory).to_path_buf();
+        let agent_binary = config.acp.agent_binary.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("ACP agent binary not configured"))?.clone();
+        let session_id = channel.session_id.clone();
+        let prompt_text = prompt.clone();
+        let started = channel.started;
 
-            let _ = typing_tx.send(());
-            typing_handle.abort();
-            room.typing_notice(false).await?;
+        // ACP requires spawn_local which isn't Send, so use spawn_blocking
+        tokio::task::spawn_blocking(move || {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to create tokio runtime");
+                    // Can't send to async channel from sync context, error is already logged
+                    return;
+                }
+            };
+            rt.block_on(async {
+                let local = tokio::task::LocalSet::new();
+                local.run_until(async move {
+            // Spawn ACP client
+            let client = match AcpClient::spawn(&working_dir, &agent_binary).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to spawn ACP client");
+                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e))).await;
+                    return;
+                }
+            };
 
-            room.send(RoomMessageEventContent::text_plain(&error_msg))
-                .await?;
-            return Ok(());
-        }
-    };
+            // Initialize ACP connection
+            if let Err(e) = client.initialize().await {
+                tracing::error!(error = %e, "Failed to initialize ACP connection");
+                let _ = event_tx.send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e))).await;
+                return;
+            }
+
+            // Create or load session
+            let active_session_id = if !started {
+                // New session - create it
+                match client.new_session().await {
+                    Ok(new_id) => {
+                        tracing::info!(session_id = %new_id, "Created new ACP session");
+                        new_id
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to create new ACP session");
+                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e))).await;
+                        return;
+                    }
+                }
+            } else {
+                // Existing session - load it
+                if let Err(e) = client.load_session(&session_id).await {
+                    tracing::warn!(error = %e, session_id = %session_id, "Failed to load existing session, will create new one");
+                    // Try creating new session instead
+                    match client.new_session().await {
+                        Ok(new_id) => {
+                            tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
+                            new_id
+                        }
+                        Err(e2) => {
+                            tracing::error!(error = %e2, "Failed to create fallback session");
+                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e2))).await;
+                            return;
+                        }
+                    }
+                } else {
+                    session_id.clone()
+                }
+            };
+
+            // Send prompt and get event receiver
+            let mut prompt_rx = match client.prompt(&active_session_id, &prompt_text).await {
+                Ok(rx) => rx,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to send prompt");
+                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to send prompt: {}", e))).await;
+                    return;
+                }
+            };
+
+            // Forward events from prompt_rx to event_tx
+            while let Some(event) = prompt_rx.recv().await {
+                if event_tx.send(event).await.is_err() {
+                    break;
+                }
+            }
+                }).await;
+            });
+        });
+    }
 
     // Check if debug mode is enabled for this channel
     // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)
@@ -357,13 +430,13 @@ pub async fn handle_message(
         tracing::debug!(channel = %channel.channel_name, "Debug mode enabled - will show tool usage");
     }
 
-    // Process streaming events
-    let mut final_response: Option<String> = None;
+    // Process streaming events from ACP
+    let mut final_response = String::new();
     let mut tools_used: Vec<String> = Vec::new();
 
     while let Some(event) = event_rx.recv().await {
         match event {
-            ClaudeEvent::ToolUse {
+            AcpEvent::ToolUse {
                 name,
                 input_preview,
             } => {
@@ -402,49 +475,45 @@ pub async fn handle_message(
                     }
                 }
             }
-            ClaudeEvent::Result { text, usage } => {
-                // Record token usage metrics
-                metrics::record_claude_tokens(
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cache_read_tokens,
-                    usage.cache_creation_tokens,
-                );
-                // Convert dollars to cents and record
-                let cost_cents = (usage.total_cost_usd * 100.0).round() as u64;
-                metrics::record_claude_cost_cents(cost_cents);
-
-                tracing::info!(
-                    input_tokens = usage.input_tokens,
-                    output_tokens = usage.output_tokens,
-                    cost_usd = usage.total_cost_usd,
-                    "Claude usage recorded"
-                );
-
-                final_response = Some(text);
+            AcpEvent::Text(text) => {
+                // Accumulate text chunks
+                final_response.push_str(&text);
             }
-            ClaudeEvent::Error(error) => {
+            AcpEvent::Result { text } => {
+                // Final result - use the accumulated text if we have it, otherwise use result text
+                if !final_response.is_empty() {
+                    // We already accumulated text, result is just completion marker
+                    tracing::info!(response_len = final_response.len(), "ACP session completed");
+                } else {
+                    // No accumulated text, use the result text
+                    final_response = text;
+                    tracing::info!(response_len = final_response.len(), "ACP session completed with result text");
+                }
+                // ACP doesn't provide token usage in current implementation
+                // TODO: Extract usage from ACP once it supports it
+            }
+            AcpEvent::Error(error) => {
                 let _ = typing_tx.send(());
                 typing_handle.abort();
                 room.typing_notice(false).await?;
 
-                metrics::record_error("claude_streaming");
-                let error_msg = format!("⚠️ Claude error: {}", error);
+                metrics::record_error("acp_streaming");
+                let error_msg = format!("⚠️ ACP error: {}", error);
                 room.send(RoomMessageEventContent::text_plain(&error_msg))
                     .await?;
                 return Ok(());
             }
-            ClaudeEvent::OrphanedSession => {
+            AcpEvent::InvalidSession => {
                 let _ = typing_tx.send(());
                 typing_handle.abort();
                 room.typing_notice(false).await?;
 
                 // Reset the session so next message starts fresh
                 if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
-                    tracing::error!(error = %e, "Failed to reset orphaned session");
+                    tracing::error!(error = %e, "Failed to reset invalid session");
                 }
 
-                metrics::record_error("orphaned_session");
+                metrics::record_error("invalid_session");
                 room.send(RoomMessageEventContent::text_plain(
                     "🔄 Session was reset (conversation data was lost). Please send your message again.",
                 ))
@@ -454,31 +523,30 @@ pub async fn handle_message(
         }
     }
 
-    let response = match final_response {
-        Some(r) => {
-            let claude_duration = claude_start.elapsed().as_secs_f64();
-            metrics::record_claude_duration(claude_duration);
-            metrics::record_claude_response_length(r.len());
-            tracing::info!(
-                response_length = r.len(),
-                tools_count = tools_used.len(),
-                "Claude responded"
-            );
-            r
-        }
-        None => {
-            let _ = typing_tx.send(());
-            typing_handle.abort();
-            room.typing_notice(false).await?;
+    // Check if we got a response
+    if final_response.is_empty() {
+        let _ = typing_tx.send(());
+        typing_handle.abort();
+        room.typing_notice(false).await?;
 
-            metrics::record_error("claude_no_response");
-            room.send(RoomMessageEventContent::text_plain(
-                "⚠️ Claude finished without a response",
-            ))
-            .await?;
-            return Ok(());
-        }
-    };
+        metrics::record_error("acp_no_response");
+        room.send(RoomMessageEventContent::text_plain(
+            "⚠️ ACP agent finished without a response",
+        ))
+        .await?;
+        return Ok(());
+    }
+
+    let claude_duration = claude_start.elapsed().as_secs_f64();
+    metrics::record_claude_duration(claude_duration);
+    metrics::record_claude_response_length(final_response.len());
+    tracing::info!(
+        response_length = final_response.len(),
+        tools_count = tools_used.len(),
+        "ACP agent responded"
+    );
+
+    let response = final_response;
 
     // Mark session as started BEFORE sending response (to ensure consistency)
     session_store.mark_started(room.room_id().as_str())?;
