@@ -1,8 +1,7 @@
 // ABOUTME: Root library module exposing all public modules
-// ABOUTME: Provides access to config, session, claude, matrix client, and webhook modules
+// ABOUTME: Provides access to config, session, matrix client, and webhook modules
 pub mod acp_client;
 pub mod admin;
-pub mod claude;
 pub mod config;
 pub mod matrix_client;
 pub mod mcp;
