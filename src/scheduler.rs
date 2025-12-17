@@ -945,7 +945,9 @@ async fn execute_schedule(
         None => {
             tracing::error!("ACP agent binary not configured");
             let error_msg = "⚠️ ACP agent binary not configured";
-            let _ = room.send(RoomMessageEventContent::text_plain(error_msg)).await;
+            let _ = room
+                .send(RoomMessageEventContent::text_plain(error_msg))
+                .await;
             let _ = scheduler_store.mark_failed(&schedule.id, error_msg);
             return;
         }
@@ -965,7 +967,9 @@ async fn execute_schedule(
         Err(e) => {
             tracing::error!(error = %e, "Failed to invoke ACP for scheduled task");
             let error_msg = format!("⚠️ Failed to invoke ACP: {}", e);
-            let _ = room.send(RoomMessageEventContent::text_plain(&error_msg)).await;
+            let _ = room
+                .send(RoomMessageEventContent::text_plain(&error_msg))
+                .await;
             let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
             return;
         }

@@ -49,7 +49,24 @@ impl AcpClientHandler {
 
     async fn send_event(&self, event: AcpEvent) {
         if let Some(tx) = self.event_tx.lock().await.as_ref() {
-            let _ = tx.send(event).await;
+            // Use try_send to prevent blocking if the channel is full.
+            // If the channel buffer (32) is full, it means the consumer is slow or stalled.
+            // We drop the event and log it rather than blocking the ACP event handler,
+            // which could cause the entire agent connection to hang.
+            if let Err(e) = tx.try_send(event) {
+                match e {
+                    mpsc::error::TrySendError::Full(dropped_event) => {
+                        tracing::warn!(
+                            event = ?dropped_event,
+                            "Event channel buffer full (32), dropping event to prevent blocking"
+                        );
+                    }
+                    mpsc::error::TrySendError::Closed(_) => {
+                        // Channel closed, receiver dropped - this is expected during shutdown
+                        tracing::debug!("Event channel closed, receiver dropped");
+                    }
+                }
+            }
         }
     }
 
@@ -343,12 +360,22 @@ impl AcpClient {
             Ok(response) => {
                 // The response only contains stop_reason; content is streamed via session_notification
                 let final_text = format!("Completed: {:?}", response.stop_reason);
-                let _ = tx.send(AcpEvent::Result { text: final_text }).await;
+                // Use try_send to prevent blocking on full channel
+                if let Err(e) = tx.try_send(AcpEvent::Result { text: final_text }) {
+                    if matches!(e, mpsc::error::TrySendError::Full(_)) {
+                        tracing::warn!("Event channel full, dropping final result event");
+                    }
+                }
             }
             Err(e) => {
                 let error_msg = format!("ACP prompt error: {}", e);
                 tracing::error!(%error_msg);
-                let _ = tx.send(AcpEvent::Error(error_msg)).await;
+                // Use try_send to prevent blocking on full channel
+                if let Err(send_err) = tx.try_send(AcpEvent::Error(error_msg)) {
+                    if matches!(send_err, mpsc::error::TrySendError::Full(_)) {
+                        tracing::warn!("Event channel full, dropping error event");
+                    }
+                }
             }
         }
 
@@ -413,7 +440,8 @@ pub async fn invoke_acp(
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to spawn ACP client");
-                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e))).await;
+                        // Use try_send to prevent blocking on full channel
+                        let _ = event_tx.try_send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e)));
                         return Err(e);
                     }
                 };
@@ -421,7 +449,8 @@ pub async fn invoke_acp(
                 // Initialize ACP connection
                 if let Err(e) = client.initialize().await {
                     tracing::error!(error = %e, "Failed to initialize ACP connection");
-                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e))).await;
+                    // Use try_send to prevent blocking on full channel
+                    let _ = event_tx.try_send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e)));
                     return Err(e);
                 }
 
@@ -431,13 +460,14 @@ pub async fn invoke_acp(
                     match client.new_session().await {
                         Ok(new_id) => {
                             tracing::info!(session_id = %new_id, "Created new ACP session");
-                            // Notify that session ID changed
-                            let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
+                            // Notify that session ID changed - use try_send to prevent blocking
+                            let _ = event_tx.try_send(AcpEvent::SessionChanged { new_session_id: new_id.clone() });
                             (new_id, true)
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to create new ACP session");
-                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e))).await;
+                            // Use try_send to prevent blocking on full channel
+                            let _ = event_tx.try_send(AcpEvent::Error(format!("Failed to create session: {}", e)));
                             return Err(e);
                         }
                     }
@@ -450,13 +480,14 @@ pub async fn invoke_acp(
                         match client.new_session().await {
                             Ok(new_id) => {
                                 tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
-                                // Notify that session ID changed
-                                let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
+                                // Notify that session ID changed - use try_send to prevent blocking
+                                let _ = event_tx.try_send(AcpEvent::SessionChanged { new_session_id: new_id.clone() });
                                 (new_id, true)
                             }
                             Err(e2) => {
                                 tracing::error!(error = %e2, "Failed to create fallback session");
-                                let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e2))).await;
+                                // Use try_send to prevent blocking on full channel
+                                let _ = event_tx.try_send(AcpEvent::Error(format!("Failed to create session: {}", e2)));
                                 return Err(e2);
                             }
                         }
@@ -470,7 +501,8 @@ pub async fn invoke_acp(
                     Ok(rx) => rx,
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to send prompt");
-                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to send prompt: {}", e))).await;
+                        // Use try_send to prevent blocking on full channel
+                        let _ = event_tx.try_send(AcpEvent::Error(format!("Failed to send prompt: {}", e)));
                         return Err(e);
                     }
                 };
@@ -484,8 +516,22 @@ pub async fn invoke_acp(
                         final_session_id = Some(new_session_id.clone());
                     }
 
-                    if event_tx.send(event).await.is_err() {
-                        break;
+                    // Use try_send to prevent blocking on full channel
+                    // If channel is full, we drop the event and log it
+                    if let Err(e) = event_tx.try_send(event) {
+                        match e {
+                            mpsc::error::TrySendError::Full(dropped) => {
+                                tracing::warn!(
+                                    event = ?dropped,
+                                    "Event channel buffer full (32), dropping event in invoke_acp forwarding loop"
+                                );
+                            }
+                            mpsc::error::TrySendError::Closed(_) => {
+                                // Channel closed, receiver dropped - stop forwarding
+                                tracing::debug!("Event channel closed in invoke_acp, stopping event forwarding");
+                                break;
+                            }
+                        }
                     }
                 }
 
