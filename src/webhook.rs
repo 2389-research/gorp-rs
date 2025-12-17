@@ -300,7 +300,7 @@ async fn webhook_handler(
     };
 
     // Use shared ACP invocation function
-    let (mut event_rx, new_session_id) = match invoke_acp(
+    let (mut event_rx, task_handle) = match invoke_acp(
         agent_binary,
         std::path::Path::new(&channel.directory),
         Some(&channel.session_id),
@@ -382,6 +382,15 @@ async fn webhook_handler(
             }
         }
     }
+
+    // Wait for the ACP task to complete and get the session ID
+    let new_session_id = match task_handle.wait().await {
+        Ok(session_id) => session_id,
+        Err(e) => {
+            tracing::warn!(error = %e, "ACP task did not complete cleanly");
+            None
+        }
+    };
 
     let claude_duration = claude_start.elapsed().as_secs_f64();
     metrics::record_claude_duration(claude_duration);

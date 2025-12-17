@@ -327,7 +327,7 @@ pub async fn handle_message(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("ACP agent binary not configured"))?;
 
-    let mut event_rx = match invoke_acp(
+    let (mut event_rx, task_handle) = match invoke_acp(
         agent_binary,
         Path::new(&channel.directory),
         Some(&channel.session_id),
@@ -337,7 +337,7 @@ pub async fn handle_message(
     )
     .await
     {
-        Ok((rx, _new_session_id)) => rx,
+        Ok((rx, handle)) => (rx, handle),
         Err(e) => {
             let _ = typing_tx.send(());
             typing_handle.abort();
@@ -459,6 +459,12 @@ pub async fn handle_message(
                 return Ok(());
             }
         }
+    }
+
+    // Wait for the ACP task to complete and clean up
+    // This ensures the child process is properly terminated
+    if let Err(e) = task_handle.wait().await {
+        tracing::warn!(error = %e, "ACP task did not complete cleanly");
     }
 
     // Check if we got a response

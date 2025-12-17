@@ -953,7 +953,7 @@ async fn execute_schedule(
         }
     };
 
-    let mut rx = match invoke_acp(
+    let (mut rx, task_handle) = match invoke_acp(
         agent_binary,
         Path::new(&channel.directory),
         Some(&channel.session_id),
@@ -963,7 +963,7 @@ async fn execute_schedule(
     )
     .await
     {
-        Ok((rx, _new_session_id)) => rx,
+        Ok((rx, handle)) => (rx, handle),
         Err(e) => {
             tracing::error!(error = %e, "Failed to invoke ACP for scheduled task");
             let error_msg = format!("⚠️ Failed to invoke ACP: {}", e);
@@ -1028,6 +1028,11 @@ async fn execute_schedule(
                 return;
             }
         }
+    }
+
+    // Wait for the ACP task to complete and clean up
+    if let Err(e) = task_handle.wait().await {
+        tracing::warn!(error = %e, "ACP task did not complete cleanly for scheduled task");
     }
 
     // Stop typing
