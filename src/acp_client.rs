@@ -2,6 +2,7 @@
 // ABOUTME: It replaces direct Claude CLI spawning with the standardized ACP protocol over stdio.
 
 use agent_client_protocol as acp;
+use acp::Agent as _;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -239,17 +240,45 @@ impl AcpClient {
 
     /// Initialize the ACP connection
     pub async fn initialize(&self) -> Result<()> {
-        todo!("implement initialize")
+        self.conn
+            .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1)
+                .client_capabilities(acp::ClientCapabilities::default())
+                .client_info(
+                    acp::Implementation::new("gorp-acp", env!("CARGO_PKG_VERSION"))
+                        .title("Matrix-Claude Bridge")
+                ))
+            .await
+            .context("ACP initialization failed")?;
+
+        tracing::info!("ACP connection initialized");
+        Ok(())
     }
 
     /// Create a new session
     pub async fn new_session(&self) -> Result<String> {
-        todo!("implement new_session")
+        let response = self
+            .conn
+            .new_session(acp::NewSessionRequest::new(self.working_dir.clone()))
+            .await
+            .context("Failed to create new ACP session")?;
+
+        let session_id = response.session_id.to_string();
+        tracing::info!(session_id = %session_id, "Created new ACP session");
+        Ok(session_id)
     }
 
     /// Load an existing session by ID
-    pub async fn load_session(&self, _session_id: &str) -> Result<()> {
-        todo!("implement load_session")
+    pub async fn load_session(&self, session_id: &str) -> Result<()> {
+        self.conn
+            .load_session(acp::LoadSessionRequest::new(
+                acp::SessionId::new(session_id.to_string()),
+                self.working_dir.clone(),
+            ))
+            .await
+            .context("Failed to load ACP session")?;
+
+        tracing::info!(session_id = %session_id, "Loaded existing ACP session");
+        Ok(())
     }
 
     /// Send a prompt and receive streaming events
