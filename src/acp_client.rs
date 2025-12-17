@@ -539,10 +539,7 @@ fn run_acp_sync(
         Ok(rt) => rt,
         Err(e) => {
             tracing::error!(error = %e, "Failed to create tokio runtime for ACP invocation");
-            let _ = event_tx.try_send(AcpEvent::Error(format!(
-                "Failed to create runtime: {}",
-                e
-            )));
+            let _ = event_tx.try_send(AcpEvent::Error(format!("Failed to create runtime: {}", e)));
             return Err(anyhow::anyhow!("Failed to create runtime: {}", e));
         }
     };
