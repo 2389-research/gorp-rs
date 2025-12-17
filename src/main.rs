@@ -755,6 +755,18 @@ async fn run_start() -> Result<()> {
 
     tracing::info!("Starting gorp - Matrix-Claude Bridge");
 
+    // Log PATH for debugging ACP spawn issues
+    if let Ok(path) = std::env::var("PATH") {
+        tracing::info!(path_len = path.len(), "Environment PATH length");
+        if path.contains("mise") {
+            tracing::debug!("PATH contains mise directories");
+        } else {
+            tracing::warn!("PATH does not contain mise - node spawning may fail");
+        }
+    } else {
+        tracing::error!("No PATH environment variable set!");
+    }
+
     // Load configuration
     dotenvy::dotenv().ok();
     let config = Config::load()?;

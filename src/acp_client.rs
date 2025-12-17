@@ -255,6 +255,13 @@ impl AcpClient {
             );
         }
 
+        // Log PATH for debugging spawn issues
+        if let Some(path) = env_vars.get("PATH") {
+            tracing::debug!(path = %path, "PATH being passed to child process");
+        } else {
+            tracing::warn!("No PATH in env_vars!");
+        }
+
         tracing::info!(binary = %agent_binary, cwd = %working_dir.display(), "Spawning ACP agent");
 
         let mut child = Command::new(agent_binary)
@@ -471,6 +478,14 @@ pub async fn invoke_acp(
     // Capture environment variables BEFORE entering spawn_blocking
     // This ensures PATH and other env vars are available to the child process
     let env_vars: HashMap<String, String> = std::env::vars().collect();
+
+    // Log PATH at invoke time for debugging
+    if let Some(path) = env_vars.get("PATH") {
+        tracing::info!(path_len = path.len(), "Captured PATH for ACP spawn");
+        tracing::debug!(path = %path, "Full PATH value");
+    } else {
+        tracing::error!("No PATH environment variable found!");
+    }
 
     // Spawn the ACP task - returns immediately
     let task_handle = tokio::task::spawn(async move {
