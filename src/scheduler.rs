@@ -751,7 +751,7 @@ impl SchedulerStore {
 
 // Background scheduler execution module
 use crate::{
-    acp_client::{AcpClient, AcpEvent},
+    acp_client::{invoke_acp, AcpEvent},
     config::Config,
     session::{Channel, SessionStore},
     utils::{
@@ -939,113 +939,36 @@ async fn execute_schedule(
     // Start typing indicator
     let _ = room.typing_notice(true).await;
 
-    // Use ACP client for scheduled task execution - create channel for events
-    let (event_tx, mut rx) = tokio::sync::mpsc::channel(32);
+    // Use shared ACP invocation function
+    let agent_binary = match config.acp.agent_binary.as_ref() {
+        Some(b) => b,
+        None => {
+            tracing::error!("ACP agent binary not configured");
+            let error_msg = "⚠️ ACP agent binary not configured";
+            let _ = room.send(RoomMessageEventContent::text_plain(error_msg)).await;
+            let _ = scheduler_store.mark_failed(&schedule.id, error_msg);
+            return;
+        }
+    };
 
-    let working_dir = std::path::Path::new(&channel.directory).to_path_buf();
-
-    if config.acp.agent_binary.is_none() {
-        tracing::error!("ACP agent binary not configured");
-        let _ = event_tx
-            .send(AcpEvent::Error(
-                "ACP agent binary not configured".to_string(),
-            ))
-            .await;
-        drop(event_tx);
-        // Continue to process events (will get the error we just sent)
-    } else if let Some(ref binary) = config.acp.agent_binary {
-        let session_id = channel.session_id.clone();
-        let prompt_text = prompt.clone();
-        let started = channel.started;
-        let binary = binary.clone();
-
-        // Spawn a blocking task that will run LocalSet
-        tokio::task::spawn_blocking(move || {
-            // Create a new tokio runtime for this blocking task
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to create tokio runtime for scheduled task");
-                    // Can't send to async channel from sync context, error is already logged
-                    return;
-                }
-            };
-            rt.block_on(async {
-                let local = tokio::task::LocalSet::new();
-                local.run_until(async move {
-                    // Spawn ACP client
-                    let client = match AcpClient::spawn(&working_dir, &binary).await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to spawn ACP client for scheduled task");
-                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e))).await;
-                            return;
-                        }
-                    };
-
-                    // Initialize ACP connection
-                    if let Err(e) = client.initialize().await {
-                        tracing::error!(error = %e, "Failed to initialize ACP for scheduled task");
-                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e))).await;
-                        return;
-                    }
-
-                    // Create or load session
-                    let active_session_id = if !started {
-                        match client.new_session().await {
-                            Ok(new_id) => {
-                                tracing::info!(session_id = %new_id, "Created new ACP session for scheduled task");
-                                // Notify that session ID changed
-                                let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
-                                new_id
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "Failed to create new ACP session for scheduled task");
-                                let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e))).await;
-                                return;
-                            }
-                        }
-                    } else {
-                        if let Err(e) = client.load_session(&session_id).await {
-                            tracing::warn!(error = %e, session_id = %session_id, "Failed to load session for scheduled task, creating new one");
-                            match client.new_session().await {
-                                Ok(new_id) => {
-                                    tracing::info!(session_id = %new_id, "Created new ACP session for scheduled task after load failure");
-                                    // Notify that session ID changed
-                                    let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
-                                    new_id
-                                }
-                                Err(e2) => {
-                                    tracing::error!(error = %e2, "Failed to create fallback session for scheduled task");
-                                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e2))).await;
-                                    return;
-                                }
-                            }
-                        } else {
-                            session_id.clone()
-                        }
-                    };
-
-                    // Send prompt
-                    let mut prompt_rx = match client.prompt(&active_session_id, &prompt_text).await {
-                        Ok(rx) => rx,
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to send prompt for scheduled task");
-                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to send prompt: {}", e))).await;
-                            return;
-                        }
-                    };
-
-                    // Forward events from prompt_rx to event_tx
-                    while let Some(event) = prompt_rx.recv().await {
-                        if event_tx.send(event).await.is_err() {
-                            break;
-                        }
-                    }
-                }).await;
-            });
-        });
-    }
+    let mut rx = match invoke_acp(
+        agent_binary,
+        Path::new(&channel.directory),
+        Some(&channel.session_id),
+        channel.started,
+        &prompt,
+    )
+    .await
+    {
+        Ok((rx, _new_session_id)) => rx,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to invoke ACP for scheduled task");
+            let error_msg = format!("⚠️ Failed to invoke ACP: {}", e);
+            let _ = room.send(RoomMessageEventContent::text_plain(&error_msg)).await;
+            let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
+            return;
+        }
+    };
 
     // Collect response from stream
     let mut response = String::new();

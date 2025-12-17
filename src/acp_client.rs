@@ -367,6 +367,134 @@ impl AcpClient {
     }
 }
 
+/// Invoke ACP agent with full spawn → initialize → session → prompt flow
+///
+/// This encapsulates all the complexity of:
+/// - spawn_blocking + LocalSet pattern (required for !Send ACP client)
+/// - Spawning and initializing the ACP client
+/// - Creating new session or loading existing session
+/// - Sending prompt and collecting response events
+///
+/// Returns the event receiver and optionally a new session ID if one was created.
+pub async fn invoke_acp(
+    agent_binary: &str,
+    working_dir: &Path,
+    session_id: Option<&str>,
+    started: bool,
+    prompt: &str,
+) -> Result<(mpsc::Receiver<AcpEvent>, Option<String>)> {
+    let (event_tx, event_rx) = mpsc::channel(32);
+
+    let working_dir = working_dir.to_path_buf();
+    let agent_binary = agent_binary.to_string();
+    let session_id_owned = session_id.map(|s| s.to_string());
+    let prompt_text = prompt.to_string();
+
+    // ACP requires spawn_local which isn't Send, so use spawn_blocking with a new runtime
+    tokio::task::spawn_blocking(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to create tokio runtime for ACP invocation");
+                return Err(anyhow::anyhow!("Failed to create runtime: {}", e));
+            }
+        };
+
+        rt.block_on(async {
+            let local = tokio::task::LocalSet::new();
+            local.run_until(async move {
+                // Spawn ACP client
+                let client = match AcpClient::spawn(&working_dir, &agent_binary).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to spawn ACP client");
+                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e))).await;
+                        return Err(e);
+                    }
+                };
+
+                // Initialize ACP connection
+                if let Err(e) = client.initialize().await {
+                    tracing::error!(error = %e, "Failed to initialize ACP connection");
+                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e))).await;
+                    return Err(e);
+                }
+
+                // Create or load session
+                let (active_session_id, session_changed) = if !started {
+                    // New session - create it
+                    match client.new_session().await {
+                        Ok(new_id) => {
+                            tracing::info!(session_id = %new_id, "Created new ACP session");
+                            // Notify that session ID changed
+                            let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
+                            (new_id, true)
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to create new ACP session");
+                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e))).await;
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    // Existing session - load it
+                    let existing_session_id = session_id_owned.clone().unwrap_or_default();
+                    if let Err(e) = client.load_session(&existing_session_id).await {
+                        tracing::warn!(error = %e, session_id = %existing_session_id, "Failed to load existing session, will create new one");
+                        // Try creating new session instead
+                        match client.new_session().await {
+                            Ok(new_id) => {
+                                tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
+                                // Notify that session ID changed
+                                let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
+                                (new_id, true)
+                            }
+                            Err(e2) => {
+                                tracing::error!(error = %e2, "Failed to create fallback session");
+                                let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e2))).await;
+                                return Err(e2);
+                            }
+                        }
+                    } else {
+                        (existing_session_id.clone(), false)
+                    }
+                };
+
+                // Send prompt and get event receiver
+                let mut prompt_rx = match client.prompt(&active_session_id, &prompt_text).await {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to send prompt");
+                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to send prompt: {}", e))).await;
+                        return Err(e);
+                    }
+                };
+
+                // Forward events from prompt_rx to event_tx
+                // Also track if we see a SessionChanged event
+                let mut final_session_id = if session_changed { Some(active_session_id) } else { None };
+                while let Some(event) = prompt_rx.recv().await {
+                    // Track SessionChanged events
+                    if let AcpEvent::SessionChanged { ref new_session_id } = event {
+                        final_session_id = Some(new_session_id.clone());
+                    }
+
+                    if event_tx.send(event).await.is_err() {
+                        break;
+                    }
+                }
+
+                // Return the session ID if it changed
+                Ok(final_session_id)
+            }).await
+        })
+    })
+    .await
+    .context("Failed to spawn ACP blocking task")
+    .and_then(|result| result)
+    .map(|session_id| (event_rx, session_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

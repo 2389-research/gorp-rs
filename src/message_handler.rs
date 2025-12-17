@@ -10,7 +10,7 @@ use matrix_sdk::{
 };
 
 use crate::{
-    acp_client::{AcpClient, AcpEvent},
+    acp_client::{invoke_acp, AcpEvent},
     config::Config,
     matrix_client, metrics,
     scheduler::{
@@ -320,110 +320,35 @@ pub async fn handle_message(
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("matrix");
 
-    // Setup ACP invocation
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(32);
+    // Use shared ACP invocation function
+    let agent_binary = config
+        .acp
+        .agent_binary
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("ACP agent binary not configured"))?;
 
+    let mut event_rx = match invoke_acp(
+        agent_binary,
+        Path::new(&channel.directory),
+        Some(&channel.session_id),
+        channel.started,
+        &prompt,
+    )
+    .await
     {
-        let working_dir = std::path::Path::new(&channel.directory).to_path_buf();
-        let agent_binary = config
-            .acp
-            .agent_binary
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("ACP agent binary not configured"))?
-            .clone();
-        let session_id = channel.session_id.clone();
-        let prompt_text = prompt.clone();
-        let started = channel.started;
+        Ok((rx, _new_session_id)) => rx,
+        Err(e) => {
+            let _ = typing_tx.send(());
+            typing_handle.abort();
+            room.typing_notice(false).await?;
 
-        // ACP requires spawn_local which isn't Send, so use spawn_blocking
-        tokio::task::spawn_blocking(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to create tokio runtime");
-                    // Can't send to async channel from sync context, error is already logged
-                    return;
-                }
-            };
-            rt.block_on(async {
-                let local = tokio::task::LocalSet::new();
-                local.run_until(async move {
-            // Spawn ACP client
-            let client = match AcpClient::spawn(&working_dir, &agent_binary).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to spawn ACP client");
-                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to spawn ACP client: {}", e))).await;
-                    return;
-                }
-            };
-
-            // Initialize ACP connection
-            if let Err(e) = client.initialize().await {
-                tracing::error!(error = %e, "Failed to initialize ACP connection");
-                let _ = event_tx.send(AcpEvent::Error(format!("Failed to initialize ACP: {}", e))).await;
-                return;
-            }
-
-            // Create or load session
-            let active_session_id = if !started {
-                // New session - create it
-                match client.new_session().await {
-                    Ok(new_id) => {
-                        tracing::info!(session_id = %new_id, "Created new ACP session");
-                        // Notify that session ID changed
-                        let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
-                        new_id
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to create new ACP session");
-                        let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e))).await;
-                        return;
-                    }
-                }
-            } else {
-                // Existing session - load it
-                if let Err(e) = client.load_session(&session_id).await {
-                    tracing::warn!(error = %e, session_id = %session_id, "Failed to load existing session, will create new one");
-                    // Try creating new session instead
-                    match client.new_session().await {
-                        Ok(new_id) => {
-                            tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
-                            // Notify that session ID changed
-                            let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
-                            new_id
-                        }
-                        Err(e2) => {
-                            tracing::error!(error = %e2, "Failed to create fallback session");
-                            let _ = event_tx.send(AcpEvent::Error(format!("Failed to create session: {}", e2))).await;
-                            return;
-                        }
-                    }
-                } else {
-                    session_id.clone()
-                }
-            };
-
-            // Send prompt and get event receiver
-            let mut prompt_rx = match client.prompt(&active_session_id, &prompt_text).await {
-                Ok(rx) => rx,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to send prompt");
-                    let _ = event_tx.send(AcpEvent::Error(format!("Failed to send prompt: {}", e))).await;
-                    return;
-                }
-            };
-
-            // Forward events from prompt_rx to event_tx
-            while let Some(event) = prompt_rx.recv().await {
-                if event_tx.send(event).await.is_err() {
-                    break;
-                }
-            }
-                }).await;
-            });
-        });
-    }
+            metrics::record_error("acp_invocation");
+            let error_msg = format!("⚠️ Failed to invoke ACP: {}", e);
+            room.send(RoomMessageEventContent::text_plain(&error_msg))
+                .await?;
+            return Ok(());
+        }
+    };
 
     // Check if debug mode is enabled for this channel
     // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)
