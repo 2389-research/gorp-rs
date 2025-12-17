@@ -1434,6 +1434,7 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "askama",
+ "async-trait",
  "axum",
  "chrono",
  "chrono-tz",
