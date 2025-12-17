@@ -157,11 +157,11 @@ fn default_room_prefix() -> String {
 /// Expand tilde (~) to home directory in paths
 /// Logs a warning if expansion fails and falls back to the original path
 fn expand_tilde(path: &str) -> String {
-    if path.starts_with("~/") {
+    if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(base_dirs) = directories::BaseDirs::new() {
             return base_dirs
                 .home_dir()
-                .join(&path[2..])
+                .join(stripped)
                 .to_string_lossy()
                 .to_string();
         } else {

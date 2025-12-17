@@ -108,10 +108,10 @@ pub fn expand_slash_command(prompt: &str, workspace_dir: &str) -> Result<String,
         .map_err(|e| format!("Failed to read command file: {}", e))?;
 
     // Strip YAML frontmatter if present (between --- markers)
-    let expanded = if content.starts_with("---") {
+    let expanded = if let Some(stripped) = content.strip_prefix("---") {
         // Find the closing ---
-        if let Some(end_pos) = content[3..].find("---") {
-            content[end_pos + 6..].trim().to_string()
+        if let Some(end_pos) = stripped.find("---") {
+            stripped[end_pos + 3..].trim().to_string()
         } else {
             content
         }

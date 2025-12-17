@@ -249,7 +249,7 @@ async fn notify_ready(client: &Client, config: &Config) {
             let has_target = room
                 .direct_targets()
                 .iter()
-                .any(|target| target.to_string() == user_id.to_string());
+                .any(|target| *target == user_id);
 
             if is_direct && has_target {
                 dm_room = Some(room);
@@ -565,8 +565,8 @@ fn run_schedule(action: ScheduleAction) -> Result<()> {
                 println!("No scheduled tasks.");
             } else {
                 println!(
-                    "{:<8} {:<10} {:<20} {}",
-                    "ID", "Status", "Next Execution", "Prompt"
+                    "{:<8} {:<10} {:<20} Prompt",
+                    "ID", "Status", "Next Execution"
                 );
                 println!("{}", "-".repeat(70));
                 for s in schedules {
@@ -1108,31 +1108,32 @@ fn register_event_handlers(
                         use matrix_sdk::encryption::verification::SasState;
 
                         match state {
-                            SasState::KeysExchanged { emojis, .. } => {
-                                if let Some(emoji_list) = emojis {
-                                    // Log emojis for manual verification if needed
+                            SasState::KeysExchanged {
+                                emojis: Some(emoji_list),
+                                ..
+                            } => {
+                                // Log emojis for manual verification if needed
+                                tracing::warn!(
+                                    "Emoji verification required - emojis displayed below"
+                                );
+                                for emoji in emoji_list.emojis.iter() {
                                     tracing::warn!(
-                                        "Emoji verification required - emojis displayed below"
+                                        emoji = emoji.symbol,
+                                        description = emoji.description,
+                                        "Verification emoji"
                                     );
-                                    for emoji in emoji_list.emojis.iter() {
-                                        tracing::warn!(
-                                            emoji = emoji.symbol,
-                                            description = emoji.description,
-                                            "Verification emoji"
-                                        );
-                                    }
-                                    // WARNING: Auto-confirm is insecure - allows MITM attacks
-                                    // TODO: Implement proper verification for production
-                                    tracing::warn!(
-                                        "Auto-confirming verification (INSECURE - for testing only)"
+                                }
+                                // WARNING: Auto-confirm is insecure - allows MITM attacks
+                                // TODO: Implement proper verification for production
+                                tracing::warn!(
+                                    "Auto-confirming verification (INSECURE - for testing only)"
+                                );
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                                if let Err(e) = sas.confirm().await {
+                                    tracing::error!(
+                                        error = %e,
+                                        "Failed to confirm SAS verification"
                                     );
-                                    tokio::time::sleep(Duration::from_secs(5)).await;
-                                    if let Err(e) = sas.confirm().await {
-                                        tracing::error!(
-                                            error = %e,
-                                            "Failed to confirm SAS verification"
-                                        );
-                                    }
                                 }
                             }
                             SasState::Done { .. } => {

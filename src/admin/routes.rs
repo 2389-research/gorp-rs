@@ -647,7 +647,7 @@ fn read_last_n_lines(path: &std::path::Path, n: usize) -> Vec<String> {
     // For small files, just read normally
     if metadata.len() < 64 * 1024 {
         let reader = BufReader::new(file);
-        let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+        let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
         let start = lines.len().saturating_sub(n);
         return lines[start..].to_vec();
     }
@@ -685,7 +685,7 @@ fn read_last_n_lines_reverse(mut file: File, n: usize, file_size: u64) -> Vec<St
         }
 
         // Append leftover bytes from previous chunk (they come AFTER this chunk's content)
-        buffer.extend(leftover_bytes.drain(..));
+        buffer.append(&mut leftover_bytes);
 
         // Use lossy conversion to handle UTF-8 boundary issues gracefully
         // This may replace partial chars at boundaries with replacement char, but won't fail

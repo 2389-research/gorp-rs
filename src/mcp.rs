@@ -981,7 +981,7 @@ async fn handle_create_channel(state: &McpState, args: &Value) -> Result<String,
     // Create channel in session store (handles directory creation, templates, validation)
     let channel = state
         .session_store
-        .create_channel(channel_name, &room_id.to_string())
+        .create_channel(channel_name, room_id.as_ref())
         .map_err(|e| format!("Failed to create channel: {}", e))?;
 
     // Invite user if specified

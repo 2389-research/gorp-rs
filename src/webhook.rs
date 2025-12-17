@@ -261,7 +261,7 @@ async fn webhook_handler(
 
     // 1. Send webhook prompt to room for visibility
     if let Err(e) = room
-        .send(RoomMessageEventContent::text_plain(&format!(
+        .send(RoomMessageEventContent::text_plain(format!(
             "🤖 Webhook: {}",
             payload.prompt
         )))

@@ -155,7 +155,7 @@ pub async fn handle_message(
     let is_command = body.starts_with("!claude ")
         || (body.starts_with("!")
             && body.len() > 1
-            && body.chars().nth(1).map_or(false, |c| c.is_alphabetic()));
+            && body.chars().nth(1).is_some_and(|c| c.is_alphabetic()));
 
     if is_command {
         metrics::record_message_received("command");
@@ -238,7 +238,7 @@ pub async fn handle_message(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to download image");
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "⚠️ Failed to download image: {}",
                         e
                     )))
@@ -260,7 +260,7 @@ pub async fn handle_message(
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to download file");
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "⚠️ Failed to download file: {}",
                         e
                     )))
@@ -544,6 +544,7 @@ pub async fn handle_message(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_command(
     room: Room,
     body: &str,
@@ -644,7 +645,7 @@ async fn handle_command(
                 Some("on") | Some("enable") => {
                     // Create .gorp directory if needed
                     if let Err(e) = std::fs::create_dir_all(&debug_dir) {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to create debug directory: {}",
                             e
                         )))
@@ -653,7 +654,7 @@ async fn handle_command(
                     }
                     // Create enable-debug file
                     if let Err(e) = std::fs::write(&debug_file, "") {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to enable debug: {}",
                             e
                         )))
@@ -670,7 +671,7 @@ async fn handle_command(
                     // Remove enable-debug file if it exists
                     if debug_file.exists() {
                         if let Err(e) = std::fs::remove_file(&debug_file) {
-                            room.send(RoomMessageEventContent::text_plain(&format!(
+                            room.send(RoomMessageEventContent::text_plain(format!(
                                 "⚠️ Failed to disable debug: {}",
                                 e
                             )))
@@ -691,7 +692,7 @@ async fn handle_command(
                     } else {
                         "🔇 Debug mode is DISABLED\n\nTool usage is hidden in this channel."
                     };
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "{}\n\nCommands:\n  !debug on - Show tool usage\n  !debug off - Hide tool usage",
                         status
                     )))
@@ -778,7 +779,7 @@ async fn handle_command(
 
             // Check if channel already exists (case-insensitive)
             if session_store.get_by_name(&channel_name)?.is_some() {
-                room.send(RoomMessageEventContent::text_plain(&format!(
+                room.send(RoomMessageEventContent::text_plain(format!(
                     "❌ Channel '{}' already exists.\n\nUse !list to see all channels.",
                     channel_name
                 )))
@@ -849,7 +850,7 @@ async fn handle_command(
 
             // Find the channel
             let Some(channel) = session_store.get_by_name(&channel_name)? else {
-                room.send(RoomMessageEventContent::text_plain(&format!(
+                room.send(RoomMessageEventContent::text_plain(format!(
                     "❌ Channel '{}' not found.\n\nUse !list to see all channels.",
                     channel_name
                 )))
@@ -864,7 +865,7 @@ async fn handle_command(
                 .map_err(|e| anyhow::anyhow!("Invalid room ID: {}", e))?;
             match matrix_client::invite_user(client, &room_id, sender).await {
                 Ok(_) => {
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "✅ Invited you to channel '{}'!\n\nCheck your room invites.",
                         channel_name
                     )))
@@ -881,13 +882,13 @@ async fn handle_command(
                     if err_str.contains("already in the room")
                         || err_str.contains("is already joined")
                     {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "ℹ️ You're already in channel '{}'!",
                             channel_name
                         )))
                         .await?;
                     } else {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to invite: {}",
                             e
                         )))
@@ -919,7 +920,7 @@ async fn handle_command(
 
             // Find the channel
             let Some(channel) = session_store.get_by_name(&channel_name)? else {
-                room.send(RoomMessageEventContent::text_plain(&format!(
+                room.send(RoomMessageEventContent::text_plain(format!(
                     "❌ Channel '{}' not found.\n\nUse !list to see all channels.",
                     channel_name
                 )))
@@ -1127,7 +1128,7 @@ async fn handle_command(
             let entries = match std::fs::read_dir(workspace_path) {
                 Ok(e) => e,
                 Err(e) => {
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "⚠️ Failed to read workspace directory: {}",
                         e
                     )))
@@ -1382,7 +1383,7 @@ async fn handle_command(
                                 schedules.iter().filter(|s| s.id.starts_with(*id)).collect();
                             match matching.len() {
                                 0 => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "No schedule found matching ID '{}'",
                                         id
                                     )))
@@ -1390,14 +1391,14 @@ async fn handle_command(
                                 }
                                 1 => {
                                     scheduler_store.delete_schedule(&matching[0].id)?;
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "🗑️ Deleted schedule: {}",
                                         truncate_str(&matching[0].prompt, 50)
                                     )))
                                     .await?;
                                 }
                                 _ => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "Multiple schedules match '{}'. Be more specific.",
                                         id
                                     )))
@@ -1427,7 +1428,7 @@ async fn handle_command(
                                 .collect();
                             match matching.len() {
                                 0 => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "No active schedule found matching ID '{}'",
                                         id
                                     )))
@@ -1435,14 +1436,14 @@ async fn handle_command(
                                 }
                                 1 => {
                                     scheduler_store.pause_schedule(&matching[0].id)?;
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "⏸️ Paused schedule: {}",
                                         truncate_str(&matching[0].prompt, 50)
                                     )))
                                     .await?;
                                 }
                                 _ => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "Multiple schedules match '{}'. Be more specific.",
                                         id
                                     )))
@@ -1472,7 +1473,7 @@ async fn handle_command(
                                 .collect();
                             match matching.len() {
                                 0 => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "No paused schedule found matching ID '{}'",
                                         id
                                     )))
@@ -1480,14 +1481,14 @@ async fn handle_command(
                                 }
                                 1 => {
                                     scheduler_store.resume_schedule(&matching[0].id)?;
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "▶️ Resumed schedule: {}",
                                         truncate_str(&matching[0].prompt, 50)
                                     )))
                                     .await?;
                                 }
                                 _ => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "Multiple schedules match '{}'. Be more specific.",
                                         id
                                     )))
@@ -1571,7 +1572,7 @@ async fn handle_command(
                     // Write to .gorp/schedule.yaml
                     let gorp_dir = std::path::Path::new(&channel.directory).join(".gorp");
                     if let Err(e) = std::fs::create_dir_all(&gorp_dir) {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to create .gorp directory: {}",
                             e
                         )))
@@ -1580,7 +1581,7 @@ async fn handle_command(
                     }
                     let schedule_path = gorp_dir.join("schedule.yaml");
                     if let Err(e) = std::fs::write(&schedule_path, &yaml_content) {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to write schedule.yaml: {}",
                             e
                         )))
@@ -1588,7 +1589,7 @@ async fn handle_command(
                         return Ok(());
                     }
 
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "📤 Exported {} schedule(s) to .gorp/schedule.yaml",
                         active_schedules.len()
                     )))
@@ -1611,7 +1612,7 @@ async fn handle_command(
                     let yaml_content = match std::fs::read_to_string(&schedule_path) {
                         Ok(content) => content,
                         Err(e) => {
-                            room.send(RoomMessageEventContent::text_plain(&format!(
+                            room.send(RoomMessageEventContent::text_plain(format!(
                                 "⚠️ Failed to read schedule.yaml: {}",
                                 e
                             )))
@@ -1808,7 +1809,7 @@ async fn handle_command(
                         "⏰ One-time schedule"
                     };
 
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "{} created!\n\n📝 Prompt: {}\n⏱️ Next execution: {} ({})\n🆔 ID: {}",
                         schedule_type,
                         truncate_str(&prompt, 100),
@@ -1849,7 +1850,7 @@ async fn handle_command(
             let new_session_id = uuid::Uuid::new_v4().to_string();
             session_store.reset_session(&channel.channel_name, &new_session_id)?;
 
-            room.send(RoomMessageEventContent::text_plain(&format!(
+            room.send(RoomMessageEventContent::text_plain(format!(
                 "🔄 Session Reset\n\n\
                 Channel: {}\n\
                 New Session ID: {}\n\n\
