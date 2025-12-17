@@ -335,7 +335,9 @@ async fn webhook_handler(
 
     while let Some(event) = event_rx.recv().await {
         match event {
-            AcpEvent::SessionChanged { new_session_id: sess_id } => {
+            AcpEvent::SessionChanged {
+                new_session_id: sess_id,
+            } => {
                 // Track session ID changes during execution
                 session_id_from_event = Some(sess_id);
             }
