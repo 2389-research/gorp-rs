@@ -306,6 +306,7 @@ async fn webhook_handler(
         Some(&channel.session_id),
         channel.started,
         &payload.prompt,
+        state.config.acp.timeout_secs,
     )
     .await
     {

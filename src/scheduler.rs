@@ -957,6 +957,7 @@ async fn execute_schedule(
         Some(&channel.session_id),
         channel.started,
         &prompt,
+        config.acp.timeout_secs,
     )
     .await
     {

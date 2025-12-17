@@ -333,6 +333,7 @@ pub async fn handle_message(
         Some(&channel.session_id),
         channel.started,
         &prompt,
+        config.acp.timeout_secs,
     )
     .await
     {

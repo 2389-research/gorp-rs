@@ -374,6 +374,7 @@ impl AcpClient {
 /// - Spawning and initializing the ACP client
 /// - Creating new session or loading existing session
 /// - Sending prompt and collecting response events
+/// - Timeout handling to prevent indefinite hangs
 ///
 /// Returns the event receiver and optionally a new session ID if one was created.
 pub async fn invoke_acp(
@@ -382,6 +383,7 @@ pub async fn invoke_acp(
     session_id: Option<&str>,
     started: bool,
     prompt: &str,
+    timeout_secs: u64,
 ) -> Result<(mpsc::Receiver<AcpEvent>, Option<String>)> {
     let (event_tx, event_rx) = mpsc::channel(32);
 
@@ -390,8 +392,11 @@ pub async fn invoke_acp(
     let session_id_owned = session_id.map(|s| s.to_string());
     let prompt_text = prompt.to_string();
 
+    // Wrap the entire ACP operation in a timeout
+    let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+
     // ACP requires spawn_local which isn't Send, so use spawn_blocking with a new runtime
-    tokio::task::spawn_blocking(move || {
+    let acp_future = tokio::task::spawn_blocking(move || {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
@@ -488,11 +493,18 @@ pub async fn invoke_acp(
                 Ok(final_session_id)
             }).await
         })
-    })
-    .await
-    .context("Failed to spawn ACP blocking task")
-    .and_then(|result| result)
-    .map(|session_id| (event_rx, session_id))
+    });
+
+    // Apply timeout to the entire ACP operation
+    match tokio::time::timeout(timeout_duration, acp_future).await {
+        Ok(Ok(Ok(session_id))) => Ok((event_rx, session_id)),
+        Ok(Ok(Err(e))) => Err(e),
+        Ok(Err(e)) => Err(anyhow::anyhow!("Failed to spawn ACP blocking task: {}", e)),
+        Err(_) => Err(anyhow::anyhow!(
+            "ACP operation timed out after {} seconds",
+            timeout_secs
+        )),
+    }
 }
 
 #[cfg(test)]

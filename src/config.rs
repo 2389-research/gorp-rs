@@ -59,14 +59,21 @@ impl std::fmt::Debug for MatrixConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcpConfig {
     pub agent_binary: Option<String>,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
 }
 
 impl Default for AcpConfig {
     fn default() -> Self {
         Self {
             agent_binary: Some("claude-code-acp".to_string()),
+            timeout_secs: default_timeout_secs(),
         }
     }
+}
+
+fn default_timeout_secs() -> u64 {
+    300 // 5 minutes default timeout
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +280,11 @@ impl Config {
         }
         if let Ok(val) = std::env::var("ACP_AGENT_BINARY") {
             config.acp.agent_binary = Some(val);
+        }
+        if let Ok(val) = std::env::var("ACP_TIMEOUT_SECS") {
+            config.acp.timeout_secs = val.parse().with_context(|| {
+                format!("ACP_TIMEOUT_SECS must be a valid number, got: {}", val)
+            })?;
         }
         if let Ok(val) = std::env::var("WEBHOOK_PORT") {
             config.webhook.port = val.parse().with_context(|| {
