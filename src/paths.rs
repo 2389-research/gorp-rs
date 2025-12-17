@@ -25,7 +25,7 @@ pub fn config_file() -> PathBuf {
 /// Falls back to ./data if home directory unavailable
 pub fn data_dir() -> PathBuf {
     let home = home_dir();
-    if home == PathBuf::from(".") {
+    if home.as_os_str() == "." {
         PathBuf::from("./data")
     } else {
         home.join(".local").join("share").join("gorp")
