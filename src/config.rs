@@ -9,7 +9,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub matrix: MatrixConfig,
-    pub claude: ClaudeConfig,
+    pub acp: AcpConfig,
     pub webhook: WebhookConfig,
     pub workspace: WorkspaceConfig,
     #[serde(default)]
@@ -57,11 +57,16 @@ impl std::fmt::Debug for MatrixConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaudeConfig {
-    #[serde(default = "default_claude_binary")]
-    pub binary_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sdk_url: Option<String>,
+pub struct AcpConfig {
+    pub agent_binary: Option<String>,
+}
+
+impl Default for AcpConfig {
+    fn default() -> Self {
+        Self {
+            agent_binary: Some("claude-code-acp".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,10 +129,6 @@ fn default_timezone() -> String {
 
 fn default_device_name() -> String {
     "claude-matrix-bridge".to_string()
-}
-
-fn default_claude_binary() -> String {
-    "claude".to_string()
 }
 
 fn default_webhook_port() -> u16 {
@@ -226,10 +227,7 @@ impl Config {
                     room_prefix: default_room_prefix(),
                     recovery_key: None,
                 },
-                claude: ClaudeConfig {
-                    binary_path: default_claude_binary(),
-                    sdk_url: None,
-                },
+                acp: AcpConfig::default(),
                 webhook: WebhookConfig {
                     port: default_webhook_port(),
                     api_key: None,
@@ -273,11 +271,8 @@ impl Config {
             // Clear from environment to prevent exposure via /proc or ps
             std::env::remove_var("MATRIX_RECOVERY_KEY");
         }
-        if let Ok(val) = std::env::var("CLAUDE_BINARY_PATH") {
-            config.claude.binary_path = val;
-        }
-        if let Ok(val) = std::env::var("CLAUDE_SDK_URL") {
-            config.claude.sdk_url = Some(val);
+        if let Ok(val) = std::env::var("ACP_AGENT_BINARY") {
+            config.acp.agent_binary = Some(val);
         }
         if let Ok(val) = std::env::var("WEBHOOK_PORT") {
             config.webhook.port = val.parse().with_context(|| {

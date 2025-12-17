@@ -43,12 +43,9 @@ room_prefix = "Claude"
 # Security & Privacy > Secure Backup > Set up > Copy Recovery Key
 # recovery_key = "EsTR mwqJ JoXZ 8dKN ..."
 
-[claude]
-# Path to the Claude binary (default: "claude")
-binary_path = "claude"
-
-# Optional: Custom Claude SDK URL
-# sdk_url = "https://your-custom-sdk.com"
+[acp]
+# Path to the ACP agent binary (default: "claude-code-acp")
+# agent_binary = "claude-code-acp"
 
 [webhook]
 # Port for the webhook HTTP server (default: 13000)
