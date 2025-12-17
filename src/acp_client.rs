@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Events emitted during ACP agent execution
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum AcpEvent {
     /// Agent is calling a tool
     ToolUse { name: String, input_preview: String },
@@ -29,12 +29,14 @@ pub enum AcpEvent {
 #[derive(Clone)]
 struct AcpClientHandler {
     event_tx: Arc<Mutex<Option<mpsc::Sender<AcpEvent>>>>,
+    working_dir: PathBuf,
 }
 
 impl AcpClientHandler {
-    fn new() -> Self {
+    fn new(working_dir: PathBuf) -> Self {
         Self {
             event_tx: Arc::new(Mutex::new(None)),
+            working_dir,
         }
     }
 
@@ -47,6 +49,29 @@ impl AcpClientHandler {
     async fn send_event(&self, event: AcpEvent) {
         if let Some(tx) = self.event_tx.lock().await.as_ref() {
             let _ = tx.send(event).await;
+        }
+    }
+
+    async fn log_event(&self, event: &AcpEvent) {
+        let gorp_dir = self.working_dir.join(".gorp");
+        if tokio::fs::create_dir_all(&gorp_dir).await.is_err() {
+            return;
+        }
+
+        let log_path = gorp_dir.join("acp-messages.jsonl");
+        let line = match serde_json::to_string(&event) {
+            Ok(json) => format!("{}\n", json),
+            Err(_) => return,
+        };
+
+        if let Ok(mut file) = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .await
+        {
+            use tokio::io::AsyncWriteExt;
+            let _ = file.write_all(line.as_bytes()).await;
         }
     }
 }
@@ -99,7 +124,9 @@ impl acp::Client for AcpClientHandler {
                     _ => String::new(),
                 };
                 if !text.is_empty() {
-                    self.send_event(AcpEvent::Text(text)).await;
+                    let event = AcpEvent::Text(text);
+                    self.log_event(&event).await;
+                    self.send_event(event).await;
                 }
             }
             acp::SessionUpdate::ToolCall(tool_call) => {
@@ -112,11 +139,12 @@ impl acp::Client for AcpClientHandler {
                     .and_then(|v| v.as_str())
                     .map(|s| s.chars().take(50).collect())
                     .unwrap_or_default();
-                self.send_event(AcpEvent::ToolUse {
+                let event = AcpEvent::ToolUse {
                     name,
                     input_preview: preview,
-                })
-                .await;
+                };
+                self.log_event(&event).await;
+                self.send_event(event).await;
             }
             _ => {}
         }
@@ -214,7 +242,7 @@ impl AcpClient {
         let stdin = child.stdin.take().context("Failed to get stdin")?;
         let stdout = child.stdout.take().context("Failed to get stdout")?;
 
-        let handler = Arc::new(AcpClientHandler::new());
+        let handler = Arc::new(AcpClientHandler::new(working_dir.to_path_buf()));
         let handler_clone = Arc::clone(&handler);
 
         // Create ACP connection
