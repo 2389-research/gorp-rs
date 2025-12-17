@@ -9,6 +9,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub matrix: MatrixConfig,
+    #[serde(default)]
     pub acp: AcpConfig,
     pub webhook: WebhookConfig,
     pub workspace: WorkspaceConfig,

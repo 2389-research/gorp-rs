@@ -47,6 +47,9 @@ room_prefix = "Claude"
 # Path to the ACP agent binary (default: "claude-code-acp")
 # agent_binary = "claude-code-acp"
 
+# Timeout for ACP operations in seconds (default: 300)
+# timeout_secs = 300
+
 [webhook]
 # Port for the webhook HTTP server (default: 13000)
 port = 13000
