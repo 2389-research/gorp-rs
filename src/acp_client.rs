@@ -403,6 +403,10 @@ impl AcpClient {
 /// - Sending prompt and collecting response events
 /// - Timeout handling to prevent indefinite hangs
 ///
+/// IMPORTANT: The timeout covers spawn, initialization, and sending the prompt.
+/// It does NOT cover draining events from the returned receiver. Callers should
+/// implement their own timeout when draining events if needed.
+///
 /// Returns the event receiver and optionally a new session ID if one was created.
 pub async fn invoke_acp(
     agent_binary: &str,
@@ -455,14 +459,14 @@ pub async fn invoke_acp(
                 }
 
                 // Create or load session
-                let (active_session_id, session_changed) = if !started {
+                let active_session_id = if !started {
                     // New session - create it
                     match client.new_session().await {
                         Ok(new_id) => {
                             tracing::info!(session_id = %new_id, "Created new ACP session");
                             // Notify that session ID changed - use try_send to prevent blocking
                             let _ = event_tx.try_send(AcpEvent::SessionChanged { new_session_id: new_id.clone() });
-                            (new_id, true)
+                            new_id
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "Failed to create new ACP session");
@@ -482,7 +486,7 @@ pub async fn invoke_acp(
                                 tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
                                 // Notify that session ID changed - use try_send to prevent blocking
                                 let _ = event_tx.try_send(AcpEvent::SessionChanged { new_session_id: new_id.clone() });
-                                (new_id, true)
+                                new_id
                             }
                             Err(e2) => {
                                 tracing::error!(error = %e2, "Failed to create fallback session");
@@ -492,7 +496,7 @@ pub async fn invoke_acp(
                             }
                         }
                     } else {
-                        (existing_session_id.clone(), false)
+                        existing_session_id.clone()
                     }
                 };
 
@@ -508,12 +512,19 @@ pub async fn invoke_acp(
                 };
 
                 // Forward events from prompt_rx to event_tx
-                // Also track if we see a SessionChanged event
-                let mut final_session_id = if session_changed { Some(active_session_id) } else { None };
+                // Track the most recent session ID from SessionChanged events
+                let mut final_session_id: Option<String> = None;
+                let mut received_result = false;
+
                 while let Some(event) = prompt_rx.recv().await {
-                    // Track SessionChanged events
+                    // Track SessionChanged events - always update to the most recent
                     if let AcpEvent::SessionChanged { ref new_session_id } = event {
                         final_session_id = Some(new_session_id.clone());
+                    }
+
+                    // Track if we received a Result or Error event
+                    if matches!(event, AcpEvent::Result { .. } | AcpEvent::Error(_)) {
+                        received_result = true;
                     }
 
                     // Use try_send to prevent blocking on full channel
@@ -535,6 +546,11 @@ pub async fn invoke_acp(
                     }
                 }
 
+                // Check if channel closed prematurely (before receiving Result/Error)
+                if !received_result {
+                    tracing::error!("Event channel closed before receiving Result or Error event - ACP may have crashed or been terminated");
+                }
+
                 // Return the session ID if it changed
                 Ok(final_session_id)
             }).await
@@ -547,7 +563,7 @@ pub async fn invoke_acp(
         Ok(Ok(Err(e))) => Err(e),
         Ok(Err(e)) => Err(anyhow::anyhow!("Failed to spawn ACP blocking task: {}", e)),
         Err(_) => Err(anyhow::anyhow!(
-            "ACP operation timed out after {} seconds",
+            "ACP operation timed out after {} seconds (timeout covers spawn, init, and prompt - not event draining)",
             timeout_secs
         )),
     }

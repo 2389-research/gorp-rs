@@ -331,8 +331,14 @@ async fn webhook_handler(
 
     // Collect response from event stream
     let mut acp_response = String::new();
+    let mut session_id_from_event: Option<String> = None;
+
     while let Some(event) = event_rx.recv().await {
         match event {
+            AcpEvent::SessionChanged { new_session_id: sess_id } => {
+                // Track session ID changes during execution
+                session_id_from_event = Some(sess_id);
+            }
             AcpEvent::Text(text) => {
                 acp_response.push_str(&text);
             }
@@ -369,8 +375,8 @@ async fn webhook_handler(
                     }),
                 );
             }
-            AcpEvent::ToolUse { .. } | AcpEvent::SessionChanged { .. } => {
-                // Ignore - session changes are tracked in new_session_id
+            AcpEvent::ToolUse { .. } => {
+                // Ignore tool usage events in webhook
             }
         }
     }
@@ -424,7 +430,9 @@ async fn webhook_handler(
     }
 
     // 4. Update session ID if a new one was created, then mark session as started
-    if let Some(ref sess_id) = new_session_id {
+    // Prefer session ID from event stream over the one returned by invoke_acp
+    let final_session_id = session_id_from_event.or(new_session_id);
+    if let Some(ref sess_id) = final_session_id {
         if let Err(e) = state
             .session_store
             .update_session_id(&channel.room_id, sess_id)

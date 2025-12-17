@@ -361,15 +361,15 @@ pub async fn handle_message(
     // Process streaming events from ACP
     let mut final_response = String::new();
     let mut tools_used: Vec<String> = Vec::new();
-    let mut new_session_id: Option<String> = None;
+    let mut session_id_from_event: Option<String> = None;
 
     while let Some(event) = event_rx.recv().await {
         match event {
             AcpEvent::SessionChanged {
                 new_session_id: sess_id,
             } => {
-                // Capture the new session ID to save after ACP completes
-                new_session_id = Some(sess_id);
+                // Track session ID changes during execution
+                session_id_from_event = Some(sess_id);
             }
             AcpEvent::ToolUse {
                 name,
@@ -487,7 +487,8 @@ pub async fn handle_message(
     let response = final_response;
 
     // Update session ID if a new one was created, then mark session as started
-    if let Some(ref sess_id) = new_session_id {
+    // Use session ID from event stream (which is the most authoritative source)
+    if let Some(ref sess_id) = session_id_from_event {
         if let Err(e) = session_store.update_session_id(room.room_id().as_str(), sess_id) {
             tracing::error!(error = %e, "Failed to update session ID");
             // Non-fatal - continue

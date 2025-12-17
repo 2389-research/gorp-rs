@@ -978,15 +978,15 @@ async fn execute_schedule(
     // Collect response from stream
     let mut response = String::new();
     let mut had_error = false;
-    let mut new_session_id: Option<String> = None;
+    let mut session_id_from_event: Option<String> = None;
 
     while let Some(event) = rx.recv().await {
         match event {
             AcpEvent::SessionChanged {
                 new_session_id: sess_id,
             } => {
-                // Capture the new session ID to save after ACP completes
-                new_session_id = Some(sess_id);
+                // Track session ID changes during execution
+                session_id_from_event = Some(sess_id);
             }
             AcpEvent::ToolUse {
                 name,
@@ -1098,7 +1098,9 @@ async fn execute_schedule(
     }
 
     // Update session ID if a new one was created
-    if let Some(ref sess_id) = new_session_id {
+    // Prefer session ID from event stream over the one returned by invoke_acp (from new_session_id capture in invoke_acp call)
+    let final_session_id = session_id_from_event;
+    if let Some(ref sess_id) = final_session_id {
         if let Err(e) = session_store.update_session_id(&channel.room_id, sess_id) {
             tracing::error!(error = %e, "Failed to update session ID in scheduler");
             // Non-fatal - continue
