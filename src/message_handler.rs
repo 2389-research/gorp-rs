@@ -371,6 +371,8 @@ pub async fn handle_message(
                 match client.new_session().await {
                     Ok(new_id) => {
                         tracing::info!(session_id = %new_id, "Created new ACP session");
+                        // Notify that session ID changed
+                        let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
                         new_id
                     }
                     Err(e) => {
@@ -387,6 +389,8 @@ pub async fn handle_message(
                     match client.new_session().await {
                         Ok(new_id) => {
                             tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
+                            // Notify that session ID changed
+                            let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
                             new_id
                         }
                         Err(e2) => {
@@ -431,9 +435,16 @@ pub async fn handle_message(
     // Process streaming events from ACP
     let mut final_response = String::new();
     let mut tools_used: Vec<String> = Vec::new();
+    let mut new_session_id: Option<String> = None;
 
     while let Some(event) = event_rx.recv().await {
         match event {
+            AcpEvent::SessionChanged {
+                new_session_id: sess_id,
+            } => {
+                // Capture the new session ID to save after ACP completes
+                new_session_id = Some(sess_id);
+            }
             AcpEvent::ToolUse {
                 name,
                 input_preview,
@@ -549,6 +560,13 @@ pub async fn handle_message(
 
     let response = final_response;
 
+    // Update session ID if a new one was created, then mark session as started
+    if let Some(ref sess_id) = new_session_id {
+        if let Err(e) = session_store.update_session_id(room.room_id().as_str(), sess_id) {
+            tracing::error!(error = %e, "Failed to update session ID");
+            // Non-fatal - continue
+        }
+    }
     // Mark session as started BEFORE sending response (to ensure consistency)
     session_store.mark_started(room.room_id().as_str())?;
 

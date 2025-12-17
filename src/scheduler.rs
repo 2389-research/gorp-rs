@@ -995,6 +995,8 @@ async fn execute_schedule(
                         match client.new_session().await {
                             Ok(new_id) => {
                                 tracing::info!(session_id = %new_id, "Created new ACP session for scheduled task");
+                                // Notify that session ID changed
+                                let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
                                 new_id
                             }
                             Err(e) => {
@@ -1009,6 +1011,8 @@ async fn execute_schedule(
                             match client.new_session().await {
                                 Ok(new_id) => {
                                     tracing::info!(session_id = %new_id, "Created new ACP session for scheduled task after load failure");
+                                    // Notify that session ID changed
+                                    let _ = event_tx.send(AcpEvent::SessionChanged { new_session_id: new_id.clone() }).await;
                                     new_id
                                 }
                                 Err(e2) => {
@@ -1046,9 +1050,16 @@ async fn execute_schedule(
     // Collect response from stream
     let mut response = String::new();
     let mut had_error = false;
+    let mut new_session_id: Option<String> = None;
 
     while let Some(event) = rx.recv().await {
         match event {
+            AcpEvent::SessionChanged {
+                new_session_id: sess_id,
+            } => {
+                // Capture the new session ID to save after ACP completes
+                new_session_id = Some(sess_id);
+            }
             AcpEvent::ToolUse {
                 name,
                 input_preview,
@@ -1155,6 +1166,14 @@ async fn execute_schedule(
         // Small delay between chunks
         if i < chunk_count - 1 {
             tokio::time::sleep(StdDuration::from_millis(100)).await;
+        }
+    }
+
+    // Update session ID if a new one was created
+    if let Some(ref sess_id) = new_session_id {
+        if let Err(e) = session_store.update_session_id(&channel.room_id, sess_id) {
+            tracing::error!(error = %e, "Failed to update session ID in scheduler");
+            // Non-fatal - continue
         }
     }
 

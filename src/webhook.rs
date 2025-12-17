@@ -334,11 +334,11 @@ async fn webhook_handler(
             }
 
             // Create or load session
-            let active_session_id = if !started {
+            let (active_session_id, session_changed) = if !started {
                 match client.new_session().await {
                     Ok(new_id) => {
                         tracing::info!(session_id = %new_id, "Created new ACP session for webhook");
-                        new_id
+                        (new_id, true)
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to create new ACP session for webhook");
@@ -351,7 +351,7 @@ async fn webhook_handler(
                     match client.new_session().await {
                         Ok(new_id) => {
                             tracing::info!(session_id = %new_id, "Created new ACP session for webhook after load failure");
-                            new_id
+                            (new_id, true)
                         }
                         Err(e2) => {
                             tracing::error!(error = %e2, "Failed to create fallback session for webhook");
@@ -359,7 +359,7 @@ async fn webhook_handler(
                         }
                     }
                 } else {
-                    session_id.clone()
+                    (session_id.clone(), false)
                 }
             };
 
@@ -389,24 +389,41 @@ async fn webhook_handler(
                     AcpEvent::InvalidSession => {
                         return Err(anyhow::anyhow!("Invalid session"));
                     }
-                    AcpEvent::ToolUse { .. } => {
-                        // Ignore tool use events in webhook context
+                    AcpEvent::ToolUse { .. } | AcpEvent::SessionChanged { .. } => {
+                        // Ignore tool use and session change events in webhook context
+                        // (session changes are tracked via local variable)
                     }
                 }
             }
 
-            Ok(response)
+            Ok((response, active_session_id, session_changed))
                 }).await
             })
-        }).await.expect("spawn_blocking failed")
+        }).await
     };
 
     let acp_response = match acp_response {
-        Ok(resp) => {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to spawn ACP blocking task");
+            metrics::record_webhook_request("error");
+            metrics::record_error("webhook_spawn_blocking");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(WebhookResponse {
+                    success: false,
+                    message: format!("Internal error spawning ACP task: {}", e),
+                }),
+            );
+        }
+    };
+
+    let (acp_response, new_session_id, session_changed) = match acp_response {
+        Ok((resp, sess_id, changed)) => {
             let claude_duration = claude_start.elapsed().as_secs_f64();
             metrics::record_claude_duration(claude_duration);
             metrics::record_claude_response_length(resp.len());
-            resp
+            (resp, sess_id, changed)
         }
         Err(e) => {
             tracing::error!(error = %e, "ACP invocation failed");
@@ -470,7 +487,16 @@ async fn webhook_handler(
         }
     }
 
-    // 4. Mark session as started
+    // 4. Update session ID if a new one was created, then mark session as started
+    if session_changed {
+        if let Err(e) = state
+            .session_store
+            .update_session_id(&channel.room_id, &new_session_id)
+        {
+            tracing::error!(error = %e, "Failed to update session ID");
+            // Don't fail the request - message was sent successfully
+        }
+    }
     if let Err(e) = state.session_store.mark_started(&channel.room_id) {
         tracing::error!(error = %e, "Failed to mark session as started");
         // Don't fail the request - message was sent successfully

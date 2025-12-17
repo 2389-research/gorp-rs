@@ -23,6 +23,8 @@ pub enum AcpEvent {
     Error(String),
     /// Session is invalid/orphaned
     InvalidSession,
+    /// Session ID changed (new session created)
+    SessionChanged { new_session_id: String },
 }
 
 /// Handler for ACP client-side callbacks
@@ -40,10 +42,9 @@ impl AcpClientHandler {
         }
     }
 
-    fn set_event_sender(&self, tx: mpsc::Sender<AcpEvent>) {
-        if let Ok(mut guard) = self.event_tx.try_lock() {
-            *guard = Some(tx);
-        }
+    async fn set_event_sender(&self, tx: mpsc::Sender<AcpEvent>) {
+        let mut guard = self.event_tx.lock().await;
+        *guard = Some(tx);
     }
 
     async fn send_event(&self, event: AcpEvent) {
@@ -208,10 +209,20 @@ impl acp::Client for AcpClientHandler {
 
 /// ACP client for communicating with an agent process
 pub struct AcpClient {
-    _child: Child,
+    child: Child,
     conn: acp::ClientSideConnection,
     handler: Arc<AcpClientHandler>,
     working_dir: PathBuf,
+}
+
+impl Drop for AcpClient {
+    fn drop(&mut self) {
+        // Explicitly kill the child process when the client is dropped
+        // This ensures the agent process is cleaned up even if the client is dropped unexpectedly
+        if let Err(e) = self.child.start_kill() {
+            tracing::warn!(error = %e, "Failed to kill ACP agent process during Drop");
+        }
+    }
 }
 
 impl AcpClient {
@@ -259,7 +270,7 @@ impl AcpClient {
         tokio::task::spawn_local(handle_io);
 
         Ok(Self {
-            _child: child,
+            child,
             conn,
             handler,
             working_dir: working_dir.to_path_buf(),
@@ -314,7 +325,7 @@ impl AcpClient {
     /// Send a prompt and receive streaming events
     pub async fn prompt(&self, session_id: &str, text: &str) -> Result<mpsc::Receiver<AcpEvent>> {
         let (tx, rx) = mpsc::channel(32);
-        self.handler.set_event_sender(tx.clone());
+        self.handler.set_event_sender(tx.clone()).await;
 
         tracing::debug!(session_id = %session_id, prompt_len = text.len(), "Sending prompt");
 
