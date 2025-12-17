@@ -5,17 +5,14 @@ use anyhow::Result;
 use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters},
     room::Room,
-    ruma::events::room::message::{
-        MessageType, RoomMessageEventContent,
-    },
+    ruma::events::room::message::{MessageType, RoomMessageEventContent},
     Client, RoomState,
 };
 
 use crate::{
     acp_client::{AcpClient, AcpEvent},
     config::Config,
-    matrix_client,
-    metrics,
+    matrix_client, metrics,
     scheduler::{
         parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
     },
@@ -225,18 +222,19 @@ pub async fn handle_message(
         MessageType::Image(image_content) => {
             // Download the image
             let filename = image_content.body.clone();
-            match download_attachment(&client, &image_content.source, &filename, &channel.directory)
-                .await
+            match download_attachment(
+                &client,
+                &image_content.source,
+                &filename,
+                &channel.directory,
+            )
+            .await
             {
                 Ok(rel_path) => {
                     let abs_path = format!("{}/{}", channel.directory, rel_path);
                     tracing::info!(path = %abs_path, "Image downloaded");
                     // Include image path in prompt for Claude to read
-                    format!(
-                        "[Attached image: {}]\n\n{}",
-                        abs_path,
-                        image_content.body
-                    )
+                    format!("[Attached image: {}]\n\n{}", abs_path, image_content.body)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to download image");
@@ -258,11 +256,7 @@ pub async fn handle_message(
                 Ok(rel_path) => {
                     let abs_path = format!("{}/{}", channel.directory, rel_path);
                     tracing::info!(path = %abs_path, "File downloaded");
-                    format!(
-                        "[Attached file: {}]\n\n{}",
-                        abs_path,
-                        file_content.body
-                    )
+                    format!("[Attached file: {}]\n\n{}", abs_path, file_content.body)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to download file");
@@ -331,8 +325,12 @@ pub async fn handle_message(
 
     {
         let working_dir = std::path::Path::new(&channel.directory).to_path_buf();
-        let agent_binary = config.acp.agent_binary.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("ACP agent binary not configured"))?.clone();
+        let agent_binary = config
+            .acp
+            .agent_binary
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("ACP agent binary not configured"))?
+            .clone();
         let session_id = channel.session_id.clone();
         let prompt_text = prompt.clone();
         let started = channel.started;
@@ -487,7 +485,10 @@ pub async fn handle_message(
                 } else {
                     // No accumulated text, use the result text
                     final_response = text;
-                    tracing::info!(response_len = final_response.len(), "ACP session completed with result text");
+                    tracing::info!(
+                        response_len = final_response.len(),
+                        "ACP session completed with result text"
+                    );
                 }
                 // ACP doesn't provide token usage in current implementation
                 // TODO: Extract usage from ACP once it supports it
@@ -658,8 +659,11 @@ async fn handle_command(
         "changelog" => {
             // Send changelog as HTML (converted from markdown)
             let changelog_html = markdown_to_html(CHANGELOG_MD);
-            room.send(RoomMessageEventContent::text_html(CHANGELOG_MD, &changelog_html))
-                .await?;
+            room.send(RoomMessageEventContent::text_html(
+                CHANGELOG_MD,
+                &changelog_html,
+            ))
+            .await?;
         }
         "motd" => {
             // Send message of the day as HTML
@@ -1201,9 +1205,7 @@ async fn handle_command(
                 };
 
                 // Skip special directories
-                if dir_name == "template"
-                    || dir_name.starts_with('.')
-                    || dir_name == "attachments"
+                if dir_name == "template" || dir_name.starts_with('.') || dir_name == "attachments"
                 {
                     continue;
                 }
@@ -1237,17 +1239,18 @@ async fn handle_command(
                 match matrix_client::create_room(client, &room_name).await {
                     Ok(new_room_id) => {
                         // Invite user to the room
-                        let invite_failed = match matrix_client::invite_user(client, &new_room_id, sender).await {
-                            Ok(_) => false,
-                            Err(e) => {
-                                tracing::warn!(
-                                    channel = %channel_name,
-                                    error = %e,
-                                    "Failed to invite user to restored room"
-                                );
-                                true
-                            }
-                        };
+                        let invite_failed =
+                            match matrix_client::invite_user(client, &new_room_id, sender).await {
+                                Ok(_) => false,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        channel = %channel_name,
+                                        error = %e,
+                                        "Failed to invite user to restored room"
+                                    );
+                                    true
+                                }
+                            };
 
                         // Create channel in database (inherits existing directory)
                         match session_store.create_channel(&channel_name, new_room_id.as_str()) {
@@ -1281,20 +1284,14 @@ async fn handle_command(
             } else {
                 let mut msg = String::new();
                 if !restored.is_empty() {
-                    msg.push_str(&format!(
-                        "✅ Restored {} channel(s):\n",
-                        restored.len()
-                    ));
+                    msg.push_str(&format!("✅ Restored {} channel(s):\n", restored.len()));
                     for name in &restored {
                         msg.push_str(&format!("  • {}\n", name));
                     }
                     msg.push_str("\nCheck your room invites!\n");
                 }
                 if !skipped.is_empty() {
-                    msg.push_str(&format!(
-                        "\n⏭️ Skipped {} item(s):\n",
-                        skipped.len()
-                    ));
+                    msg.push_str(&format!("\n⏭️ Skipped {} item(s):\n", skipped.len()));
                     for name in &skipped {
                         msg.push_str(&format!("  • {}\n", name));
                     }
@@ -1336,7 +1333,8 @@ async fn handle_command(
                     "📋 No Channels Found\n\nDM me to create a channel!"
                 };
                 let msg_html = markdown_to_html(msg);
-                room.send(RoomMessageEventContent::text_html(msg, &msg_html)).await?;
+                room.send(RoomMessageEventContent::text_html(msg, &msg_html))
+                    .await?;
                 return Ok(());
             }
 
@@ -1565,7 +1563,9 @@ async fn handle_command(
                     let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
                     let active_schedules: Vec<_> = schedules
                         .iter()
-                        .filter(|s| matches!(s.status, ScheduleStatus::Active | ScheduleStatus::Paused))
+                        .filter(|s| {
+                            matches!(s.status, ScheduleStatus::Active | ScheduleStatus::Paused)
+                        })
                         .collect();
 
                     if active_schedules.is_empty() {
@@ -1577,7 +1577,9 @@ async fn handle_command(
                     }
 
                     // Build YAML content
-                    let mut yaml_content = String::from("# Gorp Schedule Export\n# Import with: !schedule import\n\nschedules:\n");
+                    let mut yaml_content = String::from(
+                        "# Gorp Schedule Export\n# Import with: !schedule import\n\nschedules:\n",
+                    );
                     for sched in &active_schedules {
                         let time_str = if let Some(ref cron) = sched.cron_expression {
                             cron.clone()
@@ -1592,19 +1594,19 @@ async fn handle_command(
                             "active"
                         };
                         // Use YAML literal block style (|) for prompts to handle special chars safely
-                        let needs_literal =
-                            sched.prompt.contains(':') ||
-                            sched.prompt.contains('#') ||
-                            sched.prompt.contains('\n') ||
-                            sched.prompt.contains('"') ||
-                            sched.prompt.contains('\'') ||
-                            sched.prompt.contains('[') ||
-                            sched.prompt.contains(']') ||
-                            sched.prompt.contains('{') ||
-                            sched.prompt.contains('}');
+                        let needs_literal = sched.prompt.contains(':')
+                            || sched.prompt.contains('#')
+                            || sched.prompt.contains('\n')
+                            || sched.prompt.contains('"')
+                            || sched.prompt.contains('\'')
+                            || sched.prompt.contains('[')
+                            || sched.prompt.contains(']')
+                            || sched.prompt.contains('{')
+                            || sched.prompt.contains('}');
                         if needs_literal {
                             // Use literal block style with proper indentation
-                            let indented_prompt = sched.prompt
+                            let indented_prompt = sched
+                                .prompt
                                 .lines()
                                 .map(|line| format!("      {}", line))
                                 .collect::<Vec<_>>()
@@ -1710,7 +1712,8 @@ async fn handle_command(
                             } else if !trimmed.is_empty() {
                                 // Non-empty line with less indent = end of block
                                 in_literal_block = false;
-                                current_prompt = Some(literal_lines.join("\n").trim_end().to_string());
+                                current_prompt =
+                                    Some(literal_lines.join("\n").trim_end().to_string());
                                 literal_lines.clear();
                                 literal_indent = 0;
                             }
@@ -1718,7 +1721,9 @@ async fn handle_command(
 
                         if trimmed.starts_with("- time:") {
                             // Save previous schedule if complete
-                            if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take()) {
+                            if let (Some(time), Some(prompt)) =
+                                (current_time.take(), current_prompt.take())
+                            {
                                 match import_schedule(
                                     &time,
                                     &prompt,
@@ -1729,7 +1734,11 @@ async fn handle_command(
                                     scheduler_store,
                                 ) {
                                     Ok(_) => imported_count += 1,
-                                    Err(e) => errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e)),
+                                    Err(e) => errors.push(format!(
+                                        "'{}': {}",
+                                        truncate_str(&prompt, 20),
+                                        e
+                                    )),
                                 }
                             }
                             current_status = "active";
@@ -1748,7 +1757,8 @@ async fn handle_command(
                                 literal_indent = 0;
                             } else {
                                 // Inline prompt value
-                                current_prompt = Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
+                                current_prompt =
+                                    Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
                             }
                         } else if trimmed.starts_with("status:") {
                             let status_val = trimmed.strip_prefix("status:").unwrap().trim();
@@ -1762,7 +1772,8 @@ async fn handle_command(
                     }
 
                     // Don't forget the last one
-                    if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take()) {
+                    if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take())
+                    {
                         match import_schedule(
                             &time,
                             &prompt,
@@ -1773,7 +1784,9 @@ async fn handle_command(
                             scheduler_store,
                         ) {
                             Ok(_) => imported_count += 1,
-                            Err(e) => errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e)),
+                            Err(e) => {
+                                errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e))
+                            }
                         }
                     }
 

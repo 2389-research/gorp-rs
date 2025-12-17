@@ -754,7 +754,9 @@ use crate::{
     acp_client::{AcpClient, AcpEvent},
     config::Config,
     session::{Channel, SessionStore},
-    utils::{chunk_message, expand_slash_command, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+    utils::{
+        chunk_message, expand_slash_command, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE,
+    },
 };
 use matrix_sdk::{ruma::events::room::message::RoomMessageEventContent, Client};
 use std::path::Path;
@@ -944,7 +946,11 @@ async fn execute_schedule(
 
     if config.acp.agent_binary.is_none() {
         tracing::error!("ACP agent binary not configured");
-        let _ = event_tx.send(AcpEvent::Error("ACP agent binary not configured".to_string())).await;
+        let _ = event_tx
+            .send(AcpEvent::Error(
+                "ACP agent binary not configured".to_string(),
+            ))
+            .await;
         drop(event_tx);
         // Continue to process events (will get the error we just sent)
     } else if let Some(ref binary) = config.acp.agent_binary {
@@ -1043,7 +1049,10 @@ async fn execute_schedule(
 
     while let Some(event) = rx.recv().await {
         match event {
-            AcpEvent::ToolUse { name, input_preview } => {
+            AcpEvent::ToolUse {
+                name,
+                input_preview,
+            } => {
                 tracing::debug!(tool = %name, preview = %input_preview, "Scheduled task tool use");
             }
             AcpEvent::Text(text) => {
@@ -1055,7 +1064,10 @@ async fn execute_schedule(
                 if response.is_empty() {
                     response = text;
                 }
-                tracing::info!(response_len = response.len(), "Scheduled task ACP completed");
+                tracing::info!(
+                    response_len = response.len(),
+                    "Scheduled task ACP completed"
+                );
             }
             AcpEvent::Error(e) => {
                 tracing::warn!(error = %e, "Scheduled task ACP error");
@@ -1090,7 +1102,8 @@ async fn execute_schedule(
                 prompt = %schedule.prompt,
                 "ACP returned empty response with error for scheduled task"
             );
-            let error_msg = "⚠️ Scheduled task failed: ACP encountered an error and returned no response.";
+            let error_msg =
+                "⚠️ Scheduled task failed: ACP encountered an error and returned no response.";
             let _ = room
                 .send(RoomMessageEventContent::text_plain(error_msg))
                 .await;

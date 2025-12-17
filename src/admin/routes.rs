@@ -1010,11 +1010,7 @@ async fn messages_view(State(state): State<AdminState>) -> MessageHistoryTemplat
             }
 
             if let Ok(entry) = serde_json::from_str::<MessageLogEntry>(&line) {
-                let content_preview: String = entry
-                    .content
-                    .chars()
-                    .take(50)
-                    .collect::<String>()
+                let content_preview: String = entry.content.chars().take(50).collect::<String>()
                     + if entry.content.len() > 50 { "..." } else { "" };
 
                 let timestamp = entry.timestamp.chars().take(19).collect();
@@ -1077,7 +1073,7 @@ async fn schedule_create(
     State(state): State<AdminState>,
     Form(form): Form<CreateScheduleForm>,
 ) -> ToastTemplate {
-    use crate::scheduler::{ParsedSchedule, ScheduledPrompt, ScheduleStatus};
+    use crate::scheduler::{ParsedSchedule, ScheduleStatus, ScheduledPrompt};
 
     // Validate inputs with length limits to prevent DoS/memory exhaustion
     let channel = form.channel.trim();
@@ -1153,7 +1149,9 @@ async fn schedule_create(
 
     // Check if it's a cron expression (for recurring) or a time expression
     let is_cron = execute_at.split_whitespace().count() == 5
-        && execute_at.chars().all(|c| c.is_ascii_digit() || " */-,".contains(c));
+        && execute_at
+            .chars()
+            .all(|c| c.is_ascii_digit() || " */-,".contains(c));
 
     // Parse time expression and build schedule
     let (next_execution_at, cron_expression, execute_at_field) = if is_cron {
@@ -1171,9 +1169,7 @@ async fn schedule_create(
         // Parse natural language time
         match crate::scheduler::parse_time_expression(execute_at, timezone) {
             Ok(ParsedSchedule::OneTime(t)) => (t.to_rfc3339(), None, Some(t.to_rfc3339())),
-            Ok(ParsedSchedule::Recurring { cron, next }) => {
-                (next.to_rfc3339(), Some(cron), None)
-            }
+            Ok(ParsedSchedule::Recurring { cron, next }) => (next.to_rfc3339(), Some(cron), None),
             Err(e) => {
                 return ToastTemplate {
                     message: format!("Could not parse time: {}", e),
@@ -1269,7 +1265,10 @@ async fn browse_path(
 }
 
 /// View file content with size limiting
-fn view_file(full_path: &std::path::Path, relative_path: &str) -> Result<FileTemplate, ToastTemplate> {
+fn view_file(
+    full_path: &std::path::Path,
+    relative_path: &str,
+) -> Result<FileTemplate, ToastTemplate> {
     let metadata = std::fs::metadata(full_path).map_err(|e| ToastTemplate {
         message: format!("Failed to read file metadata: {}", e),
         is_error: true,
@@ -1339,7 +1338,10 @@ fn view_file(full_path: &std::path::Path, relative_path: &str) -> Result<FileTem
 }
 
 /// Validate path and prevent directory traversal attacks
-fn validate_and_resolve_path(workspace_root: &Path, user_path: &str) -> Result<std::path::PathBuf, ToastTemplate> {
+fn validate_and_resolve_path(
+    workspace_root: &Path,
+    user_path: &str,
+) -> Result<std::path::PathBuf, ToastTemplate> {
     // Reject paths with ".." to prevent traversal
     if user_path.contains("..") {
         tracing::warn!(
@@ -1360,19 +1362,15 @@ fn validate_and_resolve_path(workspace_root: &Path, user_path: &str) -> Result<s
     };
 
     // Canonicalize both paths to resolve symlinks and validate
-    let canonical_workspace = workspace_root
-        .canonicalize()
-        .map_err(|e| ToastTemplate {
-            message: format!("Workspace path error: {}", e),
-            is_error: true,
-        })?;
+    let canonical_workspace = workspace_root.canonicalize().map_err(|e| ToastTemplate {
+        message: format!("Workspace path error: {}", e),
+        is_error: true,
+    })?;
 
-    let canonical_full = full_path
-        .canonicalize()
-        .map_err(|e| ToastTemplate {
-            message: format!("Path not found: {}", e),
-            is_error: true,
-        })?;
+    let canonical_full = full_path.canonicalize().map_err(|e| ToastTemplate {
+        message: format!("Path not found: {}", e),
+        is_error: true,
+    })?;
 
     // Verify the resolved path is within workspace
     if !canonical_full.starts_with(&canonical_workspace) {
@@ -1513,12 +1511,10 @@ async fn browse_directory(
     }
 
     // Sort: directories first, then files, alphabetically within each group
-    browse_entries.sort_by(|a, b| {
-        match (a.is_dir, b.is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
+    browse_entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
     // Calculate parent path for breadcrumb navigation

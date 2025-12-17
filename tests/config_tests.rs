@@ -55,7 +55,10 @@ path = "./test-workspace"
     assert_eq!(config.matrix.user_id, "@bot:test.matrix.org");
     assert_eq!(config.matrix.password, Some("secret123".to_string()));
     assert_eq!(config.matrix.allowed_users.len(), 2);
-    assert!(config.matrix.allowed_users.contains(&"@user1:test.matrix.org".to_string()));
+    assert!(config
+        .matrix
+        .allowed_users
+        .contains(&"@user1:test.matrix.org".to_string()));
     assert_eq!(config.webhook.port, 8080);
 
     // Cleanup
@@ -102,7 +105,10 @@ path = "./workspace"
 
     // Env vars should override TOML values
     assert_eq!(config.matrix.home_server, "https://override.matrix.org");
-    assert_eq!(config.matrix.password, Some("override-password".to_string()));
+    assert_eq!(
+        config.matrix.password,
+        Some("override-password".to_string())
+    );
 
     // Cleanup
     clear_config_env_vars();

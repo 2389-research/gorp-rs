@@ -129,7 +129,9 @@ async fn announce_startup_to_management(client: &Client) {
 
     const MANAGEMENT_ROOM_ID: &str = "!llllhqZbfveDbueMJZ:matrix.org";
 
-    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let timestamp = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
 
     // Get bot user ID for identification
     let bot_id = client
@@ -137,7 +139,10 @@ async fn announce_startup_to_management(client: &Client) {
         .map(|id| id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let message = format!("🤖 **Reporting for service**\n\nBot: `{}`\nTime: {}", bot_id, timestamp);
+    let message = format!(
+        "🤖 **Reporting for service**\n\nBot: `{}`\nTime: {}",
+        bot_id, timestamp
+    );
 
     // Parse the management room ID
     let room_id: matrix_sdk::ruma::OwnedRoomId = match MANAGEMENT_ROOM_ID.parse() {
@@ -153,7 +158,10 @@ async fn announce_startup_to_management(client: &Client) {
         Some(r) if r.state() == matrix_sdk::RoomState::Joined => r,
         Some(r) if r.state() == matrix_sdk::RoomState::Invited => {
             // We have an invite, accept it
-            tracing::info!("Accepting invite to management room: {}", MANAGEMENT_ROOM_ID);
+            tracing::info!(
+                "Accepting invite to management room: {}",
+                MANAGEMENT_ROOM_ID
+            );
             match r.join().await {
                 Ok(_) => {
                     // Need to get the room again after joining
@@ -185,7 +193,10 @@ async fn announce_startup_to_management(client: &Client) {
     };
 
     // Send startup announcement
-    if let Err(e) = room.send(RoomMessageEventContent::text_plain(&message)).await {
+    if let Err(e) = room
+        .send(RoomMessageEventContent::text_plain(&message))
+        .await
+    {
         tracing::warn!(error = %e, "Failed to send startup announcement to management room");
     } else {
         tracing::info!("Startup announced to management room");
@@ -270,7 +281,11 @@ async fn notify_ready(client: &Client, config: &Config) {
         };
 
         // Send appropriate message
-        let message = if is_new { welcome_message } else { ready_message };
+        let message = if is_new {
+            welcome_message
+        } else {
+            ready_message
+        };
 
         match room
             .send(RoomMessageEventContent::text_plain(message))
@@ -299,7 +314,10 @@ async fn check_and_rename_rooms_for_prefix_change(
     session_store: &SessionStore,
 ) {
     let current_prefix = &config.matrix.room_prefix;
-    let stored_prefix = session_store.get_setting(SETTING_ROOM_PREFIX).ok().flatten();
+    let stored_prefix = session_store
+        .get_setting(SETTING_ROOM_PREFIX)
+        .ok()
+        .flatten();
 
     match &stored_prefix {
         Some(old_prefix) if old_prefix == current_prefix => {
@@ -611,7 +629,10 @@ async fn run_rooms(action: RoomsAction) -> Result<()> {
 
     match action {
         RoomsAction::Sync => {
-            println!("Syncing room names to prefix: {}", config.matrix.room_prefix);
+            println!(
+                "Syncing room names to prefix: {}",
+                config.matrix.room_prefix
+            );
 
             // Need to login to Matrix to rename rooms
             let client = matrix_client::create_client(

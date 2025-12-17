@@ -2,7 +2,7 @@
 // ABOUTME: Exposes counters, gauges, and histograms for monitoring gorp
 
 use anyhow::{Context, Result};
-use metrics::{counter, gauge, histogram, describe_counter, describe_gauge, describe_histogram};
+use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 
 /// Initialize the Prometheus metrics recorder and return the handle for the /metrics endpoint
@@ -41,10 +41,7 @@ fn describe_counters() {
         "gorp_tools_used_total",
         "Total number of tools used by Claude"
     );
-    describe_counter!(
-        "gorp_errors_total",
-        "Total number of errors encountered"
-    );
+    describe_counter!("gorp_errors_total", "Total number of errors encountered");
     describe_counter!(
         "gorp_commands_total",
         "Total number of bot commands processed"
@@ -80,10 +77,7 @@ fn describe_counters() {
 }
 
 fn describe_gauges() {
-    describe_gauge!(
-        "gorp_channels_active",
-        "Current number of active channels"
-    );
+    describe_gauge!("gorp_channels_active", "Current number of active channels");
     describe_gauge!(
         "gorp_schedules_active",
         "Current number of active schedules"

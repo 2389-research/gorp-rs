@@ -58,8 +58,8 @@ pub async fn start_webhook_server(
     config: Arc<Config>,
 ) -> Result<()> {
     // Initialize Prometheus metrics
-    let metrics_handle = metrics::init_metrics()
-        .context("Failed to initialize Prometheus metrics")?;
+    let metrics_handle =
+        metrics::init_metrics().context("Failed to initialize Prometheus metrics")?;
 
     let state = WebhookState {
         session_store,
@@ -78,13 +78,20 @@ pub async fn start_webhook_server(
     let scheduler_store = SchedulerStore::new(state.session_store.db_connection());
 
     // Initialize gauge metrics from current state (default to 0 on error)
-    let channel_count = state.session_store.list_all()
+    let channel_count = state
+        .session_store
+        .list_all()
         .map(|ch| ch.len())
         .unwrap_or(0);
     metrics::set_active_channels(channel_count as u64);
 
-    let active_schedule_count = scheduler_store.list_all()
-        .map(|s| s.iter().filter(|s| s.status == crate::scheduler::ScheduleStatus::Active).count())
+    let active_schedule_count = scheduler_store
+        .list_all()
+        .map(|s| {
+            s.iter()
+                .filter(|s| s.status == crate::scheduler::ScheduleStatus::Active)
+                .count()
+        })
         .unwrap_or(0);
     metrics::set_active_schedules(active_schedule_count as u64);
 
@@ -129,7 +136,8 @@ pub async fn start_webhook_server(
         .layer(TraceLayer::new_for_http());
 
     // Default to localhost, but allow override for Docker (needs 0.0.0.0)
-    let bind_addr = std::env::var("WEBHOOK_BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let bind_addr =
+        std::env::var("WEBHOOK_BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr = format!("{}:{}", bind_addr, port);
     tracing::info!(addr = %addr, "Starting webhook server");
 
@@ -489,8 +497,6 @@ async fn webhook_handler(
 }
 
 /// Handle GET /metrics - returns Prometheus text format
-async fn metrics_handler(
-    State(handle): State<Arc<PrometheusHandle>>,
-) -> impl IntoResponse {
+async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl IntoResponse {
     handle.render()
 }

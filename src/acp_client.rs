@@ -1,8 +1,8 @@
 // ABOUTME: This module provides an ACP (Agent Client Protocol) client for communicating with AI agents.
 // ABOUTME: It replaces direct Claude CLI spawning with the standardized ACP protocol over stdio.
 
-use agent_client_protocol as acp;
 use acp::Agent as _;
+use agent_client_protocol as acp;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -97,22 +97,19 @@ impl acp::Client for AcpClientHandler {
 
         if let Some(option) = allow_option {
             Ok(acp::RequestPermissionResponse::new(
-                acp::RequestPermissionOutcome::Selected(
-                    acp::SelectedPermissionOutcome::new(option.option_id.clone())
-                )
+                acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(
+                    option.option_id.clone(),
+                )),
             ))
         } else {
             // No options available, return cancelled
             Ok(acp::RequestPermissionResponse::new(
-                acp::RequestPermissionOutcome::Cancelled
+                acp::RequestPermissionOutcome::Cancelled,
             ))
         }
     }
 
-    async fn session_notification(
-        &self,
-        args: acp::SessionNotification,
-    ) -> acp::Result<()> {
+    async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
         match args.update {
             acp::SessionUpdate::AgentMessageChunk(chunk) => {
                 let text = match chunk.content {
@@ -225,7 +222,10 @@ impl AcpClient {
             anyhow::bail!("Invalid agent binary path");
         }
         if !working_dir.exists() {
-            anyhow::bail!("Working directory does not exist: {}", working_dir.display());
+            anyhow::bail!(
+                "Working directory does not exist: {}",
+                working_dir.display()
+            );
         }
 
         tracing::info!(binary = %agent_binary, cwd = %working_dir.display(), "Spawning ACP agent");
@@ -269,12 +269,14 @@ impl AcpClient {
     /// Initialize the ACP connection
     pub async fn initialize(&self) -> Result<()> {
         self.conn
-            .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1)
-                .client_capabilities(acp::ClientCapabilities::default())
-                .client_info(
-                    acp::Implementation::new("gorp-acp", env!("CARGO_PKG_VERSION"))
-                        .title("Matrix-Claude Bridge")
-                ))
+            .initialize(
+                acp::InitializeRequest::new(acp::ProtocolVersion::V1)
+                    .client_capabilities(acp::ClientCapabilities::default())
+                    .client_info(
+                        acp::Implementation::new("gorp-acp", env!("CARGO_PKG_VERSION"))
+                            .title("Matrix-Claude Bridge"),
+                    ),
+            )
             .await
             .context("ACP initialization failed")?;
 
@@ -320,7 +322,9 @@ impl AcpClient {
             .conn
             .prompt(acp::PromptRequest::new(
                 acp::SessionId::new(session_id.to_string()),
-                vec![acp::ContentBlock::Text(acp::TextContent::new(text.to_string()))],
+                vec![acp::ContentBlock::Text(acp::TextContent::new(
+                    text.to_string(),
+                ))],
             ))
             .await;
 
@@ -343,7 +347,9 @@ impl AcpClient {
     /// Cancel the current operation
     pub async fn cancel(&self, session_id: &str) -> Result<()> {
         self.conn
-            .cancel(acp::CancelNotification::new(acp::SessionId::new(session_id.to_string())))
+            .cancel(acp::CancelNotification::new(acp::SessionId::new(
+                session_id.to_string(),
+            )))
             .await
             .context("Failed to cancel ACP operation")?;
         Ok(())
@@ -362,7 +368,9 @@ mod tests {
         };
         assert!(matches!(event, AcpEvent::ToolUse { .. }));
 
-        let event = AcpEvent::Result { text: "done".to_string() };
+        let event = AcpEvent::Result {
+            text: "done".to_string(),
+        };
         assert!(matches!(event, AcpEvent::Result { .. }));
     }
 }
