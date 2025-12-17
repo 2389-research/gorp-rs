@@ -117,6 +117,9 @@ RUN curl https://mise.run | sh && \
 # Install Claude Code CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
+# Install Claude Code ACP (Anthropic Computer Protocol) support
+RUN npm install -g @zed-industries/claude-code-acp
+
 # Install MCP tools and CLI utilities via script
 # Edit scripts/install-tools.sh to add/update tools
 COPY scripts/install-tools.sh /tmp/install-tools.sh
