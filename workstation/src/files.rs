@@ -121,3 +121,152 @@ pub async fn list_files(
         .unwrap(),
     )
 }
+
+#[derive(Template)]
+#[template(path = "file_edit.html")]
+pub struct FileEditTemplate {
+    pub user: Option<String>,
+    pub channel: String,
+    pub path: String,
+    pub content: String,
+    pub error: Option<String>,
+}
+
+pub async fn read_file(
+    State(state): State<AppState>,
+    session: Session,
+    Path((channel, path)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let user = get_current_user(&session).await;
+
+    if user.is_none() {
+        return Html(
+            FileEditTemplate {
+                user: None,
+                channel,
+                path,
+                content: String::new(),
+                error: Some("Not authenticated".to_string()),
+            }
+            .render()
+            .unwrap(),
+        );
+    }
+
+    let validated = match validate_path(&state.config.workspace_path, &channel, &path) {
+        Ok(p) => p,
+        Err(e) => {
+            return Html(
+                FileEditTemplate {
+                    user,
+                    channel,
+                    path,
+                    content: String::new(),
+                    error: Some(e.to_string()),
+                }
+                .render()
+                .unwrap(),
+            );
+        }
+    };
+
+    let content = match std::fs::read_to_string(&validated) {
+        Ok(c) => c,
+        Err(e) => {
+            return Html(
+                FileEditTemplate {
+                    user,
+                    channel,
+                    path,
+                    content: String::new(),
+                    error: Some(e.to_string()),
+                }
+                .render()
+                .unwrap(),
+            );
+        }
+    };
+
+    Html(
+        FileEditTemplate {
+            user,
+            channel,
+            path,
+            content,
+            error: None,
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
+#[derive(serde::Deserialize)]
+pub struct SaveFileForm {
+    pub content: String,
+}
+
+pub async fn save_file(
+    State(state): State<AppState>,
+    session: Session,
+    Path((channel, path)): Path<(String, String)>,
+    axum::Form(form): axum::Form<SaveFileForm>,
+) -> impl IntoResponse {
+    let user = get_current_user(&session).await;
+
+    if user.is_none() {
+        return Html(
+            FileEditTemplate {
+                user: None,
+                channel,
+                path,
+                content: form.content,
+                error: Some("Not authenticated".to_string()),
+            }
+            .render()
+            .unwrap(),
+        );
+    }
+
+    let validated = match validate_path(&state.config.workspace_path, &channel, &path) {
+        Ok(p) => p,
+        Err(e) => {
+            return Html(
+                FileEditTemplate {
+                    user,
+                    channel,
+                    path,
+                    content: form.content,
+                    error: Some(e.to_string()),
+                }
+                .render()
+                .unwrap(),
+            );
+        }
+    };
+
+    if let Err(e) = std::fs::write(&validated, &form.content) {
+        return Html(
+            FileEditTemplate {
+                user,
+                channel,
+                path,
+                content: form.content,
+                error: Some(e.to_string()),
+            }
+            .render()
+            .unwrap(),
+        );
+    }
+
+    Html(
+        FileEditTemplate {
+            user,
+            channel,
+            path,
+            content: form.content,
+            error: None,
+        }
+        .render()
+        .unwrap(),
+    )
+}

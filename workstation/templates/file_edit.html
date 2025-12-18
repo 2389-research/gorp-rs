@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Edit - {{ path }}{% endblock %}
+
+{% block nav %}
+{% match user %}
+{% when Some with (u) %}
+<span class="text-gray-400">{{ u }}</span>
+<a href="/auth/logout" class="text-red-400 hover:text-red-300">Logout</a>
+{% when None %}
+<a href="/auth/login" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded">Login</a>
+{% endmatch %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex items-center gap-2 text-gray-400">
+        <a href="/" class="hover:text-white">Home</a>
+        <span>/</span>
+        <a href="/files/{{ channel }}/" class="hover:text-white">{{ channel }}</a>
+        <span>/</span>
+        <span class="text-white">{{ path }}</span>
+    </div>
+
+    {% match error %}
+    {% when Some with (e) %}
+    <div class="bg-red-900 border border-red-700 rounded p-4 text-red-200">
+        {{ e }}
+    </div>
+    {% when None %}
+    {% endmatch %}
+
+    <form method="POST" class="space-y-4">
+        <textarea
+            name="content"
+            class="w-full h-96 bg-gray-800 text-gray-100 font-mono text-sm p-4 rounded border border-gray-700 focus:border-blue-500 focus:outline-none"
+        >{{ content }}</textarea>
+
+        <div class="flex gap-4">
+            <button
+                type="submit"
+                class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded font-medium"
+            >
+                Save
+            </button>
+            <a
+                href="/files/{{ channel }}/"
+                class="bg-gray-700 hover:bg-gray-600 px-6 py-2 rounded"
+            >
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+{% endblock %}

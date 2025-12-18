@@ -59,7 +59,7 @@
                     </td>
                     <td class="px-4 py-2">
                         {% if !entry.is_dir %}
-                        <a href="/files/{{ channel }}/{{ path }}{% if !path.is_empty() %}/{% endif %}{{ entry.name }}/edit"
+                        <a href="/edit/{{ channel }}/{{ path }}{% if !path.is_empty() %}/{% endif %}{{ entry.name }}"
                            class="text-yellow-400 hover:text-yellow-300">Edit</a>
                         {% endif %}
                     </td>

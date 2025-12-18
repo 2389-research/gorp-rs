@@ -28,7 +28,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/auth/login", get(auth::login))
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", get(auth::logout))
-        .route("/files/:channel/*path", get(files::list_files))
+        .route("/files/{channel}/{*path}", get(files::list_files))
+        .route(
+            "/edit/{channel}/{*path}",
+            get(files::read_file).post(files::save_file),
+        )
         .layer(session_layer)
         .with_state(state)
 }
