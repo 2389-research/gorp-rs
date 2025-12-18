@@ -26,7 +26,7 @@ class ClaudeJailServer:
         self,
         host: str = "127.0.0.1",
         port: int = 31337,
-        idle_timeout: int = 300,
+        idle_timeout: int = 900,
     ):
         self.host = host
         self.port = port
@@ -143,7 +143,7 @@ def main() -> None:
     # Get configuration from environment
     host = os.environ.get("CLAUDE_JAIL_HOST", "127.0.0.1")
     port = int(os.environ.get("CLAUDE_JAIL_PORT", "31337"))
-    idle_timeout = int(os.environ.get("CLAUDE_JAIL_IDLE_TIMEOUT", "300"))
+    idle_timeout = int(os.environ.get("CLAUDE_JAIL_IDLE_TIMEOUT", "900"))
 
     logger.info("Starting Claude Jail...")
     logger.info("  Host: %s", host)

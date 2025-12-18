@@ -57,7 +57,7 @@ class ChannelSession:
 class SessionManager:
     """Manages Claude sessions for multiple channels."""
 
-    def __init__(self, idle_timeout_seconds: int = 300):
+    def __init__(self, idle_timeout_seconds: int = 900):
         self.sessions: dict[str, ChannelSession] = {}
         self.idle_timeout = idle_timeout_seconds
         self._cleanup_task: asyncio.Task | None = None
