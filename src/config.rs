@@ -62,6 +62,10 @@ pub struct AcpConfig {
     pub agent_binary: Option<String>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    #[serde(default = "default_keep_alive_secs")]
+    pub keep_alive_secs: u64,
+    #[serde(default = "default_pre_warm_secs")]
+    pub pre_warm_secs: u64,
 }
 
 impl Default for AcpConfig {
@@ -69,12 +73,22 @@ impl Default for AcpConfig {
         Self {
             agent_binary: Some("claude-code-acp".to_string()),
             timeout_secs: default_timeout_secs(),
+            keep_alive_secs: default_keep_alive_secs(),
+            pre_warm_secs: default_pre_warm_secs(),
         }
     }
 }
 
 fn default_timeout_secs() -> u64 {
     300 // 5 minutes default timeout
+}
+
+fn default_keep_alive_secs() -> u64 {
+    3600 // 1 hour
+}
+
+fn default_pre_warm_secs() -> u64 {
+    300 // 5 minutes
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -114,3 +114,44 @@ path = "./workspace"
     clear_config_env_vars();
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+#[serial]
+fn test_config_acp_warm_session_defaults() {
+    clear_config_env_vars();
+
+    let temp_dir = std::env::temp_dir().join("gorp-config-warm-test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let config_path = temp_dir.join("config.toml");
+
+    let config_content = r#"
+[matrix]
+home_server = "https://test.matrix.org"
+user_id = "@bot:test.matrix.org"
+password = "secret123"
+allowed_users = ["@user1:test.matrix.org"]
+
+[acp]
+agent_binary = "claude"
+
+[webhook]
+port = 8080
+
+[workspace]
+path = "./test-workspace"
+"#;
+
+    let mut file = std::fs::File::create(&config_path).unwrap();
+    file.write_all(config_content.as_bytes()).unwrap();
+    std::env::set_var("GORP_CONFIG_PATH", config_path.to_str().unwrap());
+
+    let config = gorp::config::Config::load().unwrap();
+
+    // Defaults: 1 hour keep-alive, 5 min pre-warm
+    assert_eq!(config.acp.keep_alive_secs, 3600);
+    assert_eq!(config.acp.pre_warm_secs, 300);
+
+    clear_config_env_vars();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
