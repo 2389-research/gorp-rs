@@ -10,5 +10,6 @@ pub mod metrics;
 pub mod paths;
 pub mod scheduler;
 pub mod session;
+pub mod terminal;
 pub mod utils;
 pub mod webhook;
