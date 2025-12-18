@@ -450,7 +450,7 @@ fn run_config(action: ConfigAction) -> Result<()> {
             std::fs::create_dir_all(&config_dir)?;
 
             // Write example config
-            let example_config = include_str!("../config.toml.example");
+            let example_config = include_str!("../../config.toml.example");
             std::fs::write(&config_file, example_config)?;
 
             println!("✓ Created config directory: {}", config_dir.display());

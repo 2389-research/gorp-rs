@@ -26,11 +26,11 @@ use chrono::Utc;
 use std::path::Path;
 
 /// Help documentation loaded at compile time
-const HELP_MD: &str = include_str!("../docs/HELP.md");
+const HELP_MD: &str = include_str!("../../docs/HELP.md");
 /// Message of the day shown on boot
-const MOTD_MD: &str = include_str!("../docs/MOTD.md");
+const MOTD_MD: &str = include_str!("../../docs/MOTD.md");
 /// Changelog documentation
-const CHANGELOG_MD: &str = include_str!("../docs/CHANGELOG.md");
+const CHANGELOG_MD: &str = include_str!("../../docs/CHANGELOG.md");
 
 /// Check if debug mode is enabled for a channel directory
 /// Debug mode is enabled by creating an empty file: .gorp/enable-debug
