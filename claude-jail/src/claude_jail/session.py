@@ -1,5 +1,5 @@
 # ABOUTME: Session management for Claude Jail
-# ABOUTME: Manages per-channel ClaudeSDKClient instances with idle cleanup
+# ABOUTME: Manages per-channel session state with idle cleanup using query() API
 
 """Session management for Claude Jail."""
 
@@ -13,12 +13,12 @@ from typing import AsyncIterator
 from claude_code_sdk import (
     AssistantMessage,
     ClaudeCodeOptions,
-    ClaudeSDKClient,
     ResultMessage,
     SystemMessage,
     TextBlock,
     ToolUseBlock,
     UserMessage,
+    query,
 )
 
 from .mcp_loader import load_mcp_config
@@ -33,11 +33,10 @@ SdkMessage = UserMessage | AssistantMessage | SystemMessage | ResultMessage
 
 @dataclass
 class ChannelSession:
-    """A Claude session for a specific channel."""
+    """Session state for a specific channel."""
 
     channel_id: str
     workspace: Path
-    client: ClaudeSDKClient
     last_activity: float = field(default_factory=time.time)
     session_id: str | None = None
 
@@ -46,12 +45,8 @@ class ChannelSession:
         self.last_activity = time.time()
 
     async def close(self) -> None:
-        """Close the session."""
-        try:
-            self.client.disconnect()
-            logger.info("Closed session for channel %s", self.channel_id)
-        except Exception as e:
-            logger.warning("Error closing session for %s: %s", self.channel_id, e)
+        """Clean up the session."""
+        logger.info("Closed session for channel %s", self.channel_id)
 
 
 class SessionManager:
@@ -101,7 +96,7 @@ class SessionManager:
             await session.close()
             logger.info("Closed idle session for channel %s", channel_id)
 
-    async def get_or_create_session(
+    def get_or_create_session(
         self,
         channel_id: str,
         workspace: str,
@@ -115,25 +110,10 @@ class SessionManager:
             logger.debug("Reusing existing session for channel %s", channel_id)
             return session
 
-        # Load MCP config from workspace
         workspace_path = Path(workspace)
-        mcp_config = load_mcp_config(workspace_path)
-
-        # Create options for the SDK
-        options = ClaudeCodeOptions(
-            mcp_servers=mcp_config.get("mcpServers", {}),
-            cwd=workspace_path,
-            permission_mode="bypassPermissions",  # Trust gorp to manage permissions
-            resume=resume_id,
-        )
-
-        # Create new client
-        client = ClaudeSDKClient(options=options)
-
         session = ChannelSession(
             channel_id=channel_id,
             workspace=workspace_path,
-            client=client,
             session_id=resume_id,
         )
 
@@ -158,17 +138,30 @@ class SessionManager:
         """
         Process a query and yield response messages.
 
+        Uses the query() function which handles subprocess management correctly.
+
         Yields:
             OutboundMessage instances (TextMessage, ToolUseMessage, DoneMessage, ErrorMessage)
         """
         try:
-            session = await self.get_or_create_session(channel_id, workspace, resume_id)
+            session = self.get_or_create_session(channel_id, workspace, resume_id)
+            session.touch()
 
-            # Connect if not connected, or send query
-            await session.client.connect(prompt)
+            # Load MCP config from workspace
+            mcp_config = load_mcp_config(session.workspace)
 
-            # Stream responses
-            async for message in session.client.receive_response():
+            # Create options for the SDK query
+            options = ClaudeCodeOptions(
+                mcp_servers=mcp_config.get("mcpServers", {}),
+                cwd=session.workspace,
+                permission_mode="bypassPermissions",  # Trust gorp to manage permissions
+                resume=session.session_id,
+            )
+
+            result_session_id = ""
+
+            # Use query() function which handles subprocess correctly
+            async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -182,10 +175,11 @@ class SessionManager:
                                 tool=block.name,
                                 input=block.input,
                             )
-
-            # Get session ID for resumption (if available)
-            server_info = session.client.get_server_info()
-            result_session_id = server_info.get("sessionId", "") if server_info else ""
+                elif isinstance(message, ResultMessage):
+                    # Extract session ID for future resumption
+                    if hasattr(message, "session_id") and message.session_id:
+                        result_session_id = message.session_id
+                        session.session_id = result_session_id
 
             yield DoneMessage(
                 channel_id=channel_id,
