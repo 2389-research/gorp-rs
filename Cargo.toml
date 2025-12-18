@@ -23,3 +23,5 @@ tower-sessions = { version = "0.14", features = ["memory-store"] }
 portable-pty = "0.8"
 chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
 base64 = "0.22"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tower-sessions-rusqlite-store = "0.14"

@@ -4546,6 +4546,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-rusqlite"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "302563ae4a2127f3d2c105f4f2f0bd7cae3609371755600ebc148e0ccd8510d6"
+dependencies = [
+ "crossbeam-channel",
+ "rusqlite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-rustls"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4802,6 +4813,21 @@ dependencies = [
  "async-trait",
  "time",
  "tokio",
+ "tower-sessions-core",
+]
+
+[[package]]
+name = "tower-sessions-rusqlite-store"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "487a8e65c643668a3c88db46b47800f8363fa36e974d83282095d46e2f70c7b7"
+dependencies = [
+ "async-trait",
+ "rmp-serde",
+ "rusqlite",
+ "thiserror 2.0.17",
+ "time",
+ "tokio-rusqlite",
  "tower-sessions-core",
 ]
 
@@ -5675,12 +5701,14 @@ dependencies = [
  "dotenvy",
  "oauth2 4.4.2",
  "reqwest 0.12.26",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",
  "tower",
  "tower-http",
  "tower-sessions",
+ "tower-sessions-rusqlite-store",
  "tracing",
  "tracing-subscriber",
  "url",
