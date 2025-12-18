@@ -115,8 +115,15 @@ impl OidcConfig {
         let registration_endpoint = discovery.registration_endpoint.as_ref()
             .context("OIDC provider does not support dynamic client registration")?;
 
+        // Extract base URI from redirect_uri for client_uri (required by Matrix OIDC)
+        let base_uri = redirect_uri
+            .rfind("/auth/callback")
+            .map(|i| &redirect_uri[..i])
+            .unwrap_or(redirect_uri);
+
         let registration_request = serde_json::json!({
             "client_name": "Gorp Workstation",
+            "client_uri": base_uri,
             "redirect_uris": [redirect_uri],
             "token_endpoint_auth_method": "none",
             "grant_types": ["authorization_code", "refresh_token"],
