@@ -7,3 +7,6 @@ pub mod templates;
 
 pub use auth::auth_middleware;
 pub use routes::{admin_router, AdminState};
+
+// Re-export browser types for convenience
+pub use crate::browser::BrowserManager;

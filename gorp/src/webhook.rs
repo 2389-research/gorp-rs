@@ -91,11 +91,15 @@ pub async fn start_webhook_server(
     // Create terminal manager
     let terminal_manager = Arc::new(crate::terminal::TerminalManager::new());
 
+    // Create browser manager
+    let browser_manager = Arc::new(crate::browser::BrowserManager::new());
+
     let admin_state = AdminState {
         config: Arc::clone(&state.config),
         session_store: state.session_store.clone(),
         scheduler_store: scheduler_store.clone(),
         terminal_manager,
+        browser_manager,
     };
 
     let admin_routes = admin_router()

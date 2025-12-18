@@ -35,6 +35,7 @@ pub struct AdminState {
     pub session_store: SessionStore,
     pub scheduler_store: SchedulerStore,
     pub terminal_manager: Arc<crate::terminal::TerminalManager>,
+    pub browser_manager: Arc<crate::browser::BrowserManager>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +79,10 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/api/channels", get(api_list_channels))
         .route("/api/terminal", post(api_create_terminal))
         .route("/ws/terminal/:session_id", get(ws_terminal))
+        .route("/api/browser", post(api_create_browser))
+        .route("/api/browser/{session_id}/screenshot", get(api_browser_screenshot))
+        .route("/api/browser/{session_id}/action", post(api_browser_action))
+        .route("/ws/browser/{session_id}", get(ws_browser))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -2047,4 +2052,198 @@ async fn handle_terminal_ws(socket: WebSocket, state: AdminState, _session_id: S
     output_task.abort();
     state.terminal_manager.remove(&session.id).await;
     tracing::info!(session_id = %session.id, "Terminal WebSocket disconnected");
+}
+
+// ============================================================================
+// Browser Handlers
+// ============================================================================
+
+#[derive(serde::Serialize)]
+struct CreateBrowserResponse {
+    session_id: String,
+    ws_url: String,
+}
+
+async fn api_create_browser(
+    State(state): State<AdminState>,
+) -> impl IntoResponse {
+    match state.browser_manager.create_session().await {
+        Ok(session) => {
+            let response = CreateBrowserResponse {
+                session_id: session.id.clone(),
+                ws_url: format!("/admin/ws/browser/{}", session.id),
+            };
+            axum::Json(response).into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create browser session: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_browser_screenshot(
+    State(state): State<AdminState>,
+    AxumPath(session_id): AxumPath<String>,
+) -> impl IntoResponse {
+    match state.browser_manager.get(&session_id).await {
+        Some(session) => match session.screenshot().await {
+            Ok(data) => axum::Json(serde_json::json!({ "data": data })).into_response(),
+            Err(e) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            )
+                .into_response(),
+        },
+        None => (axum::http::StatusCode::NOT_FOUND, "Session not found").into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserAction {
+    action: String,
+    url: Option<String>,
+    x: Option<f64>,
+    y: Option<f64>,
+    text: Option<String>,
+}
+
+async fn api_browser_action(
+    State(state): State<AdminState>,
+    AxumPath(session_id): AxumPath<String>,
+    axum::Json(action): axum::Json<BrowserAction>,
+) -> impl IntoResponse {
+    let session = match state.browser_manager.get(&session_id).await {
+        Some(s) => s,
+        None => return (axum::http::StatusCode::NOT_FOUND, "Session not found").into_response(),
+    };
+
+    let result = match action.action.as_str() {
+        "navigate" => {
+            if let Some(url) = action.url {
+                session.navigate(&url).await
+            } else {
+                Err(anyhow::anyhow!("Missing url for navigate"))
+            }
+        }
+        "click" => {
+            if let (Some(x), Some(y)) = (action.x, action.y) {
+                session.click(x, y).await
+            } else {
+                Err(anyhow::anyhow!("Missing x,y for click"))
+            }
+        }
+        "type" => {
+            if let Some(text) = action.text {
+                session.type_text(&text).await
+            } else {
+                Err(anyhow::anyhow!("Missing text for type"))
+            }
+        }
+        _ => Err(anyhow::anyhow!("Unknown action: {}", action.action)),
+    };
+
+    match result {
+        Ok(_) => axum::Json(serde_json::json!({ "success": true })).into_response(),
+        Err(e) => (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    }
+}
+
+async fn ws_browser(
+    State(state): State<AdminState>,
+    AxumPath(session_id): AxumPath<String>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_browser_ws(socket, state, session_id))
+}
+
+async fn handle_browser_ws(socket: WebSocket, state: AdminState, session_id: String) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    let session = match state.browser_manager.get(&session_id).await {
+        Some(s) => s,
+        None => {
+            let _ = ws_sender
+                .send(Message::Text("Session not found".into()))
+                .await;
+            return;
+        }
+    };
+
+    tracing::info!(session_id = %session_id, "Browser WebSocket connected");
+
+    // Periodic screenshot streaming
+    let session_clone = session.clone();
+    let screenshot_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        loop {
+            interval.tick().await;
+            match session_clone.screenshot().await {
+                Ok(data) => {
+                    let msg = serde_json::json!({
+                        "type": "frame",
+                        "data": data,
+                    });
+                    if ws_sender
+                        .send(Message::Text(serde_json::to_string(&msg).unwrap().into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Screenshot error");
+                }
+            }
+        }
+    });
+
+    // Handle incoming messages (actions)
+    while let Some(msg) = ws_receiver.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                if let Ok(action) = serde_json::from_str::<BrowserAction>(text.as_ref()) {
+                    let result = match action.action.as_str() {
+                        "navigate" => {
+                            if let Some(url) = action.url {
+                                session.navigate(&url).await
+                            } else {
+                                continue;
+                            }
+                        }
+                        "click" => {
+                            if let (Some(x), Some(y)) = (action.x, action.y) {
+                                session.click(x, y).await
+                            } else {
+                                continue;
+                            }
+                        }
+                        "type" => {
+                            if let Some(text) = action.text {
+                                session.type_text(&text).await
+                            } else {
+                                continue;
+                            }
+                        }
+                        _ => continue,
+                    };
+                    if let Err(e) = result {
+                        tracing::error!(error = %e, "Browser action error");
+                    }
+                }
+            }
+            Ok(Message::Close(_)) => break,
+            Err(e) => {
+                tracing::error!(error = %e, "WebSocket error");
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    screenshot_task.abort();
+    state.browser_manager.remove(&session_id).await;
+    tracing::info!(session_id = %session_id, "Browser WebSocket disconnected");
 }
