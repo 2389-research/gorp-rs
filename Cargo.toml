@@ -21,3 +21,5 @@ anyhow = "1.0"
 askama = "0.14"
 tower-sessions = { version = "0.14", features = ["memory-store"] }
 portable-pty = "0.8"
+chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-features = false }
+base64 = "0.22"

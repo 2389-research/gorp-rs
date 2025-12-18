@@ -34,3 +34,5 @@ mime_guess = "2.0"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 portable-pty = { workspace = true }
+chromiumoxide = { workspace = true }
+base64 = { workspace = true }
