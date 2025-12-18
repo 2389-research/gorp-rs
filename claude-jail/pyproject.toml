@@ -9,7 +9,7 @@ readme = "README.md"
 authors = [
     { name = "Harper Reed", email = "harper@nata2.org" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "websockets>=12.0",
     "pydantic>=2.0",
@@ -29,7 +29,7 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
