@@ -29,7 +29,7 @@ impl GorpClient {
     }
 
     pub async fn list_channels(&self) -> Result<Vec<Channel>> {
-        let url = format!("{}/api/channels", self.base_url);
+        let url = format!("{}/admin/api/channels", self.base_url);
         let response = self.client.get(&url).send().await?;
 
         if !response.status().is_success() {
