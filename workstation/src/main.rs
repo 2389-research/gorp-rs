@@ -21,9 +21,9 @@ async fn main() -> Result<()> {
 
     let config = Config::load()?;
     let oidc = OidcConfig::new(
-        &config.matrix_homeserver,
+        &config.oidc_issuer,
         "workstation",
-        &format!("http://localhost:{}/auth/callback", config.port),
+        &config.oidc_redirect_uri,
     )?;
     let gorp = GorpClient::new(&config.gorp_api_url);
 

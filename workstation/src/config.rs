@@ -9,7 +9,9 @@ pub struct Config {
     pub port: u16,
     pub gorp_api_url: String,
     pub workspace_path: String,
-    pub matrix_homeserver: String,
+    pub oidc_issuer: String,
+    pub oidc_redirect_uri: String,
+    pub session_db_path: String,
 }
 
 impl Config {
@@ -22,8 +24,12 @@ impl Config {
                 .unwrap_or_else(|_| "http://localhost:13000".to_string()),
             workspace_path: std::env::var("WORKSPACE_PATH")
                 .unwrap_or_else(|_| "./workspace".to_string()),
-            matrix_homeserver: std::env::var("MATRIX_HOMESERVER")
-                .unwrap_or_else(|_| "https://matrix.org".to_string()),
+            oidc_issuer: std::env::var("OIDC_ISSUER")
+                .unwrap_or_else(|_| "https://account.matrix.org/".to_string()),
+            oidc_redirect_uri: std::env::var("OIDC_REDIRECT_URI")
+                .unwrap_or_else(|_| "http://localhost:8088/auth/callback".to_string()),
+            session_db_path: std::env::var("SESSION_DB_PATH")
+                .unwrap_or_else(|_| "./workstation_sessions.db".to_string()),
         })
     }
 }
