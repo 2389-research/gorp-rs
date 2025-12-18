@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}Terminal - Workstation{% endblock %}
+
+{% block nav %}
+{% match user %}
+{% when Some with (u) %}
+<span class="text-gray-400">{{ u }}</span>
+<a href="/auth/logout" class="text-red-400 hover:text-red-300">Logout</a>
+{% when None %}
+<a href="/auth/login" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded">Login</a>
+{% endmatch %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+    <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold">Terminal</h1>
+        <button id="connect-btn" class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded">
+            Connect
+        </button>
+    </div>
+
+    <div id="terminal-container" class="bg-black rounded-lg border border-gray-700 p-2" style="height: 500px;">
+    </div>
+
+    <div id="status" class="text-gray-400 text-sm">
+        Status: Disconnected
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const terminalContainer = document.getElementById('terminal-container');
+    const connectBtn = document.getElementById('connect-btn');
+    const statusEl = document.getElementById('status');
+
+    let term = null;
+    let ws = null;
+    let fitAddon = null;
+
+    function initTerminal() {
+        term = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#1a1a1a',
+                foreground: '#e0e0e0',
+            },
+            fontSize: 14,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+        });
+
+        fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+
+        term.open(terminalContainer);
+        fitAddon.fit();
+
+        term.onData(function(data) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(data);
+            }
+        });
+
+        window.addEventListener('resize', function() {
+            if (fitAddon) fitAddon.fit();
+        });
+    }
+
+    async function connect() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+            return;
+        }
+
+        statusEl.textContent = 'Status: Connecting...';
+
+        try {
+            // Create terminal session via gorp API
+            const response = await fetch('{{ gorp_api_url }}/admin/api/terminal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspace_path: '{{ workspace_path }}' }),
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to create terminal session');
+            }
+
+            const data = await response.json();
+            const wsUrl = '{{ gorp_ws_url }}' + data.ws_url;
+
+            if (!term) initTerminal();
+
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = function() {
+                statusEl.textContent = 'Status: Connected';
+                connectBtn.textContent = 'Disconnect';
+                connectBtn.className = 'bg-red-600 hover:bg-red-500 px-4 py-2 rounded';
+                term.focus();
+            };
+
+            ws.onmessage = function(event) {
+                if (event.data instanceof ArrayBuffer) {
+                    const decoder = new TextDecoder();
+                    term.write(decoder.decode(event.data));
+                } else {
+                    term.write(event.data);
+                }
+            };
+
+            ws.onclose = function() {
+                statusEl.textContent = 'Status: Disconnected';
+                connectBtn.textContent = 'Connect';
+                connectBtn.className = 'bg-green-600 hover:bg-green-500 px-4 py-2 rounded';
+            };
+
+            ws.onerror = function(error) {
+                statusEl.textContent = 'Status: Error';
+                console.error('WebSocket error:', error);
+            };
+
+        } catch (error) {
+            statusEl.textContent = 'Status: Error - ' + error.message;
+            console.error('Connection error:', error);
+        }
+    }
+
+    connectBtn.addEventListener('click', connect);
+});
+</script>
+{% endblock %}
