@@ -202,12 +202,13 @@ impl ClaudeJailClient {
             }
         };
 
-        // Route to the appropriate channel handler
-        let pending = pending.lock().await;
-        if let Some(tx) = pending.get(&channel_id) {
+        // Route to the appropriate channel handler and REMOVE from pending to signal completion
+        // Removing the sender causes the receiver to close, exiting the rx.recv() loop
+        if let Some(tx) = pending.lock().await.remove(&channel_id) {
             if let Err(e) = tx.send(event).await {
                 tracing::warn!(%channel_id, error = %e, "Failed to send event to channel");
             }
+            // tx is dropped here, closing the channel
         } else {
             tracing::warn!(%channel_id, "Received message for unknown channel");
         }
