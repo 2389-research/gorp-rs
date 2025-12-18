@@ -25,3 +25,5 @@ chromiumoxide = { version = "0.7", features = ["tokio-runtime"], default-feature
 base64 = "0.22"
 rusqlite = { version = "0.37", features = ["bundled"] }
 tower-sessions-rusqlite-store = "0.14"
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

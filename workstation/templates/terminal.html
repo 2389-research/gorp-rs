@@ -76,11 +76,10 @@ document.addEventListener('DOMContentLoaded', function() {
         statusEl.textContent = 'Status: Connecting...';
 
         try {
-            // Create terminal session via gorp API
-            const response = await fetch('{{ gorp_api_url }}/admin/api/terminal', {
+            // Create terminal session via proxy
+            const response = await fetch('/gorp/api/terminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ workspace_path: '{{ workspace_path }}' }),
             });
 
             if (!response.ok) {
@@ -88,7 +87,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             const data = await response.json();
-            const wsUrl = '{{ gorp_ws_url }}' + data.ws_url;
+            // Use secure WebSocket if page is HTTPS
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = wsProtocol + '//' + window.location.host + data.ws_url;
 
             if (!term) initTerminal();
 

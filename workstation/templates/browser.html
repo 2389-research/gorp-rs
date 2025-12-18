@@ -58,7 +58,7 @@ document.addEventListener('DOMContentLoaded', function() {
         statusEl.textContent = 'Status: Connecting...';
 
         try {
-            const response = await fetch('{{ gorp_api_url }}/admin/api/browser', {
+            const response = await fetch('/gorp/api/browser', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
             });
@@ -69,7 +69,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const data = await response.json();
             sessionId = data.session_id;
-            const wsUrl = '{{ gorp_ws_url }}' + data.ws_url;
+            // Use secure WebSocket if page is HTTPS
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = wsProtocol + '//' + window.location.host + data.ws_url;
 
             ws = new WebSocket(wsUrl);
 
