@@ -5,6 +5,7 @@ pub mod auth;
 pub mod config;
 pub mod files;
 pub mod gorp_client;
+pub mod oidc;
 pub mod routes;
 pub mod templates;
 
