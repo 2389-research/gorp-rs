@@ -57,11 +57,15 @@ type WebSocketStream = tokio_tungstenite::WebSocketStream<
 /// Shared state for pending channel responses
 type PendingChannels = Arc<Mutex<HashMap<String, mpsc::Sender<ClaudeEvent>>>>;
 
+/// Accumulated text per channel
+type TextAccumulator = Arc<Mutex<HashMap<String, String>>>;
+
 /// Client for communicating with Claude Jail WebSocket service
 pub struct ClaudeJailClient {
     url: String,
     write: Arc<Mutex<futures_util::stream::SplitSink<WebSocketStream, Message>>>,
     pending: PendingChannels,
+    text_accumulator: TextAccumulator,
 }
 
 impl ClaudeJailClient {
@@ -78,11 +82,13 @@ impl ClaudeJailClient {
         let (write, read) = ws_stream.split();
         let write = Arc::new(Mutex::new(write));
         let pending: PendingChannels = Arc::new(Mutex::new(HashMap::new()));
+        let text_accumulator: TextAccumulator = Arc::new(Mutex::new(HashMap::new()));
 
         // Spawn task to read messages and route to appropriate channels
         let pending_clone = pending.clone();
+        let text_accumulator_clone = text_accumulator.clone();
         tokio::spawn(async move {
-            Self::read_loop(read, pending_clone).await;
+            Self::read_loop(read, pending_clone, text_accumulator_clone).await;
         });
 
         tracing::info!("Connected to Claude Jail");
@@ -91,6 +97,7 @@ impl ClaudeJailClient {
             url: url.to_string(),
             write,
             pending,
+            text_accumulator,
         })
     }
 
@@ -98,11 +105,14 @@ impl ClaudeJailClient {
     async fn read_loop(
         mut read: futures_util::stream::SplitStream<WebSocketStream>,
         pending: PendingChannels,
+        text_accumulator: TextAccumulator,
     ) {
         while let Some(msg_result) = read.next().await {
             match msg_result {
                 Ok(Message::Text(text)) => {
-                    if let Err(e) = Self::handle_message(text.as_str(), &pending).await {
+                    if let Err(e) =
+                        Self::handle_message(text.as_str(), &pending, &text_accumulator).await
+                    {
                         tracing::error!(error = %e, "Failed to handle message");
                     }
                 }
@@ -129,16 +139,24 @@ impl ClaudeJailClient {
     }
 
     /// Handle a single message from Claude Jail
-    async fn handle_message(text: &str, pending: &PendingChannels) -> Result<()> {
+    async fn handle_message(
+        text: &str,
+        pending: &PendingChannels,
+        text_accumulator: &TextAccumulator,
+    ) -> Result<()> {
         let response: JailResponse =
             serde_json::from_str(text).context("Failed to parse response")?;
 
         let (channel_id, event) = match response {
             JailResponse::Text { channel_id, content } => {
-                // For now, we accumulate text - emit as part of final result
-                // In future, could emit streaming text events
-                tracing::trace!(%channel_id, content_len = content.len(), "Text chunk received");
-                return Ok(()); // Don't emit individual text chunks for now
+                // Accumulate text for this channel
+                let mut accumulator = text_accumulator.lock().await;
+                accumulator
+                    .entry(channel_id.clone())
+                    .or_insert_with(String::new)
+                    .push_str(&content);
+                tracing::debug!(%channel_id, content_len = content.len(), "Text chunk received");
+                return Ok(()); // Don't emit individual text chunks, wait for Done
             }
             JailResponse::ToolUse {
                 channel_id,
@@ -159,17 +177,26 @@ impl ClaudeJailClient {
                 channel_id,
                 session_id,
             } => {
-                tracing::info!(%channel_id, %session_id, "Query complete");
-                // Return empty result with default usage - the actual text was accumulated
+                // Get accumulated text for this channel
+                let accumulated_text = {
+                    let mut accumulator = text_accumulator.lock().await;
+                    accumulator.remove(&channel_id).unwrap_or_default()
+                };
+                tracing::info!(%channel_id, %session_id, text_len = accumulated_text.len(), "Query complete");
                 (
                     channel_id,
                     ClaudeEvent::Result {
-                        text: String::new(), // Text is handled separately
+                        text: accumulated_text,
                         usage: ClaudeUsage::default(),
                     },
                 )
             }
             JailResponse::Error { channel_id, message } => {
+                // Clear any accumulated text on error
+                {
+                    let mut accumulator = text_accumulator.lock().await;
+                    accumulator.remove(&channel_id);
+                }
                 tracing::error!(%channel_id, %message, "Claude Jail error");
                 (channel_id, ClaudeEvent::Error(message))
             }
