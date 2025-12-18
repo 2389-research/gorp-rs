@@ -7,11 +7,15 @@ use axum::{
     routing::get,
     Router,
 };
-use tower_sessions::{MemoryStore, SessionManagerLayer};
+use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
-use crate::templates::IndexTemplate;
+use crate::{
+    auth::{self, get_current_user},
+    templates::IndexTemplate,
+    AppState,
+};
 
-pub fn create_router() -> Router {
+pub fn create_router(state: AppState) -> Router {
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)
@@ -20,11 +24,17 @@ pub fn create_router() -> Router {
     Router::new()
         .route("/", get(index))
         .route("/health", get(health))
+        .route("/auth/login", get(auth::login))
+        .route("/auth/callback", get(auth::callback))
+        .route("/auth/logout", get(auth::logout))
         .layer(session_layer)
+        .with_state(state)
 }
 
-async fn index() -> impl IntoResponse {
-    let template = IndexTemplate;
+#[axum::debug_handler]
+async fn index(session: Session) -> impl IntoResponse {
+    let user = get_current_user(&session).await;
+    let template = IndexTemplate { user };
     Html(template.render().unwrap())
 }
 

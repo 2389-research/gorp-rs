@@ -3,25 +3,40 @@
 
 use anyhow::Result;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use workstation::{auth::OidcConfig, config::Config, AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "workstation=debug,tower_http=debug".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "workstation=debug,tower_http=debug".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     tracing::info!("Starting workstation webapp");
 
-    let app = workstation::routes::create_router();
+    let config = Config::load()?;
+    let oidc = OidcConfig::new(
+        &config.matrix_homeserver,
+        "workstation",
+        &format!("http://localhost:{}/auth/callback", config.port),
+    )?;
 
-    let addr = "0.0.0.0:8088";
+    let state = AppState {
+        config: config.clone(),
+        oidc,
+    };
+
+    let app = workstation::routes::create_router(state);
+
+    let addr = format!("0.0.0.0:{}", config.port);
     tracing::info!("Listening on {}", addr);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())

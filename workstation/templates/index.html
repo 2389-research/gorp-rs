@@ -2,14 +2,32 @@
 
 {% block title %}Workstation - Dashboard{% endblock %}
 
+{% block nav %}
+{% match user %}
+{% when Some with (u) %}
+<span class="text-gray-400">{{ u }}</span>
+<a href="/auth/logout" class="text-red-400 hover:text-red-300">Logout</a>
+{% when None %}
+<a href="/auth/login" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded">Login with Matrix</a>
+{% endmatch %}
+{% endblock %}
+
 {% block content %}
 <div class="space-y-6">
     <h1 class="text-2xl font-bold">Welcome to Workstation</h1>
     <p class="text-gray-400">Configure your gorp workspaces.</p>
 
+    {% match user %}
+    {% when Some with (_u) %}
     <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
         <h2 class="text-lg font-semibold mb-4">Your Channels</h2>
-        <p class="text-gray-500">Login to see your channels.</p>
+        <p class="text-gray-500">Channel list coming soon...</p>
     </div>
+    {% when None %}
+    <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+        <h2 class="text-lg font-semibold mb-4">Get Started</h2>
+        <p class="text-gray-500">Login with your Matrix account to see your channels.</p>
+    </div>
+    {% endmatch %}
 </div>
 {% endblock %}
