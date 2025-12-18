@@ -50,6 +50,11 @@ binary_path = "claude"
 # Optional: Custom Claude SDK URL
 # sdk_url = "https://your-custom-sdk.com"
 
+# Optional: Claude Jail WebSocket URL
+# If set, uses Agent SDK via WebSocket instead of CLI subprocess
+# Docker: the entrypoint starts Claude Jail automatically at this URL
+jail_url = "ws://127.0.0.1:31337"
+
 [webhook]
 # Port for the webhook HTTP server (default: 13000)
 port = 13000

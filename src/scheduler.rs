@@ -752,6 +752,7 @@ impl SchedulerStore {
 // Background scheduler execution module
 use crate::{
     claude,
+    claude_jail::ClaudeJailClient,
     config::Config,
     session::{Channel, SessionStore},
     utils::{chunk_message, expand_slash_command, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
@@ -786,6 +787,7 @@ pub async fn start_scheduler(
     session_store: SessionStore,
     client: Client,
     config: Arc<Config>,
+    jail_client: Option<Arc<ClaudeJailClient>>,
     check_interval: StdDuration,
 ) {
     tracing::info!(
@@ -816,10 +818,11 @@ pub async fn start_scheduler(
                     let sess_store = session_store.clone();
                     let cli = client.clone();
                     let cfg = Arc::clone(&config);
+                    let jail = jail_client.clone();
 
                     // Execute each due schedule concurrently
                     tokio::spawn(async move {
-                        execute_schedule(schedule, store, sess_store, cli, cfg).await;
+                        execute_schedule(schedule, store, sess_store, cli, cfg, jail).await;
                     });
                 }
             }
@@ -837,6 +840,7 @@ async fn execute_schedule(
     session_store: SessionStore,
     client: Client,
     config: Arc<Config>,
+    jail_client: Option<Arc<ClaudeJailClient>>,
 ) {
     let prompt_preview: String = schedule.prompt.chars().take(50).collect();
     tracing::info!(
@@ -938,15 +942,28 @@ async fn execute_schedule(
     let _ = room.typing_notice(true).await;
 
     // Use streaming mode to capture actual response even if session ends with errors
-    let mut rx = match claude::invoke_claude_streaming(
-        &config.claude.binary_path,
-        config.claude.sdk_url.as_deref(),
-        channel.cli_args(),
-        &prompt,
-        Some(&channel.directory),
-    )
-    .await
-    {
+    // Use Claude Jail if available, otherwise fall back to CLI subprocess
+    let invoke_result = if let Some(ref jail) = jail_client {
+        crate::claude_jail::invoke_claude_streaming(
+            jail,
+            &schedule.room_id,
+            &channel.directory,
+            &prompt,
+            None, // session_id - not using resumption yet
+        )
+        .await
+    } else {
+        claude::invoke_claude_streaming(
+            &config.claude.binary_path,
+            config.claude.sdk_url.as_deref(),
+            channel.cli_args(),
+            &prompt,
+            Some(&channel.directory),
+        )
+        .await
+    };
+
+    let mut rx = match invoke_result {
         Ok(rx) => rx,
         Err(e) => {
             let _ = room.typing_notice(false).await;

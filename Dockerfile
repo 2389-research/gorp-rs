@@ -132,6 +132,10 @@ RUN echo '#!/bin/sh\necho "$ANTHROPIC_API_KEY"' > /usr/local/bin/claude-api-key-
 # Copy binary from builder
 COPY --from=builder /app/target/release/gorp /usr/local/bin/gorp
 
+# Copy Claude Jail (Python WebSocket service for Agent SDK)
+COPY claude-jail /app/claude-jail
+RUN cd /app/claude-jail && uv sync --frozen --no-cache
+
 # Copy example config, entrypoint, default claude-settings, and utility scripts
 COPY config.toml.example /app/config.toml.example
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

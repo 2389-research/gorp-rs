@@ -13,6 +13,7 @@ use matrix_sdk::{
 
 use crate::{
     claude::{self, ClaudeEvent},
+    claude_jail::ClaudeJailClient,
     config::Config,
     matrix_client,
     metrics,
@@ -22,6 +23,7 @@ use crate::{
     session::SessionStore,
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
 };
+use std::sync::Arc;
 use chrono::Utc;
 use std::path::Path;
 
@@ -119,6 +121,7 @@ pub async fn handle_message(
     config: Config,
     session_store: SessionStore,
     scheduler_store: SchedulerStore,
+    jail_client: Option<Arc<ClaudeJailClient>>,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
 
@@ -325,15 +328,30 @@ pub async fn handle_message(
     // Invoke Claude with streaming to show tool usage
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("matrix");
-    let mut event_rx = match claude::invoke_claude_streaming(
-        &config.claude.binary_path,
-        config.claude.sdk_url.as_deref(),
-        channel_args,
-        &prompt,
-        Some(&channel.directory),
-    )
-    .await
-    {
+
+    // Use Claude Jail if available, otherwise fall back to CLI subprocess
+    let invoke_result = if let Some(ref jail) = jail_client {
+        let channel_id = room.room_id().as_str();
+        crate::claude_jail::invoke_claude_streaming(
+            jail,
+            channel_id,
+            &channel.directory,
+            &prompt,
+            None, // session_id - not using resumption yet
+        )
+        .await
+    } else {
+        claude::invoke_claude_streaming(
+            &config.claude.binary_path,
+            config.claude.sdk_url.as_deref(),
+            channel_args,
+            &prompt,
+            Some(&channel.directory),
+        )
+        .await
+    };
+
+    let mut event_rx = match invoke_result {
         Ok(rx) => rx,
         Err(e) => {
             tracing::error!(error = %e, "Claude invocation failed");

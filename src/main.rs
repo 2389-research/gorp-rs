@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use gorp::{
+    claude_jail::ClaudeJailClient,
     config::Config,
     matrix_client, message_handler, paths,
     scheduler::{start_scheduler, SchedulerStore},
@@ -777,17 +778,38 @@ async fn run_start() -> Result<()> {
     let config_arc = Arc::new(config);
     let session_store_arc = Arc::new(session_store);
 
+    // Connect to Claude Jail if configured (replaces CLI subprocess)
+    let jail_client: Option<Arc<ClaudeJailClient>> = if let Some(ref jail_url) =
+        config_arc.claude.jail_url
+    {
+        match ClaudeJailClient::connect(jail_url).await {
+            Ok(client) => {
+                tracing::info!(%jail_url, "Connected to Claude Jail");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                tracing::error!(error = %e, %jail_url, "Failed to connect to Claude Jail, falling back to CLI");
+                None
+            }
+        }
+    } else {
+        tracing::info!("No jail_url configured, using Claude CLI subprocess");
+        None
+    };
+
     // Start webhook server in background (can run before initial sync)
     let webhook_port = config_arc.webhook.port;
     let webhook_store = (*session_store_arc).clone();
     let webhook_client = client.clone();
     let webhook_config_arc = Arc::clone(&config_arc);
+    let webhook_jail_client = jail_client.clone();
     tokio::spawn(async move {
         if let Err(e) = webhook::start_webhook_server(
             webhook_port,
             webhook_store,
             webhook_client,
             webhook_config_arc,
+            webhook_jail_client,
         )
         .await
         {
@@ -802,12 +824,14 @@ async fn run_start() -> Result<()> {
     let scheduler_session_store = (*session_store_arc).clone();
     let scheduler_client = client.clone();
     let scheduler_config = Arc::clone(&config_arc);
+    let scheduler_jail_client = jail_client.clone();
     tokio::spawn(async move {
         start_scheduler(
             scheduler_store,
             scheduler_session_store,
             scheduler_client,
             scheduler_config,
+            scheduler_jail_client,
             Duration::from_secs(60),
         )
         .await;
@@ -908,6 +932,7 @@ async fn run_start() -> Result<()> {
         &config_arc,
         &session_store_arc,
         scheduler_store_for_handler,
+        jail_client,
     );
     tracing::info!("Event handlers registered");
 
@@ -934,10 +959,12 @@ fn register_event_handlers(
     config_arc: &Arc<Config>,
     session_store_arc: &Arc<SessionStore>,
     scheduler_store: SchedulerStore,
+    jail_client: Option<Arc<ClaudeJailClient>>,
 ) {
     let config_for_invite = Arc::clone(config_arc);
     let config_for_messages = Arc::clone(config_arc);
     let session_store_for_messages = Arc::clone(session_store_arc);
+    let jail_client_for_messages = jail_client;
 
     // Auto-join room invites from allowed users
     client.add_event_handler(
@@ -996,6 +1023,7 @@ fn register_event_handlers(
         let config = Arc::clone(&config_for_messages);
         let session_store = Arc::clone(&session_store_for_messages);
         let scheduler = scheduler_store.clone();
+        let jail_client = jail_client_for_messages.clone();
         async move {
             // Extract and clone original message event before spawning
             let Some(original_event) = event.as_original().cloned() else {
@@ -1011,6 +1039,7 @@ fn register_event_handlers(
                     (*config).clone(),
                     (*session_store).clone(),
                     scheduler,
+                    jail_client,
                 )
                 .await
                 {

@@ -21,6 +21,7 @@ use tower_http::trace::TraceLayer;
 use crate::{
     admin::{admin_router, auth_middleware, AdminState},
     claude,
+    claude_jail::ClaudeJailClient,
     config::Config,
     mcp::{mcp_handler, McpState},
     metrics,
@@ -35,6 +36,7 @@ pub struct WebhookState {
     pub session_store: SessionStore,
     pub matrix_client: Client,
     pub config: Arc<Config>,
+    pub jail_client: Option<Arc<ClaudeJailClient>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +58,7 @@ pub async fn start_webhook_server(
     session_store: SessionStore,
     matrix_client: Client,
     config: Arc<Config>,
+    jail_client: Option<Arc<ClaudeJailClient>>,
 ) -> Result<()> {
     // Initialize Prometheus metrics
     let metrics_handle = metrics::init_metrics()
@@ -65,6 +68,7 @@ pub async fn start_webhook_server(
         session_store,
         matrix_client,
         config,
+        jail_client,
     };
 
     let webhook_routes = Router::new()
@@ -272,24 +276,33 @@ async fn webhook_handler(
     }
     metrics::record_message_sent();
 
-    // 2. Invoke Claude directly
+    // 2. Invoke Claude (via Jail if available, otherwise CLI)
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("webhook");
-    let claude_response = match claude::invoke_claude(
-        &state.config.claude.binary_path,
-        state.config.claude.sdk_url.as_deref(),
-        channel.cli_args(),
-        &payload.prompt,
-        Some(&channel.directory),
-    )
-    .await
-    {
-        Ok(resp) => {
-            let claude_duration = claude_start.elapsed().as_secs_f64();
-            metrics::record_claude_duration(claude_duration);
-            metrics::record_claude_response_length(resp.len());
-            resp
-        }
+
+    // Use streaming interface for both jail and CLI, then collect the final response
+    let invoke_result = if let Some(ref jail) = state.jail_client {
+        crate::claude_jail::invoke_claude_streaming(
+            jail,
+            &channel.room_id,
+            &channel.directory,
+            &payload.prompt,
+            None, // session_id - not using resumption yet
+        )
+        .await
+    } else {
+        claude::invoke_claude_streaming(
+            &state.config.claude.binary_path,
+            state.config.claude.sdk_url.as_deref(),
+            channel.cli_args(),
+            &payload.prompt,
+            Some(&channel.directory),
+        )
+        .await
+    };
+
+    let mut rx = match invoke_result {
+        Ok(rx) => rx,
         Err(e) => {
             tracing::error!(error = %e, "Claude invocation failed");
             metrics::record_webhook_request("error");
@@ -307,6 +320,43 @@ async fn webhook_handler(
             );
         }
     };
+
+    // Consume the stream to get the final response
+    let mut claude_response = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            claude::ClaudeEvent::ToolUse { name, input_preview } => {
+                tracing::debug!(%name, %input_preview, "Webhook: Claude tool use");
+            }
+            claude::ClaudeEvent::Result { text, usage: _ } => {
+                claude_response = text;
+            }
+            claude::ClaudeEvent::Error(msg) => {
+                tracing::error!(%msg, "Claude error during webhook");
+                metrics::record_webhook_request("error");
+                metrics::record_error("webhook_claude_failed");
+                let error_msg = format!("⚠️ Claude error: {}", msg);
+                let _ = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(WebhookResponse {
+                        success: false,
+                        message: format!("Claude error: {}", msg),
+                    }),
+                );
+            }
+            claude::ClaudeEvent::OrphanedSession => {
+                tracing::warn!("Orphaned session detected during webhook");
+                // Continue processing - this is informational
+            }
+        }
+    }
+
+    let claude_duration = claude_start.elapsed().as_secs_f64();
+    metrics::record_claude_duration(claude_duration);
+    metrics::record_claude_response_length(claude_response.len());
 
     // 3. Send Claude's response to room with markdown formatting and chunking
     let chunks = chunk_message(&claude_response, MAX_CHUNK_SIZE);

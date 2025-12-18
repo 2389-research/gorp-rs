@@ -116,6 +116,26 @@ if [ ! -f "$CONFIG_DIR/config.toml" ]; then
     fi
 fi
 
+# Start Claude Jail (Agent SDK WebSocket service) in background
+# This provides the ws://127.0.0.1:31337 endpoint for gorp to connect to
+CLAUDE_JAIL_DIR="/app/claude-jail"
+if [ -d "$CLAUDE_JAIL_DIR" ]; then
+    echo "Starting Claude Jail..."
+    cd "$CLAUDE_JAIL_DIR"
+    uv run python -m claude_jail.server > /home/gorp/.local/share/gorp/logs/claude-jail.log 2>&1 &
+    JAIL_PID=$!
+    cd /home/gorp
+
+    # Wait for Claude Jail to be ready (max 10 seconds)
+    for i in $(seq 1 20); do
+        if curl -s -o /dev/null http://127.0.0.1:31337 2>/dev/null || [ -n "$(lsof -i :31337 2>/dev/null)" ]; then
+            echo "Claude Jail started (PID: $JAIL_PID)"
+            break
+        fi
+        sleep 0.5
+    done
+fi
+
 # If first argument is a flag, assume we're running gorp
 if [ "${1#-}" != "$1" ]; then
     set -- gorp "$@"
