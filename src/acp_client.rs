@@ -122,6 +122,7 @@ impl acp::Client for AcpClientHandler {
     }
 
     async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
+        tracing::debug!(session_id = %args.session_id, "Received session notification");
         match args.update {
             acp::SessionUpdate::AgentMessageChunk(chunk) => {
                 let text = match chunk.content {
@@ -269,7 +270,8 @@ impl AcpClient {
             .envs(env_vars)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            // Inherit stderr so we can see errors and avoid pipe buffer deadlock
+            .stderr(std::process::Stdio::inherit())
             .kill_on_drop(true)
             .spawn()
             .context("Failed to spawn ACP agent")?;
@@ -316,6 +318,7 @@ impl AcpClient {
 
     /// Create a new session
     pub async fn new_session(&self) -> Result<String> {
+        tracing::info!(cwd = %self.working_dir.display(), "Calling ACP new_session");
         let response = self
             .conn
             .new_session(acp::NewSessionRequest::new(self.working_dir.clone()))
@@ -388,6 +391,49 @@ impl AcpClient {
             .await
             .context("Failed to cancel ACP operation")?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn new_test_mock_blocking(event_tx: mpsc::Sender<AcpEvent>) -> Self {
+        use tokio::task::LocalSet;
+
+        // For tests that need to construct AcpClient synchronously
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let local = LocalSet::new();
+
+        local.block_on(&rt, async {
+            use tokio::process::Command;
+
+            let child = Command::new("sleep")
+                .arg("3600")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("Failed to spawn dummy process for test");
+
+            // Create a mock handler and connection
+            let handler = AcpClientHandler::new(event_tx.clone(), PathBuf::from("/tmp"));
+            let (stdin_read, _stdin_write) = tokio::io::duplex(1024);
+            let (_stdout_read, _stdout_write) = tokio::io::duplex(1024);
+
+            let (conn, _handle_io) = acp::ClientSideConnection::new(
+                handler,
+                _stdin_write.compat_write(),
+                stdin_read.compat(),
+                |fut| {
+                    tokio::task::spawn_local(fut);
+                },
+            );
+
+            Self {
+                child,
+                conn,
+                event_tx,
+                working_dir: PathBuf::from("/tmp"),
+            }
+        })
     }
 }
 
@@ -630,6 +676,7 @@ fn run_acp_sync(
                     if let Err(e) = client.load_session(&existing_session_id).await {
                         tracing::warn!(error = %e, session_id = %existing_session_id, "Failed to load existing session, will create new one");
                         // Try creating new session instead
+                        tracing::info!("About to call new_session()");
                         match client.new_session().await {
                             Ok(new_id) => {
                                 tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
