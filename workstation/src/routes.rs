@@ -11,6 +11,7 @@ use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
 use crate::{
     auth::{self, get_current_user},
+    files,
     templates::IndexTemplate,
     AppState,
 };
@@ -27,6 +28,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/auth/login", get(auth::login))
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", get(auth::logout))
+        .route("/files/:channel/*path", get(files::list_files))
         .layer(session_layer)
         .with_state(state)
 }
