@@ -2,6 +2,7 @@
 // ABOUTME: Provides access to config, session, claude, matrix client, and webhook modules
 pub mod admin;
 pub mod claude;
+pub mod claude_jail;
 pub mod config;
 pub mod matrix_client;
 pub mod mcp;

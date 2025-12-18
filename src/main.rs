@@ -515,6 +515,9 @@ fn run_config(action: ConfigAction) -> Result<()> {
             println!("path = \"{}\"", config.workspace.path);
             println!("\n[claude]");
             println!("binary_path = \"{}\"", config.claude.binary_path);
+            if let Some(ref jail_url) = config.claude.jail_url {
+                println!("jail_url = \"{}\"", jail_url);
+            }
             println!("\n[webhook]");
             println!("port = {}", config.webhook.port);
             println!("\n[scheduler]");

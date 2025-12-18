@@ -33,3 +33,5 @@ tower-sessions = { version = "0.13", features = ["memory-store"] }
 mime_guess = "2.0"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+url = "2.5"

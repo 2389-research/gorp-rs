@@ -62,6 +62,9 @@ pub struct ClaudeConfig {
     pub binary_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sdk_url: Option<String>,
+    /// WebSocket URL for Claude Jail service (replaces CLI subprocess when set)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jail_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +232,7 @@ impl Config {
                 claude: ClaudeConfig {
                     binary_path: default_claude_binary(),
                     sdk_url: None,
+                    jail_url: None,
                 },
                 webhook: WebhookConfig {
                     port: default_webhook_port(),
