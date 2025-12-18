@@ -20,3 +20,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1.0"
 askama = "0.14"
 tower-sessions = { version = "0.14", features = ["memory-store"] }
+portable-pty = "0.8"
