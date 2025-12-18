@@ -9,8 +9,8 @@ pub mod oidc;
 pub mod routes;
 pub mod templates;
 
-use auth::OidcConfig;
 use gorp_client::GorpClient;
+use oidc::OidcConfig;
 
 #[derive(Clone)]
 pub struct AppState {

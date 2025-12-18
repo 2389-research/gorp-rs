@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use workstation::{auth::OidcConfig, config::Config, gorp_client::GorpClient, AppState};
+use workstation::{config::Config, gorp_client::GorpClient, oidc::OidcConfig, AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -20,11 +20,12 @@ async fn main() -> Result<()> {
     tracing::info!("Starting workstation webapp");
 
     let config = Config::load()?;
-    let oidc = OidcConfig::new(
+    let oidc = OidcConfig::init(
         &config.oidc_issuer,
-        "workstation",
         &config.oidc_redirect_uri,
-    )?;
+        &config.session_db_path,
+    )
+    .await?;
     let gorp = GorpClient::new(&config.gorp_api_url);
 
     let state = AppState {
