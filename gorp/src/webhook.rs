@@ -88,10 +88,14 @@ pub async fn start_webhook_server(
         .unwrap_or(0);
     metrics::set_active_schedules(active_schedule_count as u64);
 
+    // Create terminal manager
+    let terminal_manager = Arc::new(crate::terminal::TerminalManager::new());
+
     let admin_state = AdminState {
         config: Arc::clone(&state.config),
         session_store: state.session_store.clone(),
         scheduler_store: scheduler_store.clone(),
+        terminal_manager,
     };
 
     let admin_routes = admin_router()

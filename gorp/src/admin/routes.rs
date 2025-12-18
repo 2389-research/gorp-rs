@@ -3,10 +3,13 @@
 
 use axum::{
     extract::{Path as AxumPath, State},
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::{IntoResponse, Response},
     routing::{get, post},
     Form, Router,
 };
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
 use chrono_tz::Tz;
 use serde::Deserialize;
 use std::fs::File;
@@ -31,6 +34,7 @@ pub struct AdminState {
     pub config: Arc<Config>,
     pub session_store: SessionStore,
     pub scheduler_store: SchedulerStore,
+    pub terminal_manager: Arc<crate::terminal::TerminalManager>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +76,8 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/render/{*path}", get(render_markdown))
         .route("/search", get(search_workspace))
         .route("/api/channels", get(api_list_channels))
+        .route("/api/terminal", post(api_create_terminal))
+        .route("/ws/terminal/:session_id", get(ws_terminal))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -1933,4 +1939,112 @@ fn search_file_content(
     } else {
         None
     }
+}
+
+// ============================================================================
+// Terminal Handlers
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct CreateTerminalRequest {
+    workspace_path: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct CreateTerminalResponse {
+    session_id: String,
+    ws_url: String,
+}
+
+async fn api_create_terminal(
+    State(state): State<AdminState>,
+    axum::Json(req): axum::Json<CreateTerminalRequest>,
+) -> impl IntoResponse {
+    let workspace_path = req.workspace_path.unwrap_or_else(|| state.config.workspace.path.clone());
+
+    // Create a dummy channel for now - actual streaming happens via WebSocket
+    let (tx, _rx) = mpsc::channel(1);
+
+    match state.terminal_manager.spawn(workspace_path, tx).await {
+        Ok(session) => {
+            let response = CreateTerminalResponse {
+                session_id: session.id.clone(),
+                ws_url: format!("/admin/ws/terminal/{}", session.id),
+            };
+            axum::Json(response).into_response()
+        }
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create terminal: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+async fn ws_terminal(
+    State(state): State<AdminState>,
+    AxumPath(session_id): AxumPath<String>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_terminal_ws(socket, state, session_id))
+}
+
+async fn handle_terminal_ws(socket: WebSocket, state: AdminState, _session_id: String) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Create output channel for this WebSocket connection
+    let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(256);
+
+    // Spawn terminal with output channel
+    let workspace_path = state.config.workspace.path.clone();
+    let session = match state.terminal_manager.spawn(workspace_path, output_tx).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to spawn terminal");
+            let _ = ws_sender.send(Message::Text(format!("Error: {}", e).into())).await;
+            return;
+        }
+    };
+
+    tracing::info!(session_id = %session.id, "Terminal WebSocket connected");
+
+    // Task to forward PTY output to WebSocket
+    let session_clone = session.clone();
+    let output_task = tokio::spawn(async move {
+        while let Some(data) = output_rx.recv().await {
+            if ws_sender.send(Message::Binary(data.into())).await.is_err() {
+                break;
+            }
+        }
+        tracing::info!(session_id = %session_clone.id, "Output task ended");
+    });
+
+    // Forward WebSocket input to PTY
+    while let Some(msg) = ws_receiver.next().await {
+        match msg {
+            Ok(Message::Binary(data)) => {
+                if let Err(e) = session.write(&data).await {
+                    tracing::error!(error = %e, "Failed to write to PTY");
+                    break;
+                }
+            }
+            Ok(Message::Text(text)) => {
+                if let Err(e) = session.write(text.as_bytes()).await {
+                    tracing::error!(error = %e, "Failed to write to PTY");
+                    break;
+                }
+            }
+            Ok(Message::Close(_)) => break,
+            Err(e) => {
+                tracing::error!(error = %e, "WebSocket error");
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    // Cleanup
+    output_task.abort();
+    state.terminal_manager.remove(&session.id).await;
+    tracing::info!(session_id = %session.id, "Terminal WebSocket disconnected");
 }
