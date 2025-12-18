@@ -1,7 +1,14 @@
 // ABOUTME: Axum router setup for workstation webapp.
 // ABOUTME: Defines all HTTP routes and middleware.
 
-use axum::{routing::get, Router};
+use askama::Template;
+use axum::{
+    response::{Html, IntoResponse},
+    routing::get,
+    Router,
+};
+
+use crate::templates::IndexTemplate;
 
 pub fn create_router() -> Router {
     Router::new()
@@ -9,8 +16,9 @@ pub fn create_router() -> Router {
         .route("/health", get(health))
 }
 
-async fn index() -> &'static str {
-    "Workstation"
+async fn index() -> impl IntoResponse {
+    let template = IndexTemplate;
+    Html(template.render().unwrap())
 }
 
 async fn health() -> &'static str {
