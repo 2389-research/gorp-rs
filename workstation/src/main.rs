@@ -30,6 +30,12 @@ async fn main() -> Result<()> {
     let gorp = GorpClient::new(&config.gorp_api_url);
 
     // Initialize SQLite session store
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(&config.session_db_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
     let session_conn = Connection::open(&config.session_db_path).await?;
     let session_store = RusqliteStore::new(session_conn);
     session_store.migrate().await?;
