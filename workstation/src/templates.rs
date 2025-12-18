@@ -21,3 +21,11 @@ pub struct TerminalTemplate {
     pub gorp_ws_url: String,
     pub workspace_path: String,
 }
+
+#[derive(Template)]
+#[template(path = "browser.html")]
+pub struct BrowserTemplate {
+    pub user: Option<String>,
+    pub gorp_api_url: String,
+    pub gorp_ws_url: String,
+}

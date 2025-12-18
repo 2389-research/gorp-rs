@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Browser Viewer - Workstation{% endblock %}
+
+{% block nav %}
+{% match user %}
+{% when Some with (u) %}
+<span class="text-gray-400">{{ u }}</span>
+<a href="/auth/logout" class="text-red-400 hover:text-red-300">Logout</a>
+{% when None %}
+<a href="/auth/login" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded">Login</a>
+{% endmatch %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+    <div class="flex items-center justify-between">
+        <h1 class="text-2xl font-bold">Browser Viewer</h1>
+        <div class="flex gap-2">
+            <input type="text" id="url-input" placeholder="Enter URL..."
+                   class="bg-gray-800 border border-gray-600 rounded px-3 py-2 w-64">
+            <button id="go-btn" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded">Go</button>
+            <button id="connect-btn" class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded">
+                Connect
+            </button>
+        </div>
+    </div>
+
+    <div id="browser-container" class="bg-black rounded-lg border border-gray-700 p-2 relative"
+         style="width: 1280px; height: 720px; max-width: 100%; overflow: hidden;">
+        <img id="browser-frame" style="width: 100%; height: 100%; object-fit: contain;">
+        <div id="click-overlay" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; cursor: crosshair;"></div>
+    </div>
+
+    <div id="status" class="text-gray-400 text-sm">
+        Status: Disconnected
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const browserFrame = document.getElementById('browser-frame');
+    const clickOverlay = document.getElementById('click-overlay');
+    const connectBtn = document.getElementById('connect-btn');
+    const goBtn = document.getElementById('go-btn');
+    const urlInput = document.getElementById('url-input');
+    const statusEl = document.getElementById('status');
+
+    let ws = null;
+    let sessionId = null;
+
+    async function connect() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close();
+            return;
+        }
+
+        statusEl.textContent = 'Status: Connecting...';
+
+        try {
+            const response = await fetch('{{ gorp_api_url }}/admin/api/browser', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to create browser session');
+            }
+
+            const data = await response.json();
+            sessionId = data.session_id;
+            const wsUrl = '{{ gorp_ws_url }}' + data.ws_url;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                statusEl.textContent = 'Status: Connected';
+                connectBtn.textContent = 'Disconnect';
+                connectBtn.className = 'bg-red-600 hover:bg-red-500 px-4 py-2 rounded';
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'frame' && msg.data) {
+                        browserFrame.src = 'data:image/png;base64,' + msg.data;
+                    }
+                } catch (e) {
+                    console.error('Parse error:', e);
+                }
+            };
+
+            ws.onclose = function() {
+                statusEl.textContent = 'Status: Disconnected';
+                connectBtn.textContent = 'Connect';
+                connectBtn.className = 'bg-green-600 hover:bg-green-500 px-4 py-2 rounded';
+                sessionId = null;
+            };
+
+            ws.onerror = function(error) {
+                statusEl.textContent = 'Status: Error';
+                console.error('WebSocket error:', error);
+            };
+
+        } catch (error) {
+            statusEl.textContent = 'Status: Error - ' + error.message;
+            console.error('Connection error:', error);
+        }
+    }
+
+    function navigate(url) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action: 'navigate', url: url }));
+        }
+    }
+
+    clickOverlay.addEventListener('click', function(e) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            const rect = clickOverlay.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * (1280 / rect.width);
+            const y = (e.clientY - rect.top) * (720 / rect.height);
+            ws.send(JSON.stringify({ action: 'click', x: x, y: y }));
+        }
+    });
+
+    connectBtn.addEventListener('click', connect);
+    goBtn.addEventListener('click', function() {
+        const url = urlInput.value.trim();
+        if (url) {
+            navigate(url.startsWith('http') ? url : 'https://' + url);
+        }
+    });
+    urlInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            goBtn.click();
+        }
+    });
+});
+</script>
+{% endblock %}

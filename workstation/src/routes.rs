@@ -13,7 +13,7 @@ use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 use crate::{
     auth::{self, get_current_user},
     files,
-    templates::{IndexTemplate, TerminalTemplate},
+    templates::{BrowserTemplate, IndexTemplate, TerminalTemplate},
     AppState,
 };
 
@@ -27,6 +27,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/health", get(health))
         .route("/terminal", get(terminal))
+        .route("/browser", get(browser))
         .route("/auth/login", get(auth::login))
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", get(auth::logout))
@@ -78,6 +79,23 @@ async fn terminal(State(state): State<AppState>, session: Session) -> impl IntoR
         gorp_api_url: state.config.gorp_api_url.clone(),
         gorp_ws_url,
         workspace_path: state.config.workspace_path.clone(),
+    };
+    Html(template.render().unwrap())
+}
+
+async fn browser(State(state): State<AppState>, session: Session) -> impl IntoResponse {
+    let user = get_current_user(&session).await;
+
+    let gorp_ws_url = state
+        .config
+        .gorp_api_url
+        .replace("http://", "ws://")
+        .replace("https://", "wss://");
+
+    let template = BrowserTemplate {
+        user,
+        gorp_api_url: state.config.gorp_api_url.clone(),
+        gorp_ws_url,
     };
     Html(template.render().unwrap())
 }
