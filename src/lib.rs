@@ -11,4 +11,5 @@ pub mod paths;
 pub mod scheduler;
 pub mod session;
 pub mod utils;
+pub mod warm_session;
 pub mod webhook;
