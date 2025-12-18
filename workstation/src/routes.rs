@@ -8,7 +8,8 @@ use axum::{
     routing::get,
     Router,
 };
-use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
+use tower_sessions::{Session, SessionManagerLayer};
+use tower_sessions_rusqlite_store::RusqliteStore;
 
 use crate::{
     auth::{self, get_current_user},
@@ -17,8 +18,7 @@ use crate::{
     AppState,
 };
 
-pub fn create_router(state: AppState) -> Router {
-    let session_store = MemoryStore::default();
+pub fn create_router(state: AppState, session_store: RusqliteStore) -> Router {
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false)
         .with_same_site(tower_sessions::cookie::SameSite::Lax);
