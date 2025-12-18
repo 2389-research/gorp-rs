@@ -4,13 +4,16 @@
 pub mod auth;
 pub mod config;
 pub mod files;
+pub mod gorp_client;
 pub mod routes;
 pub mod templates;
 
 use auth::OidcConfig;
+use gorp_client::GorpClient;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: config::Config,
     pub oidc: OidcConfig,
+    pub gorp: GorpClient,
 }

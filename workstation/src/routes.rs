@@ -3,6 +3,7 @@
 
 use askama::Template;
 use axum::{
+    extract::State,
     response::{Html, IntoResponse},
     routing::get,
     Router,
@@ -37,10 +38,23 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-#[axum::debug_handler]
-async fn index(session: Session) -> impl IntoResponse {
+async fn index(State(state): State<AppState>, session: Session) -> impl IntoResponse {
     let user = get_current_user(&session).await;
-    let template = IndexTemplate { user };
+
+    let (channels, error) = if user.is_some() {
+        match state.gorp.list_channels().await {
+            Ok(c) => (c, None),
+            Err(e) => (vec![], Some(e.to_string())),
+        }
+    } else {
+        (vec![], None)
+    };
+
+    let template = IndexTemplate {
+        user,
+        channels,
+        error,
+    };
     Html(template.render().unwrap())
 }
 

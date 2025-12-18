@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use workstation::{auth::OidcConfig, config::Config, AppState};
+use workstation::{auth::OidcConfig, config::Config, gorp_client::GorpClient, AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,10 +25,12 @@ async fn main() -> Result<()> {
         "workstation",
         &format!("http://localhost:{}/auth/callback", config.port),
     )?;
+    let gorp = GorpClient::new(&config.gorp_api_url);
 
     let state = AppState {
         config: config.clone(),
         oidc,
+        gorp,
     };
 
     let app = workstation::routes::create_router(state);
