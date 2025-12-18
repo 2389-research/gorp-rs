@@ -71,6 +71,7 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/browse/{*path}", get(browse_path))
         .route("/render/{*path}", get(render_markdown))
         .route("/search", get(search_workspace))
+        .route("/api/channels", get(api_list_channels))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -753,6 +754,24 @@ fn is_debug_enabled(channel: &crate::session::Channel) -> bool {
         .join(".gorp")
         .join("enable-debug");
     debug_path.exists()
+}
+
+// ============================================================================
+// API Handlers
+// ============================================================================
+
+/// API endpoint to list all channels as JSON
+async fn api_list_channels(
+    State(state): State<AdminState>,
+) -> impl IntoResponse {
+    match state.session_store.list_all() {
+        Ok(channels) => axum::Json(channels).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        )
+            .into_response(),
+    }
 }
 
 // ============================================================================
