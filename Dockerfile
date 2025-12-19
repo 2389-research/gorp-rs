@@ -151,6 +151,7 @@ RUN mkdir -p /home/gorp/.config/gorp \
              /home/gorp/.local/share/toki \
              /home/gorp/.local/share/pagen \
              /home/gorp/.local/share/digest \
+             /home/gorp/.local/share/charm \
              /home/gorp/workspace && \
     chown -R gorp:gorp /home/gorp /app
 
@@ -168,8 +169,8 @@ ENV HOME=/home/gorp
 # Volumes for persistent data (XDG-compliant paths)
 # Mount .config/claude to persist Claude Code auth across container restarts
 # Mount .claude for Claude CLI settings (API key)
-# MCP tool data: chronicle, memory, toki, pagen, gsuite-mcp, digest
-VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.config/gsuite-mcp", "/home/gorp/.claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/.local/share/digest", "/home/gorp/workspace"]
+# MCP tool data: chronicle, memory, toki, pagen, gsuite-mcp, digest, charm (health)
+VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.config/gsuite-mcp", "/home/gorp/.claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/.local/share/digest", "/home/gorp/.local/share/charm", "/home/gorp/workspace"]
 
 # Expose webhook port
 EXPOSE 13000
