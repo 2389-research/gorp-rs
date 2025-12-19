@@ -17,8 +17,8 @@ gorp has been migrated from direct Claude Code CLI invocation to using the Agent
 
 ```toml
 [acp]
-# Options: "claude-code-acp" or "codex-acp"
-agent_binary = "claude-code-acp"
+# Options: "codex-acp" (default) or "claude-code-acp"
+agent_binary = "codex-acp"
 timeout_secs = 300
 ```
 
