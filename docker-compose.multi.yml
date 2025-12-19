@@ -1,5 +1,19 @@
 # ABOUTME: Multi-user Docker Compose for running multiple gorp instances
-# ABOUTME: Each user gets their own app-data directory and port (13001-13010)
+# ABOUTME: Each user gets their own app-data directory, gorp port (13001-13010), terminal (7691-7700), vnc (6091-6100)
+
+x-labs-common: &labs-common
+  build:
+    context: https://github.com/2389-research/labs.git
+    dockerfile: docker/Dockerfile.workspace
+  image: labs-workspace:latest
+  restart: unless-stopped
+  environment:
+    - TZ=America/Chicago
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 x-gorp-common: &gorp-common
   build: .
@@ -15,12 +29,18 @@ x-gorp-common: &gorp-common
       max-file: "3"
 
 services:
+  # User 1
+  labs-1:
+    <<: *labs-common
+    container_name: labs-1
+    ports: ["7691:7681", "6091:6080"]
+    volumes: ["./app-data-1/workspace:/home/user/workspace"]
+
   gorp-1:
     <<: *gorp-common
     container_name: gorp-1
     env_file: ./app-data-1/.env
-    ports:
-      - "13001:13000"
+    ports: ["13001:13000"]
     volumes:
       - ./app-data-1/config:/home/gorp/.config/gorp
       - ./app-data-1/claude-config:/home/gorp/.config/claude
@@ -32,13 +52,21 @@ services:
       - ./app-data-1/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-1/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-1/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-1/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-1/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 2
+  labs-2:
+    <<: *labs-common
+    container_name: labs-2
+    ports: ["7692:7681", "6092:6080"]
+    volumes: ["./app-data-2/workspace:/home/user/workspace"]
 
   gorp-2:
     <<: *gorp-common
     container_name: gorp-2
     env_file: ./app-data-2/.env
-    ports:
-      - "13002:13000"
+    ports: ["13002:13000"]
     volumes:
       - ./app-data-2/config:/home/gorp/.config/gorp
       - ./app-data-2/claude-config:/home/gorp/.config/claude
@@ -50,13 +78,21 @@ services:
       - ./app-data-2/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-2/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-2/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-2/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-2/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 3
+  labs-3:
+    <<: *labs-common
+    container_name: labs-3
+    ports: ["7693:7681", "6093:6080"]
+    volumes: ["./app-data-3/workspace:/home/user/workspace"]
 
   gorp-3:
     <<: *gorp-common
     container_name: gorp-3
     env_file: ./app-data-3/.env
-    ports:
-      - "13003:13000"
+    ports: ["13003:13000"]
     volumes:
       - ./app-data-3/config:/home/gorp/.config/gorp
       - ./app-data-3/claude-config:/home/gorp/.config/claude
@@ -68,13 +104,21 @@ services:
       - ./app-data-3/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-3/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-3/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-3/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-3/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 4
+  labs-4:
+    <<: *labs-common
+    container_name: labs-4
+    ports: ["7694:7681", "6094:6080"]
+    volumes: ["./app-data-4/workspace:/home/user/workspace"]
 
   gorp-4:
     <<: *gorp-common
     container_name: gorp-4
     env_file: ./app-data-4/.env
-    ports:
-      - "13004:13000"
+    ports: ["13004:13000"]
     volumes:
       - ./app-data-4/config:/home/gorp/.config/gorp
       - ./app-data-4/claude-config:/home/gorp/.config/claude
@@ -86,13 +130,21 @@ services:
       - ./app-data-4/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-4/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-4/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-4/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-4/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 5
+  labs-5:
+    <<: *labs-common
+    container_name: labs-5
+    ports: ["7695:7681", "6095:6080"]
+    volumes: ["./app-data-5/workspace:/home/user/workspace"]
 
   gorp-5:
     <<: *gorp-common
     container_name: gorp-5
     env_file: ./app-data-5/.env
-    ports:
-      - "13005:13000"
+    ports: ["13005:13000"]
     volumes:
       - ./app-data-5/config:/home/gorp/.config/gorp
       - ./app-data-5/claude-config:/home/gorp/.config/claude
@@ -104,13 +156,21 @@ services:
       - ./app-data-5/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-5/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-5/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-5/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-5/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 6
+  labs-6:
+    <<: *labs-common
+    container_name: labs-6
+    ports: ["7696:7681", "6096:6080"]
+    volumes: ["./app-data-6/workspace:/home/user/workspace"]
 
   gorp-6:
     <<: *gorp-common
     container_name: gorp-6
     env_file: ./app-data-6/.env
-    ports:
-      - "13006:13000"
+    ports: ["13006:13000"]
     volumes:
       - ./app-data-6/config:/home/gorp/.config/gorp
       - ./app-data-6/claude-config:/home/gorp/.config/claude
@@ -122,13 +182,21 @@ services:
       - ./app-data-6/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-6/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-6/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-6/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-6/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 7
+  labs-7:
+    <<: *labs-common
+    container_name: labs-7
+    ports: ["7697:7681", "6097:6080"]
+    volumes: ["./app-data-7/workspace:/home/user/workspace"]
 
   gorp-7:
     <<: *gorp-common
     container_name: gorp-7
     env_file: ./app-data-7/.env
-    ports:
-      - "13007:13000"
+    ports: ["13007:13000"]
     volumes:
       - ./app-data-7/config:/home/gorp/.config/gorp
       - ./app-data-7/claude-config:/home/gorp/.config/claude
@@ -140,13 +208,21 @@ services:
       - ./app-data-7/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-7/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-7/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-7/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-7/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 8
+  labs-8:
+    <<: *labs-common
+    container_name: labs-8
+    ports: ["7698:7681", "6098:6080"]
+    volumes: ["./app-data-8/workspace:/home/user/workspace"]
 
   gorp-8:
     <<: *gorp-common
     container_name: gorp-8
     env_file: ./app-data-8/.env
-    ports:
-      - "13008:13000"
+    ports: ["13008:13000"]
     volumes:
       - ./app-data-8/config:/home/gorp/.config/gorp
       - ./app-data-8/claude-config:/home/gorp/.config/claude
@@ -158,13 +234,21 @@ services:
       - ./app-data-8/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-8/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-8/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-8/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-8/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 9
+  labs-9:
+    <<: *labs-common
+    container_name: labs-9
+    ports: ["7699:7681", "6099:6080"]
+    volumes: ["./app-data-9/workspace:/home/user/workspace"]
 
   gorp-9:
     <<: *gorp-common
     container_name: gorp-9
     env_file: ./app-data-9/.env
-    ports:
-      - "13009:13000"
+    ports: ["13009:13000"]
     volumes:
       - ./app-data-9/config:/home/gorp/.config/gorp
       - ./app-data-9/claude-config:/home/gorp/.config/claude
@@ -176,13 +260,21 @@ services:
       - ./app-data-9/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-9/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-9/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-9/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-9/mcp-data/charm:/home/gorp/.local/share/charm
+
+  # User 10
+  labs-10:
+    <<: *labs-common
+    container_name: labs-10
+    ports: ["7700:7681", "6100:6080"]
+    volumes: ["./app-data-10/workspace:/home/user/workspace"]
 
   gorp-10:
     <<: *gorp-common
     container_name: gorp-10
     env_file: ./app-data-10/.env
-    ports:
-      - "13010:13000"
+    ports: ["13010:13000"]
     volumes:
       - ./app-data-10/config:/home/gorp/.config/gorp
       - ./app-data-10/claude-config:/home/gorp/.config/claude
@@ -194,3 +286,5 @@ services:
       - ./app-data-10/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-10/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-10/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-10/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-10/mcp-data/charm:/home/gorp/.local/share/charm

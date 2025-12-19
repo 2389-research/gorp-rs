@@ -3,6 +3,30 @@
 version: '3.8'
 
 services:
+  # Labs workspace - provides terminal and browser access to workspace files
+  labs:
+    build:
+      context: https://github.com/2389-research/labs.git
+      dockerfile: docker/Dockerfile.workspace
+    image: labs-workspace:latest
+    container_name: gorp-labs
+    restart: unless-stopped
+    environment:
+      - TZ=America/Chicago
+    volumes:
+      # Same workspace as gorp - user can browse/edit Claude's files
+      - ./app-data/workspace:/home/user/workspace
+    ports:
+      # Terminal (ttyd)
+      - "7681:7681"
+      # Browser (noVNC)
+      - "6080:6080"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   gorp:
     build: .
     image: gorp:latest
@@ -43,6 +67,7 @@ services:
       - ./app-data/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
       - ./app-data/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data/mcp-data/charm:/home/gorp/.local/share/charm
 
     # Webhook port
     ports:
