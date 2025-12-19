@@ -9,7 +9,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub matrix: MatrixConfig,
-    pub claude: ClaudeConfig,
+    #[serde(default)]
+    pub acp: AcpConfig,
     pub webhook: WebhookConfig,
     pub workspace: WorkspaceConfig,
     #[serde(default)]
@@ -57,14 +58,37 @@ impl std::fmt::Debug for MatrixConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaudeConfig {
-    #[serde(default = "default_claude_binary")]
-    pub binary_path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sdk_url: Option<String>,
-    /// WebSocket URL for Claude Jail service (replaces CLI subprocess when set)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jail_url: Option<String>,
+pub struct AcpConfig {
+    pub agent_binary: Option<String>,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_keep_alive_secs")]
+    pub keep_alive_secs: u64,
+    #[serde(default = "default_pre_warm_secs")]
+    pub pre_warm_secs: u64,
+}
+
+impl Default for AcpConfig {
+    fn default() -> Self {
+        Self {
+            agent_binary: Some("codex-acp".to_string()),
+            timeout_secs: default_timeout_secs(),
+            keep_alive_secs: default_keep_alive_secs(),
+            pre_warm_secs: default_pre_warm_secs(),
+        }
+    }
+}
+
+fn default_timeout_secs() -> u64 {
+    300 // 5 minutes default timeout
+}
+
+fn default_keep_alive_secs() -> u64 {
+    3600 // 1 hour
+}
+
+fn default_pre_warm_secs() -> u64 {
+    300 // 5 minutes
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,10 +153,6 @@ fn default_device_name() -> String {
     "claude-matrix-bridge".to_string()
 }
 
-fn default_claude_binary() -> String {
-    "claude".to_string()
-}
-
 fn default_webhook_port() -> u16 {
     13000
 }
@@ -152,11 +172,11 @@ fn default_room_prefix() -> String {
 /// Expand tilde (~) to home directory in paths
 /// Logs a warning if expansion fails and falls back to the original path
 fn expand_tilde(path: &str) -> String {
-    if path.starts_with("~/") {
+    if let Some(stripped) = path.strip_prefix("~/") {
         if let Some(base_dirs) = directories::BaseDirs::new() {
             return base_dirs
                 .home_dir()
-                .join(&path[2..])
+                .join(stripped)
                 .to_string_lossy()
                 .to_string();
         } else {
@@ -229,11 +249,7 @@ impl Config {
                     room_prefix: default_room_prefix(),
                     recovery_key: None,
                 },
-                claude: ClaudeConfig {
-                    binary_path: default_claude_binary(),
-                    sdk_url: None,
-                    jail_url: None,
-                },
+                acp: AcpConfig::default(),
                 webhook: WebhookConfig {
                     port: default_webhook_port(),
                     api_key: None,
@@ -277,11 +293,13 @@ impl Config {
             // Clear from environment to prevent exposure via /proc or ps
             std::env::remove_var("MATRIX_RECOVERY_KEY");
         }
-        if let Ok(val) = std::env::var("CLAUDE_BINARY_PATH") {
-            config.claude.binary_path = val;
+        if let Ok(val) = std::env::var("ACP_AGENT_BINARY") {
+            config.acp.agent_binary = Some(val);
         }
-        if let Ok(val) = std::env::var("CLAUDE_SDK_URL") {
-            config.claude.sdk_url = Some(val);
+        if let Ok(val) = std::env::var("ACP_TIMEOUT_SECS") {
+            config.acp.timeout_secs = val.parse().with_context(|| {
+                format!("ACP_TIMEOUT_SECS must be a valid number, got: {}", val)
+            })?;
         }
         if let Ok(val) = std::env::var("WEBHOOK_PORT") {
             config.webhook.port = val.parse().with_context(|| {

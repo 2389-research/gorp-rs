@@ -5,22 +5,20 @@ use anyhow::Result;
 use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters},
     room::Room,
-    ruma::events::room::message::{
-        MessageType, RoomMessageEventContent,
-    },
+    ruma::events::room::message::{MessageType, RoomMessageEventContent},
     Client, RoomState,
 };
 
 use crate::{
-    claude::{self, ClaudeEvent},
+    acp_client::AcpEvent,
     config::Config,
-    matrix_client,
-    metrics,
+    matrix_client, metrics,
     scheduler::{
         parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
     },
     session::SessionStore,
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+    warm_session::SharedWarmSessionManager,
 };
 use chrono::Utc;
 use std::path::Path;
@@ -119,6 +117,7 @@ pub async fn handle_message(
     config: Config,
     session_store: SessionStore,
     scheduler_store: SchedulerStore,
+    warm_manager: SharedWarmSessionManager,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
 
@@ -158,7 +157,7 @@ pub async fn handle_message(
     let is_command = body.starts_with("!claude ")
         || (body.starts_with("!")
             && body.len() > 1
-            && body.chars().nth(1).map_or(false, |c| c.is_alphabetic()));
+            && body.chars().nth(1).is_some_and(|c| c.is_alphabetic()));
 
     if is_command {
         metrics::record_message_received("command");
@@ -225,22 +224,23 @@ pub async fn handle_message(
         MessageType::Image(image_content) => {
             // Download the image
             let filename = image_content.body.clone();
-            match download_attachment(&client, &image_content.source, &filename, &channel.directory)
-                .await
+            match download_attachment(
+                &client,
+                &image_content.source,
+                &filename,
+                &channel.directory,
+            )
+            .await
             {
                 Ok(rel_path) => {
                     let abs_path = format!("{}/{}", channel.directory, rel_path);
                     tracing::info!(path = %abs_path, "Image downloaded");
                     // Include image path in prompt for Claude to read
-                    format!(
-                        "[Attached image: {}]\n\n{}",
-                        abs_path,
-                        image_content.body
-                    )
+                    format!("[Attached image: {}]\n\n{}", abs_path, image_content.body)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to download image");
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "⚠️ Failed to download image: {}",
                         e
                     )))
@@ -258,15 +258,11 @@ pub async fn handle_message(
                 Ok(rel_path) => {
                     let abs_path = format!("{}/{}", channel.directory, rel_path);
                     tracing::info!(path = %abs_path, "File downloaded");
-                    format!(
-                        "[Attached file: {}]\n\n{}",
-                        abs_path,
-                        file_content.body
-                    )
+                    format!("[Attached file: {}]\n\n{}", abs_path, file_content.body)
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to download file");
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "⚠️ Failed to download file: {}",
                         e
                     )))
@@ -281,7 +277,7 @@ pub async fn handle_message(
         }
     };
 
-    let channel_args = channel.cli_args();
+    let _channel_args = channel.cli_args(); // Kept for potential future use
 
     // Write context file for MCP tools (before Claude invocation)
     if let Err(e) = write_context_file(
@@ -322,33 +318,59 @@ pub async fn handle_message(
         }
     });
 
-    // Invoke Claude with streaming to show tool usage
+    // Invoke ACP agent with streaming to show tool usage
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("matrix");
-    let mut event_rx = match claude::invoke_claude_streaming(
-        &config.claude.binary_path,
-        config.claude.sdk_url.as_deref(),
-        channel_args,
-        &prompt,
-        Some(&channel.directory),
-    )
-    .await
-    {
-        Ok(rx) => rx,
-        Err(e) => {
-            tracing::error!(error = %e, "Claude invocation failed");
-            metrics::record_error("claude_invocation");
-            let error_msg = format!("⚠️ Claude error: {}", e);
 
-            let _ = typing_tx.send(());
-            typing_handle.abort();
-            room.typing_notice(false).await?;
+    // Create event channel for this prompt
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(2048);
 
-            room.send(RoomMessageEventContent::text_plain(&error_msg))
-                .await?;
-            return Ok(());
+    // Prepare session (sets up event channel, creates session if needed)
+    // Get the session handle so we can release the manager lock before sending the prompt
+    let (session_handle, session_id, is_new_session) = {
+        let mut manager = warm_manager.write().await;
+        match manager.prepare_session(&channel, event_tx).await {
+            Ok((handle, sid, is_new)) => (handle, sid, is_new),
+            Err(e) => {
+                let _ = typing_tx.send(());
+                typing_handle.abort();
+                room.typing_notice(false).await?;
+
+                metrics::record_error("warm_session");
+                let error_msg = format!("⚠️ Failed to prepare session: {}", e);
+                room.send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await?;
+                return Ok(());
+            }
         }
-    };
+    }; // Manager lock is released here - other channels can now prepare sessions
+
+    // Update session store if a new session was created
+    if is_new_session {
+        if let Err(e) = session_store.update_session_id(room.room_id().as_str(), &session_id) {
+            tracing::warn!(error = %e, "Failed to update session ID in store");
+        }
+    }
+
+    // Spawn the prompt to run concurrently with event processing
+    // Uses the session handle - doesn't need the manager lock
+    let prompt_for_send = prompt.clone();
+    let session_id_for_prompt = session_id.clone();
+    let channel_name_for_log = channel.channel_name.clone();
+
+    tracing::info!(channel = %channel_name_for_log, session_id = %session_id, "About to spawn_local for prompt");
+
+    let prompt_handle = tokio::task::spawn_local(async move {
+        tracing::info!(channel = %channel_name_for_log, session_id = %session_id_for_prompt, "spawn_local task started - calling send_prompt_with_handle");
+        let result = crate::warm_session::send_prompt_with_handle(
+            &session_handle,
+            &session_id_for_prompt,
+            &prompt_for_send,
+        )
+        .await;
+        tracing::info!(channel = %channel_name_for_log, success = result.is_ok(), "spawn_local task completed");
+        result
+    });
 
     // Check if debug mode is enabled for this channel
     // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)
@@ -357,13 +379,27 @@ pub async fn handle_message(
         tracing::debug!(channel = %channel.channel_name, "Debug mode enabled - will show tool usage");
     }
 
-    // Process streaming events
-    let mut final_response: Option<String> = None;
+    // Process streaming events from ACP
+    let mut final_response = String::new();
     let mut tools_used: Vec<String> = Vec::new();
 
+    tracing::info!(channel = %channel.channel_name, "Starting event loop - waiting for ACP events");
+    let mut event_count = 0;
+
     while let Some(event) = event_rx.recv().await {
+        event_count += 1;
+        tracing::debug!(channel = %channel.channel_name, event_count, event = ?event, "Received ACP event");
         match event {
-            ClaudeEvent::ToolUse {
+            AcpEvent::SessionChanged { new_session_id } => {
+                // Session ID changes are tracked by warm_manager.prompt()
+                // Just log for debugging
+                tracing::debug!(
+                    old_session = %channel.session_id,
+                    new_session = %new_session_id,
+                    "Session ID changed during execution"
+                );
+            }
+            AcpEvent::ToolUse {
                 name,
                 input_preview,
             } => {
@@ -402,49 +438,49 @@ pub async fn handle_message(
                     }
                 }
             }
-            ClaudeEvent::Result { text, usage } => {
-                // Record token usage metrics
-                metrics::record_claude_tokens(
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cache_read_tokens,
-                    usage.cache_creation_tokens,
-                );
-                // Convert dollars to cents and record
-                let cost_cents = (usage.total_cost_usd * 100.0).round() as u64;
-                metrics::record_claude_cost_cents(cost_cents);
-
-                tracing::info!(
-                    input_tokens = usage.input_tokens,
-                    output_tokens = usage.output_tokens,
-                    cost_usd = usage.total_cost_usd,
-                    "Claude usage recorded"
-                );
-
-                final_response = Some(text);
+            AcpEvent::Text(text) => {
+                // Accumulate text chunks
+                final_response.push_str(&text);
             }
-            ClaudeEvent::Error(error) => {
+            AcpEvent::Result { text } => {
+                // Final result - use the accumulated text if we have it, otherwise use result text
+                if !final_response.is_empty() {
+                    // We already accumulated text, result is just completion marker
+                    tracing::info!(response_len = final_response.len(), "ACP session completed");
+                } else {
+                    // No accumulated text, use the result text
+                    final_response = text;
+                    tracing::info!(
+                        response_len = final_response.len(),
+                        "ACP session completed with result text"
+                    );
+                }
+                // ACP doesn't provide token usage in current implementation
+                // TODO: Extract usage from ACP once it supports it
+                break; // Exit event loop - prompt is complete
+            }
+            AcpEvent::Error(error) => {
                 let _ = typing_tx.send(());
                 typing_handle.abort();
                 room.typing_notice(false).await?;
 
-                metrics::record_error("claude_streaming");
-                let error_msg = format!("⚠️ Claude error: {}", error);
+                metrics::record_error("acp_streaming");
+                let error_msg = format!("⚠️ ACP error: {}", error);
                 room.send(RoomMessageEventContent::text_plain(&error_msg))
                     .await?;
                 return Ok(());
             }
-            ClaudeEvent::OrphanedSession => {
+            AcpEvent::InvalidSession => {
                 let _ = typing_tx.send(());
                 typing_handle.abort();
                 room.typing_notice(false).await?;
 
                 // Reset the session so next message starts fresh
                 if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
-                    tracing::error!(error = %e, "Failed to reset orphaned session");
+                    tracing::error!(error = %e, "Failed to reset invalid session");
                 }
 
-                metrics::record_error("orphaned_session");
+                metrics::record_error("invalid_session");
                 room.send(RoomMessageEventContent::text_plain(
                     "🔄 Session was reset (conversation data was lost). Please send your message again.",
                 ))
@@ -454,33 +490,42 @@ pub async fn handle_message(
         }
     }
 
-    let response = match final_response {
-        Some(r) => {
-            let claude_duration = claude_start.elapsed().as_secs_f64();
-            metrics::record_claude_duration(claude_duration);
-            metrics::record_claude_response_length(r.len());
-            tracing::info!(
-                response_length = r.len(),
-                tools_count = tools_used.len(),
-                "Claude responded"
-            );
-            r
-        }
-        None => {
-            let _ = typing_tx.send(());
-            typing_handle.abort();
-            room.typing_notice(false).await?;
+    tracing::info!(channel = %channel.channel_name, event_count, "Event loop finished");
 
-            metrics::record_error("claude_no_response");
-            room.send(RoomMessageEventContent::text_plain(
-                "⚠️ Claude finished without a response",
-            ))
-            .await?;
-            return Ok(());
-        }
-    };
+    // Wait for prompt to complete (it may have already finished before event loop ended)
+    tracing::info!(channel = %channel.channel_name, "Waiting for prompt_handle to complete");
+    if let Err(e) = prompt_handle.await {
+        tracing::warn!(error = %e, "Prompt task failed to join");
+    }
+    tracing::info!(channel = %channel.channel_name, "prompt_handle completed");
+
+    // Check if we got a response
+    if final_response.is_empty() {
+        let _ = typing_tx.send(());
+        typing_handle.abort();
+        room.typing_notice(false).await?;
+
+        metrics::record_error("acp_no_response");
+        room.send(RoomMessageEventContent::text_plain(
+            "⚠️ ACP agent finished without a response",
+        ))
+        .await?;
+        return Ok(());
+    }
+
+    let claude_duration = claude_start.elapsed().as_secs_f64();
+    metrics::record_claude_duration(claude_duration);
+    metrics::record_claude_response_length(final_response.len());
+    tracing::info!(
+        response_length = final_response.len(),
+        tools_count = tools_used.len(),
+        "ACP agent responded"
+    );
+
+    let response = final_response;
 
     // Mark session as started BEFORE sending response (to ensure consistency)
+    // Note: session ID was already updated in prepare_session if a new one was created
     session_store.mark_started(room.room_id().as_str())?;
 
     // Stop typing indicator refresh
@@ -530,6 +575,7 @@ pub async fn handle_message(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_command(
     room: Room,
     body: &str,
@@ -590,8 +636,11 @@ async fn handle_command(
         "changelog" => {
             // Send changelog as HTML (converted from markdown)
             let changelog_html = markdown_to_html(CHANGELOG_MD);
-            room.send(RoomMessageEventContent::text_html(CHANGELOG_MD, &changelog_html))
-                .await?;
+            room.send(RoomMessageEventContent::text_html(
+                CHANGELOG_MD,
+                &changelog_html,
+            ))
+            .await?;
         }
         "motd" => {
             // Send message of the day as HTML
@@ -627,7 +676,7 @@ async fn handle_command(
                 Some("on") | Some("enable") => {
                     // Create .gorp directory if needed
                     if let Err(e) = std::fs::create_dir_all(&debug_dir) {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to create debug directory: {}",
                             e
                         )))
@@ -636,7 +685,7 @@ async fn handle_command(
                     }
                     // Create enable-debug file
                     if let Err(e) = std::fs::write(&debug_file, "") {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to enable debug: {}",
                             e
                         )))
@@ -653,7 +702,7 @@ async fn handle_command(
                     // Remove enable-debug file if it exists
                     if debug_file.exists() {
                         if let Err(e) = std::fs::remove_file(&debug_file) {
-                            room.send(RoomMessageEventContent::text_plain(&format!(
+                            room.send(RoomMessageEventContent::text_plain(format!(
                                 "⚠️ Failed to disable debug: {}",
                                 e
                             )))
@@ -674,7 +723,7 @@ async fn handle_command(
                     } else {
                         "🔇 Debug mode is DISABLED\n\nTool usage is hidden in this channel."
                     };
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "{}\n\nCommands:\n  !debug on - Show tool usage\n  !debug off - Hide tool usage",
                         status
                     )))
@@ -761,7 +810,7 @@ async fn handle_command(
 
             // Check if channel already exists (case-insensitive)
             if session_store.get_by_name(&channel_name)?.is_some() {
-                room.send(RoomMessageEventContent::text_plain(&format!(
+                room.send(RoomMessageEventContent::text_plain(format!(
                     "❌ Channel '{}' already exists.\n\nUse !list to see all channels.",
                     channel_name
                 )))
@@ -832,7 +881,7 @@ async fn handle_command(
 
             // Find the channel
             let Some(channel) = session_store.get_by_name(&channel_name)? else {
-                room.send(RoomMessageEventContent::text_plain(&format!(
+                room.send(RoomMessageEventContent::text_plain(format!(
                     "❌ Channel '{}' not found.\n\nUse !list to see all channels.",
                     channel_name
                 )))
@@ -847,7 +896,7 @@ async fn handle_command(
                 .map_err(|e| anyhow::anyhow!("Invalid room ID: {}", e))?;
             match matrix_client::invite_user(client, &room_id, sender).await {
                 Ok(_) => {
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "✅ Invited you to channel '{}'!\n\nCheck your room invites.",
                         channel_name
                     )))
@@ -864,13 +913,13 @@ async fn handle_command(
                     if err_str.contains("already in the room")
                         || err_str.contains("is already joined")
                     {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "ℹ️ You're already in channel '{}'!",
                             channel_name
                         )))
                         .await?;
                     } else {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to invite: {}",
                             e
                         )))
@@ -902,7 +951,7 @@ async fn handle_command(
 
             // Find the channel
             let Some(channel) = session_store.get_by_name(&channel_name)? else {
-                room.send(RoomMessageEventContent::text_plain(&format!(
+                room.send(RoomMessageEventContent::text_plain(format!(
                     "❌ Channel '{}' not found.\n\nUse !list to see all channels.",
                     channel_name
                 )))
@@ -1110,7 +1159,7 @@ async fn handle_command(
             let entries = match std::fs::read_dir(workspace_path) {
                 Ok(e) => e,
                 Err(e) => {
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "⚠️ Failed to read workspace directory: {}",
                         e
                     )))
@@ -1133,9 +1182,7 @@ async fn handle_command(
                 };
 
                 // Skip special directories
-                if dir_name == "template"
-                    || dir_name.starts_with('.')
-                    || dir_name == "attachments"
+                if dir_name == "template" || dir_name.starts_with('.') || dir_name == "attachments"
                 {
                     continue;
                 }
@@ -1169,17 +1216,18 @@ async fn handle_command(
                 match matrix_client::create_room(client, &room_name).await {
                     Ok(new_room_id) => {
                         // Invite user to the room
-                        let invite_failed = match matrix_client::invite_user(client, &new_room_id, sender).await {
-                            Ok(_) => false,
-                            Err(e) => {
-                                tracing::warn!(
-                                    channel = %channel_name,
-                                    error = %e,
-                                    "Failed to invite user to restored room"
-                                );
-                                true
-                            }
-                        };
+                        let invite_failed =
+                            match matrix_client::invite_user(client, &new_room_id, sender).await {
+                                Ok(_) => false,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        channel = %channel_name,
+                                        error = %e,
+                                        "Failed to invite user to restored room"
+                                    );
+                                    true
+                                }
+                            };
 
                         // Create channel in database (inherits existing directory)
                         match session_store.create_channel(&channel_name, new_room_id.as_str()) {
@@ -1213,20 +1261,14 @@ async fn handle_command(
             } else {
                 let mut msg = String::new();
                 if !restored.is_empty() {
-                    msg.push_str(&format!(
-                        "✅ Restored {} channel(s):\n",
-                        restored.len()
-                    ));
+                    msg.push_str(&format!("✅ Restored {} channel(s):\n", restored.len()));
                     for name in &restored {
                         msg.push_str(&format!("  • {}\n", name));
                     }
                     msg.push_str("\nCheck your room invites!\n");
                 }
                 if !skipped.is_empty() {
-                    msg.push_str(&format!(
-                        "\n⏭️ Skipped {} item(s):\n",
-                        skipped.len()
-                    ));
+                    msg.push_str(&format!("\n⏭️ Skipped {} item(s):\n", skipped.len()));
                     for name in &skipped {
                         msg.push_str(&format!("  • {}\n", name));
                     }
@@ -1268,7 +1310,8 @@ async fn handle_command(
                     "📋 No Channels Found\n\nDM me to create a channel!"
                 };
                 let msg_html = markdown_to_html(msg);
-                room.send(RoomMessageEventContent::text_html(msg, &msg_html)).await?;
+                room.send(RoomMessageEventContent::text_html(msg, &msg_html))
+                    .await?;
                 return Ok(());
             }
 
@@ -1371,7 +1414,7 @@ async fn handle_command(
                                 schedules.iter().filter(|s| s.id.starts_with(*id)).collect();
                             match matching.len() {
                                 0 => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "No schedule found matching ID '{}'",
                                         id
                                     )))
@@ -1379,14 +1422,14 @@ async fn handle_command(
                                 }
                                 1 => {
                                     scheduler_store.delete_schedule(&matching[0].id)?;
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "🗑️ Deleted schedule: {}",
                                         truncate_str(&matching[0].prompt, 50)
                                     )))
                                     .await?;
                                 }
                                 _ => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "Multiple schedules match '{}'. Be more specific.",
                                         id
                                     )))
@@ -1416,7 +1459,7 @@ async fn handle_command(
                                 .collect();
                             match matching.len() {
                                 0 => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "No active schedule found matching ID '{}'",
                                         id
                                     )))
@@ -1424,14 +1467,14 @@ async fn handle_command(
                                 }
                                 1 => {
                                     scheduler_store.pause_schedule(&matching[0].id)?;
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "⏸️ Paused schedule: {}",
                                         truncate_str(&matching[0].prompt, 50)
                                     )))
                                     .await?;
                                 }
                                 _ => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "Multiple schedules match '{}'. Be more specific.",
                                         id
                                     )))
@@ -1461,7 +1504,7 @@ async fn handle_command(
                                 .collect();
                             match matching.len() {
                                 0 => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "No paused schedule found matching ID '{}'",
                                         id
                                     )))
@@ -1469,14 +1512,14 @@ async fn handle_command(
                                 }
                                 1 => {
                                     scheduler_store.resume_schedule(&matching[0].id)?;
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "▶️ Resumed schedule: {}",
                                         truncate_str(&matching[0].prompt, 50)
                                     )))
                                     .await?;
                                 }
                                 _ => {
-                                    room.send(RoomMessageEventContent::text_plain(&format!(
+                                    room.send(RoomMessageEventContent::text_plain(format!(
                                         "Multiple schedules match '{}'. Be more specific.",
                                         id
                                     )))
@@ -1497,7 +1540,9 @@ async fn handle_command(
                     let schedules = scheduler_store.list_by_room(room.room_id().as_str())?;
                     let active_schedules: Vec<_> = schedules
                         .iter()
-                        .filter(|s| matches!(s.status, ScheduleStatus::Active | ScheduleStatus::Paused))
+                        .filter(|s| {
+                            matches!(s.status, ScheduleStatus::Active | ScheduleStatus::Paused)
+                        })
                         .collect();
 
                     if active_schedules.is_empty() {
@@ -1509,7 +1554,9 @@ async fn handle_command(
                     }
 
                     // Build YAML content
-                    let mut yaml_content = String::from("# Gorp Schedule Export\n# Import with: !schedule import\n\nschedules:\n");
+                    let mut yaml_content = String::from(
+                        "# Gorp Schedule Export\n# Import with: !schedule import\n\nschedules:\n",
+                    );
                     for sched in &active_schedules {
                         let time_str = if let Some(ref cron) = sched.cron_expression {
                             cron.clone()
@@ -1524,19 +1571,19 @@ async fn handle_command(
                             "active"
                         };
                         // Use YAML literal block style (|) for prompts to handle special chars safely
-                        let needs_literal =
-                            sched.prompt.contains(':') ||
-                            sched.prompt.contains('#') ||
-                            sched.prompt.contains('\n') ||
-                            sched.prompt.contains('"') ||
-                            sched.prompt.contains('\'') ||
-                            sched.prompt.contains('[') ||
-                            sched.prompt.contains(']') ||
-                            sched.prompt.contains('{') ||
-                            sched.prompt.contains('}');
+                        let needs_literal = sched.prompt.contains(':')
+                            || sched.prompt.contains('#')
+                            || sched.prompt.contains('\n')
+                            || sched.prompt.contains('"')
+                            || sched.prompt.contains('\'')
+                            || sched.prompt.contains('[')
+                            || sched.prompt.contains(']')
+                            || sched.prompt.contains('{')
+                            || sched.prompt.contains('}');
                         if needs_literal {
                             // Use literal block style with proper indentation
-                            let indented_prompt = sched.prompt
+                            let indented_prompt = sched
+                                .prompt
                                 .lines()
                                 .map(|line| format!("      {}", line))
                                 .collect::<Vec<_>>()
@@ -1556,7 +1603,7 @@ async fn handle_command(
                     // Write to .gorp/schedule.yaml
                     let gorp_dir = std::path::Path::new(&channel.directory).join(".gorp");
                     if let Err(e) = std::fs::create_dir_all(&gorp_dir) {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to create .gorp directory: {}",
                             e
                         )))
@@ -1565,7 +1612,7 @@ async fn handle_command(
                     }
                     let schedule_path = gorp_dir.join("schedule.yaml");
                     if let Err(e) = std::fs::write(&schedule_path, &yaml_content) {
-                        room.send(RoomMessageEventContent::text_plain(&format!(
+                        room.send(RoomMessageEventContent::text_plain(format!(
                             "⚠️ Failed to write schedule.yaml: {}",
                             e
                         )))
@@ -1573,7 +1620,7 @@ async fn handle_command(
                         return Ok(());
                     }
 
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "📤 Exported {} schedule(s) to .gorp/schedule.yaml",
                         active_schedules.len()
                     )))
@@ -1596,7 +1643,7 @@ async fn handle_command(
                     let yaml_content = match std::fs::read_to_string(&schedule_path) {
                         Ok(content) => content,
                         Err(e) => {
-                            room.send(RoomMessageEventContent::text_plain(&format!(
+                            room.send(RoomMessageEventContent::text_plain(format!(
                                 "⚠️ Failed to read schedule.yaml: {}",
                                 e
                             )))
@@ -1642,7 +1689,8 @@ async fn handle_command(
                             } else if !trimmed.is_empty() {
                                 // Non-empty line with less indent = end of block
                                 in_literal_block = false;
-                                current_prompt = Some(literal_lines.join("\n").trim_end().to_string());
+                                current_prompt =
+                                    Some(literal_lines.join("\n").trim_end().to_string());
                                 literal_lines.clear();
                                 literal_indent = 0;
                             }
@@ -1650,7 +1698,9 @@ async fn handle_command(
 
                         if trimmed.starts_with("- time:") {
                             // Save previous schedule if complete
-                            if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take()) {
+                            if let (Some(time), Some(prompt)) =
+                                (current_time.take(), current_prompt.take())
+                            {
                                 match import_schedule(
                                     &time,
                                     &prompt,
@@ -1661,7 +1711,11 @@ async fn handle_command(
                                     scheduler_store,
                                 ) {
                                     Ok(_) => imported_count += 1,
-                                    Err(e) => errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e)),
+                                    Err(e) => errors.push(format!(
+                                        "'{}': {}",
+                                        truncate_str(&prompt, 20),
+                                        e
+                                    )),
                                 }
                             }
                             current_status = "active";
@@ -1680,7 +1734,8 @@ async fn handle_command(
                                 literal_indent = 0;
                             } else {
                                 // Inline prompt value
-                                current_prompt = Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
+                                current_prompt =
+                                    Some(prompt_val.trim_matches('"').replace("\\\"", "\""));
                             }
                         } else if trimmed.starts_with("status:") {
                             let status_val = trimmed.strip_prefix("status:").unwrap().trim();
@@ -1694,7 +1749,8 @@ async fn handle_command(
                     }
 
                     // Don't forget the last one
-                    if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take()) {
+                    if let (Some(time), Some(prompt)) = (current_time.take(), current_prompt.take())
+                    {
                         match import_schedule(
                             &time,
                             &prompt,
@@ -1705,7 +1761,9 @@ async fn handle_command(
                             scheduler_store,
                         ) {
                             Ok(_) => imported_count += 1,
-                            Err(e) => errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e)),
+                            Err(e) => {
+                                errors.push(format!("'{}': {}", truncate_str(&prompt, 20), e))
+                            }
                         }
                     }
 
@@ -1782,7 +1840,7 @@ async fn handle_command(
                         "⏰ One-time schedule"
                     };
 
-                    room.send(RoomMessageEventContent::text_plain(&format!(
+                    room.send(RoomMessageEventContent::text_plain(format!(
                         "{} created!\n\n📝 Prompt: {}\n⏱️ Next execution: {} ({})\n🆔 ID: {}",
                         schedule_type,
                         truncate_str(&prompt, 100),
@@ -1823,7 +1881,7 @@ async fn handle_command(
             let new_session_id = uuid::Uuid::new_v4().to_string();
             session_store.reset_session(&channel.channel_name, &new_session_id)?;
 
-            room.send(RoomMessageEventContent::text_plain(&format!(
+            room.send(RoomMessageEventContent::text_plain(format!(
                 "🔄 Session Reset\n\n\
                 Channel: {}\n\
                 New Session ID: {}\n\n\

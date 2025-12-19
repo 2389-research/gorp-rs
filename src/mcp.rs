@@ -423,15 +423,9 @@ fn handle_tools_list(request: &JsonRpcRequest) -> JsonRpcResponse {
 async fn handle_tools_call(state: &McpState, request: &JsonRpcRequest) -> JsonRpcResponse {
     let params = &request.params;
 
-    let tool_name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
-    let arguments = params
-        .get("arguments")
-        .cloned()
-        .unwrap_or(json!({}));
+    let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
     tracing::info!(tool = %tool_name, "MCP tool call");
 
@@ -491,9 +485,7 @@ async fn handle_schedule_prompt(state: &McpState, args: &Value) -> Result<String
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: execute_at")?;
 
-    let channel_name = args
-        .get("channel_name")
-        .and_then(|v| v.as_str());
+    let channel_name = args.get("channel_name").and_then(|v| v.as_str());
 
     // If no channel specified, try to read from context file
     let channel_name = match channel_name {
@@ -896,8 +888,7 @@ fn handle_set_debug(state: &McpState, args: &Value) -> Result<String, String> {
         std::fs::create_dir_all(&debug_dir)
             .map_err(|e| format!("Failed to create debug directory: {}", e))?;
         // Create enable-debug file
-        std::fs::write(&debug_file, "")
-            .map_err(|e| format!("Failed to enable debug: {}", e))?;
+        std::fs::write(&debug_file, "").map_err(|e| format!("Failed to enable debug: {}", e))?;
         Ok(format!(
             "Debug mode ENABLED for channel '{}'. Tool usage will be shown in Matrix.",
             channel_name
@@ -919,7 +910,10 @@ fn handle_set_debug(state: &McpState, args: &Value) -> Result<String, String> {
 async fn handle_leave_room(state: &McpState, args: &Value) -> Result<String, String> {
     use matrix_sdk::ruma::OwnedRoomId;
 
-    let confirm = args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
+    let confirm = args
+        .get("confirm")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !confirm {
         return Err("Must set confirm=true to leave a room".to_string());
     }
@@ -987,7 +981,7 @@ async fn handle_create_channel(state: &McpState, args: &Value) -> Result<String,
     // Create channel in session store (handles directory creation, templates, validation)
     let channel = state
         .session_store
-        .create_channel(channel_name, &room_id.to_string())
+        .create_channel(channel_name, room_id.as_ref())
         .map_err(|e| format!("Failed to create channel: {}", e))?;
 
     // Invite user if specified
@@ -998,17 +992,12 @@ async fn handle_create_channel(state: &McpState, args: &Value) -> Result<String,
 
         Ok(format!(
             "Created channel '{}'\nRoom ID: {}\nWorkspace: {}\nInvited: {}",
-            channel.channel_name,
-            channel.room_id,
-            channel.directory,
-            user_id
+            channel.channel_name, channel.room_id, channel.directory, user_id
         ))
     } else {
         Ok(format!(
             "Created channel '{}'\nRoom ID: {}\nWorkspace: {}",
-            channel.channel_name,
-            channel.room_id,
-            channel.directory,
+            channel.channel_name, channel.room_id, channel.directory,
         ))
     }
 }
@@ -1056,10 +1045,7 @@ async fn handle_invite_to_channel(state: &McpState, args: &Value) -> Result<Stri
         .await
         .map_err(|e| format!("Failed to invite user: {}", e))?;
 
-    Ok(format!(
-        "Invited {} to channel '{}'",
-        user_id, channel_name
-    ))
+    Ok(format!("Invited {} to channel '{}'", user_id, channel_name))
 }
 
 /// Handle set_room_avatar tool call
@@ -1141,10 +1127,7 @@ async fn handle_set_room_avatar(state: &McpState, args: &Value) -> Result<String
         .await
         .map_err(|e| format!("Failed to set room avatar: {}", e))?;
 
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("image");
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("image");
 
     Ok(format!(
         "Set avatar for room '{}' to '{}'",
@@ -1210,9 +1193,7 @@ async fn handle_set_room_topic(state: &McpState, args: &Value) -> Result<String,
 /// Handle report_to_management tool call
 /// Sends a report to a dedicated management room for human review
 async fn handle_report_to_management(state: &McpState, args: &Value) -> Result<String, String> {
-    use matrix_sdk::ruma::{
-        events::room::message::RoomMessageEventContent, OwnedRoomId, RoomId,
-    };
+    use matrix_sdk::ruma::{events::room::message::RoomMessageEventContent, OwnedRoomId, RoomId};
 
     // Hardcoded management room - this is where all agent reports go
     const MANAGEMENT_ROOM_ID: &str = "!llllhqZbfveDbueMJZ:matrix.org";
@@ -1259,7 +1240,12 @@ async fn handle_report_to_management(state: &McpState, args: &Value) -> Result<S
                 .matrix_client
                 .join_room_by_id(room_id_ref)
                 .await
-                .map_err(|e| format!("Failed to join management room: {}. The bot may need to be invited first.", e))?;
+                .map_err(|e| {
+                    format!(
+                        "Failed to join management room: {}. The bot may need to be invited first.",
+                        e
+                    )
+                })?;
 
             // Get the room after joining
             state
@@ -1290,7 +1276,9 @@ async fn handle_report_to_management(state: &McpState, args: &Value) -> Result<S
     };
 
     // Get current timestamp
-    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let timestamp = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
 
     // Format the report message
     let plain_text = format!(

@@ -179,20 +179,20 @@ pub struct ScheduleFormTemplate {
 #[derive(Clone)]
 pub struct BrowseEntry {
     pub name: String,
-    pub path: String,        // URL path for linking
+    pub path: String, // URL path for linking
     pub is_dir: bool,
-    pub is_markdown: bool,   // Whether file is markdown
-    pub size_bytes: Option<u64>,   // File size in bytes (None for dirs)
-    pub size_display: String,      // Human-readable size
-    pub modified: String,    // Human-readable date
+    pub is_markdown: bool,       // Whether file is markdown
+    pub size_bytes: Option<u64>, // File size in bytes (None for dirs)
+    pub size_display: String,    // Human-readable size
+    pub modified: String,        // Human-readable date
 }
 
 #[derive(Template)]
 #[template(path = "admin/browse/directory.html")]
 pub struct DirectoryTemplate {
     pub title: String,
-    pub current_path: String,  // Display path
-    pub parent_path: Option<String>,  // Link to parent (None at root)
+    pub current_path: String,        // Display path
+    pub parent_path: Option<String>, // Link to parent (None at root)
     pub entries: Vec<BrowseEntry>,
 }
 
@@ -205,7 +205,7 @@ pub struct FileTemplate {
     pub content: String,      // File content (truncated if too large)
     pub size_display: String, // Human-readable size
     pub is_truncated: bool,
-    pub is_markdown: bool,    // Whether file is markdown
+    pub is_markdown: bool, // Whether file is markdown
 }
 
 #[derive(Template)]
@@ -214,7 +214,7 @@ pub struct MarkdownTemplate {
     pub title: String,
     pub path: String,
     pub parent_path: String,
-    pub content_html: String,  // Already converted to HTML
+    pub content_html: String, // Already converted to HTML
 }
 
 /// .gorp/ directory file entry
@@ -223,7 +223,7 @@ pub struct MatrixFileEntry {
     pub name: String,
     pub size_display: String,
     pub modified: String,
-    pub is_log: bool,  // true for .log files
+    pub is_log: bool, // true for .log files
 }
 
 #[derive(Template)]
@@ -232,7 +232,7 @@ pub struct MatrixDirTemplate {
     pub title: String,
     pub channel_name: String,
     pub files: Vec<MatrixFileEntry>,
-    pub context_json: Option<String>,  // Pretty-printed context.json if exists
+    pub context_json: Option<String>, // Pretty-printed context.json if exists
     pub debug_enabled: bool,
 }
 
@@ -240,10 +240,10 @@ pub struct MatrixDirTemplate {
 #[derive(Clone)]
 pub struct SearchResult {
     pub channel_name: String,
-    pub file_path: String,       // Relative path within channel (for display)
-    pub browse_path: String,     // Full path for /admin/browse URL (channel/file_path)
+    pub file_path: String,   // Relative path within channel (for display)
+    pub browse_path: String, // Full path for /admin/browse URL (channel/file_path)
     pub file_name: String,
-    pub match_preview: String,   // Context around match
+    pub match_preview: String, // Context around match
     pub line_number: Option<u32>,
 }
 

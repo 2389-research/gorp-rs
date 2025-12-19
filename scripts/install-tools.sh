@@ -1,41 +1,42 @@
 #!/bin/bash
 # ABOUTME: Installs MCP and CLI tools into /usr/local/bin
-# ABOUTME: Called during Docker build to install all required tools
+# ABOUTME: Reads tool definitions from tools.yaml
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOLS_FILE="${TOOLS_FILE:-$SCRIPT_DIR/tools.yaml}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 TEMP_DIR="${TEMP_DIR:-/tmp/tool-install}"
 
+# Check for yq
+if ! command -v yq &> /dev/null; then
+    echo "Installing yq..."
+    curl -sL "https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64" -o /tmp/yq
+    chmod +x /tmp/yq
+    mv /tmp/yq /usr/local/bin/yq
+fi
+
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$TEMP_DIR"
-cd "$TEMP_DIR"
 
-# Tool definitions: name|repo|version|url_pattern|binary_in_archive
-# url_pattern uses {version} and {version_num} placeholders
-# binary_in_archive supports {version_num} placeholder for versioned paths
-TOOLS=(
-    # MCP servers
-    "chronicle|harperreed/chronicle|v1.1.4|https://github.com/{repo}/releases/download/{version}/chronicle-linux-amd64.tar.gz|chronicle-linux-amd64"
-    "memory|harperreed/memory|v0.3.4|https://github.com/{repo}/releases/download/{version}/memory_{version}_Linux_x86_64.tar.gz|memory-linux-amd64"
-    "toki|harperreed/toki|v0.3.6|https://github.com/{repo}/releases/download/{version}/toki_{version_num}_Linux_x86_64.tar.gz|toki_{version_num}_Linux_x86_64/toki"
-    "pagen|harperreed/pagen|v0.4.4|https://github.com/{repo}/releases/download/{version}/pagen_{version}_linux_amd64.tar.gz|pagen"
-    "gsuite-mcp|2389-research/gsuite-mcp|v1.2.3|https://github.com/{repo}/releases/download/{version}/gsuite-mcp_{version_num}_linux_amd64.tar.gz|gsuite-mcp"
-    "digest|harperreed/digest|v0.6.0|https://github.com/{repo}/releases/download/{version}/digest_{version_num}_Linux_x86_64.tar.gz|digest"
-    "memo|harperreed/memo|v0.2.0|https://github.com/{repo}/releases/download/{version}/memo_{version_num}_Linux_x86_64.tar.gz|memo_{version_num}_Linux_x86_64/memo"
-    # CLI tools
-    "pop|charmbracelet/pop|v0.2.0|https://github.com/{repo}/releases/download/{version}/pop_{version_num}_Linux_x86_64.tar.gz|pop"
-    "push|harperreed/push-cli|v0.0.2|https://github.com/{repo}/releases/download/{version}/push_{version_num}_Linux_x86_64.tar.gz|push_{version_num}_Linux_x86_64/push"
-    "position|harperreed/position|v0.5.0|https://github.com/{repo}/releases/download/{version}/position_{version_num}_Linux_x86_64.tar.gz|position_{version_num}_Linux_x86_64/position"
-    "sweet|harperreed/sweet|v0.2.5|https://github.com/{repo}/releases/download/{version}/sweet_{version_num}_Linux_x86_64.tar.gz|sweet_{version_num}_Linux_x86_64/sweet"
-    "bbs|harperreed/bbs-mcp|v1.0.0|https://github.com/{repo}/releases/download/{version}/bbs_{version_num}_Linux_x86_64.tar.gz|bbs_{version_num}_Linux_x86_64/bbs"
-    "health|harperreed/health|v1.3.0|https://github.com/{repo}/releases/download/{version}/health_{version_num}_Linux_x86_64.tar.gz|health_{version_num}_Linux_x86_64/health"
-    "charm|2389-research/charm|v0.13.0|https://github.com/{repo}/releases/download/{version}/charm_{version_num}_Linux_x86_64.tar.gz|charm_{version_num}_Linux_x86_64/charm"
-)
+get_latest_version() {
+    local repo="$1"
+    curl -sL "https://api.github.com/repos/$repo/releases/latest" | yq -r '.tag_name'
+}
 
 install_tool() {
-    local spec="$1"
-    IFS='|' read -r name repo version url_pattern binary_path <<< "$spec"
+    local name="$1"
+    local repo="$2"
+    local version="$3"
+    local url_pattern="$4"
+    local binary_path="$5"
+
+    # Fetch latest version from GitHub if version is "latest"
+    if [ "$version" = "latest" ]; then
+        version=$(get_latest_version "$repo")
+        echo "   Resolved latest version: $version"
+    fi
 
     # Strip 'v' prefix for version_num
     local version_num="${version#v}"
@@ -46,7 +47,7 @@ install_tool() {
     url="${url//\{version\}/$version}"
     url="${url//\{version_num\}/$version_num}"
 
-    # Substitute version_num in binary_path too (for versioned subdirectories)
+    # Substitute version_num in binary_path too
     binary_path="${binary_path//\{version_num\}/$version_num}"
 
     echo "📦 Installing $name $version..."
@@ -84,12 +85,29 @@ install_tool() {
 }
 
 echo "=== Installing Tools ==="
+echo "Tools file: $TOOLS_FILE"
 echo "Install dir: $INSTALL_DIR"
 echo ""
 
+if [ ! -f "$TOOLS_FILE" ]; then
+    echo "❌ Tools file not found: $TOOLS_FILE"
+    exit 1
+fi
+
+# Count tools
+tool_count=$(yq '. | length' "$TOOLS_FILE")
+echo "Found $tool_count tools to install"
+echo ""
+
 failed=0
-for tool in "${TOOLS[@]}"; do
-    if ! install_tool "$tool"; then
+for i in $(seq 0 $((tool_count - 1))); do
+    name=$(yq ".[$i].name" "$TOOLS_FILE")
+    repo=$(yq ".[$i].repo" "$TOOLS_FILE")
+    version=$(yq ".[$i].version" "$TOOLS_FILE")
+    url=$(yq ".[$i].url" "$TOOLS_FILE")
+    binary=$(yq ".[$i].binary" "$TOOLS_FILE")
+
+    if ! install_tool "$name" "$repo" "$version" "$url" "$binary"; then
         ((failed++)) || true
     fi
 done

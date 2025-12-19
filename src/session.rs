@@ -433,4 +433,19 @@ impl SessionStore {
         );
         Ok(())
     }
+
+    /// Update session ID for a channel by room ID (used when new session is created)
+    pub fn update_session_id(&self, room_id: &str, new_session_id: &str) -> Result<()> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "UPDATE channels SET session_id = ?1 WHERE room_id = ?2",
+            params![new_session_id, room_id],
+        )?;
+        tracing::debug!(
+            room_id = %room_id,
+            new_session_id = %new_session_id,
+            "Session ID updated"
+        );
+        Ok(())
+    }
 }

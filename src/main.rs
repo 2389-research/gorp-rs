@@ -9,10 +9,12 @@ use gorp::{
     matrix_client, message_handler, paths,
     scheduler::{start_scheduler, SchedulerStore},
     session::SessionStore,
+    warm_session::{create_shared_manager, SharedWarmSessionManager, WarmConfig},
     webhook,
 };
 use matrix_sdk::{
     config::SyncSettings,
+    room::Room,
     ruma::{
         events::room::message::{RoomMessageEventContent, SyncRoomMessageEvent},
         events::room::name::RoomNameEventContent,
@@ -129,7 +131,9 @@ async fn announce_startup_to_management(client: &Client) {
 
     const MANAGEMENT_ROOM_ID: &str = "!llllhqZbfveDbueMJZ:matrix.org";
 
-    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let timestamp = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
 
     // Get bot user ID for identification
     let bot_id = client
@@ -137,7 +141,10 @@ async fn announce_startup_to_management(client: &Client) {
         .map(|id| id.to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let message = format!("🤖 **Reporting for service**\n\nBot: `{}`\nTime: {}", bot_id, timestamp);
+    let message = format!(
+        "🤖 **Reporting for service**\n\nBot: `{}`\nTime: {}",
+        bot_id, timestamp
+    );
 
     // Parse the management room ID
     let room_id: matrix_sdk::ruma::OwnedRoomId = match MANAGEMENT_ROOM_ID.parse() {
@@ -153,7 +160,10 @@ async fn announce_startup_to_management(client: &Client) {
         Some(r) if r.state() == matrix_sdk::RoomState::Joined => r,
         Some(r) if r.state() == matrix_sdk::RoomState::Invited => {
             // We have an invite, accept it
-            tracing::info!("Accepting invite to management room: {}", MANAGEMENT_ROOM_ID);
+            tracing::info!(
+                "Accepting invite to management room: {}",
+                MANAGEMENT_ROOM_ID
+            );
             match r.join().await {
                 Ok(_) => {
                     // Need to get the room again after joining
@@ -185,7 +195,10 @@ async fn announce_startup_to_management(client: &Client) {
     };
 
     // Send startup announcement
-    if let Err(e) = room.send(RoomMessageEventContent::text_plain(&message)).await {
+    if let Err(e) = room
+        .send(RoomMessageEventContent::text_plain(&message))
+        .await
+    {
         tracing::warn!(error = %e, "Failed to send startup announcement to management room");
     } else {
         tracing::info!("Startup announced to management room");
@@ -238,7 +251,7 @@ async fn notify_ready(client: &Client, config: &Config) {
             let has_target = room
                 .direct_targets()
                 .iter()
-                .any(|target| target.to_string() == user_id.to_string());
+                .any(|target| *target == user_id);
 
             if is_direct && has_target {
                 dm_room = Some(room);
@@ -270,7 +283,11 @@ async fn notify_ready(client: &Client, config: &Config) {
         };
 
         // Send appropriate message
-        let message = if is_new { welcome_message } else { ready_message };
+        let message = if is_new {
+            welcome_message
+        } else {
+            ready_message
+        };
 
         match room
             .send(RoomMessageEventContent::text_plain(message))
@@ -299,7 +316,10 @@ async fn check_and_rename_rooms_for_prefix_change(
     session_store: &SessionStore,
 ) {
     let current_prefix = &config.matrix.room_prefix;
-    let stored_prefix = session_store.get_setting(SETTING_ROOM_PREFIX).ok().flatten();
+    let stored_prefix = session_store
+        .get_setting(SETTING_ROOM_PREFIX)
+        .ok()
+        .flatten();
 
     match &stored_prefix {
         Some(old_prefix) if old_prefix == current_prefix => {
@@ -514,9 +534,10 @@ fn run_config(action: ConfigAction) -> Result<()> {
             println!("\n[workspace]");
             println!("path = \"{}\"", config.workspace.path);
             println!("\n[claude]");
-            println!("binary_path = \"{}\"", config.claude.binary_path);
-            if let Some(ref jail_url) = config.claude.jail_url {
-                println!("jail_url = \"{}\"", jail_url);
+            if let Some(ref binary) = config.acp.agent_binary {
+                println!("agent_binary = \"{}\"", binary);
+            } else {
+                println!("agent_binary = \"claude\" # Not configured, using default");
             }
             println!("\n[webhook]");
             println!("port = {}", config.webhook.port);
@@ -546,8 +567,8 @@ fn run_schedule(action: ScheduleAction) -> Result<()> {
                 println!("No scheduled tasks.");
             } else {
                 println!(
-                    "{:<8} {:<10} {:<20} {}",
-                    "ID", "Status", "Next Execution", "Prompt"
+                    "{:<8} {:<10} {:<20} Prompt",
+                    "ID", "Status", "Next Execution"
                 );
                 println!("{}", "-".repeat(70));
                 for s in schedules {
@@ -610,7 +631,10 @@ async fn run_rooms(action: RoomsAction) -> Result<()> {
 
     match action {
         RoomsAction::Sync => {
-            println!("Syncing room names to prefix: {}", config.matrix.room_prefix);
+            println!(
+                "Syncing room names to prefix: {}",
+                config.matrix.room_prefix
+            );
 
             // Need to login to Matrix to rename rooms
             let client = matrix_client::create_client(
@@ -733,6 +757,18 @@ async fn run_start() -> Result<()> {
 
     tracing::info!("Starting gorp - Matrix-Claude Bridge");
 
+    // Log PATH for debugging ACP spawn issues
+    if let Ok(path) = std::env::var("PATH") {
+        tracing::info!(path_len = path.len(), "Environment PATH length");
+        if path.contains("mise") {
+            tracing::debug!("PATH contains mise directories");
+        } else {
+            tracing::warn!("PATH does not contain mise - node spawning may fail");
+        }
+    } else {
+        tracing::error!("No PATH environment variable set!");
+    }
+
     // Load configuration
     dotenvy::dotenv().ok();
     let config = Config::load()?;
@@ -744,6 +780,37 @@ async fn run_start() -> Result<()> {
         workspace = %config.workspace.path,
         webhook_port = config.webhook.port,
         "Configuration loaded"
+    );
+
+    // Create warm session manager
+    let warm_config = WarmConfig {
+        keep_alive_duration: std::time::Duration::from_secs(config.acp.keep_alive_secs),
+        pre_warm_lead_time: std::time::Duration::from_secs(config.acp.pre_warm_secs),
+        agent_binary: config
+            .acp
+            .agent_binary
+            .clone()
+            .unwrap_or_else(|| "claude-code-acp".to_string()),
+    };
+    let warm_manager = create_shared_manager(warm_config);
+
+    // Spawn cleanup task
+    let cleanup_manager = warm_manager.clone();
+    let cleanup_interval = config.acp.keep_alive_secs / 4; // Check 4x per keep-alive period
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(cleanup_interval));
+        loop {
+            interval.tick().await;
+            let mut manager = cleanup_manager.write().await;
+            manager.cleanup_stale();
+        }
+    });
+
+    // Keep warm_manager alive for future use (will be connected to handlers in later tasks)
+    let _ = &warm_manager;
+    tracing::info!(
+        "Warm session manager initialized with {}s keep-alive",
+        config.acp.keep_alive_secs
     );
 
     // Initialize session store
@@ -782,12 +849,14 @@ async fn run_start() -> Result<()> {
     let webhook_store = (*session_store_arc).clone();
     let webhook_client = client.clone();
     let webhook_config_arc = Arc::clone(&config_arc);
+    let webhook_warm_manager = warm_manager.clone();
     tokio::spawn(async move {
         if let Err(e) = webhook::start_webhook_server(
             webhook_port,
             webhook_store,
             webhook_client,
             webhook_config_arc,
+            webhook_warm_manager,
         )
         .await
         {
@@ -799,18 +868,29 @@ async fn run_start() -> Result<()> {
     let scheduler_store_for_handler = scheduler_store.clone();
 
     // Start scheduler background task (checks every 60 seconds)
+    // Note: Scheduler needs LocalSet because ACP client futures are !Send
     let scheduler_session_store = (*session_store_arc).clone();
     let scheduler_client = client.clone();
     let scheduler_config = Arc::clone(&config_arc);
-    tokio::spawn(async move {
-        start_scheduler(
-            scheduler_store,
-            scheduler_session_store,
-            scheduler_client,
-            scheduler_config,
-            Duration::from_secs(60),
-        )
-        .await;
+    let scheduler_warm_manager = warm_manager.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create scheduler runtime");
+
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async move {
+            start_scheduler(
+                scheduler_store,
+                scheduler_session_store,
+                scheduler_client,
+                scheduler_config,
+                Duration::from_secs(60),
+                scheduler_warm_manager,
+            )
+            .await;
+        });
     });
 
     // Perform initial sync BEFORE registering event handlers
@@ -901,6 +981,18 @@ async fn run_start() -> Result<()> {
     // Check if room prefix changed and rename rooms if needed
     check_and_rename_rooms_for_prefix_change(&client, &config_arc, &session_store_arc).await;
 
+    // Create a channel for message events - handlers will send events here
+    // A LocalSet task will receive and process them, ensuring spawn_local works
+    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<(
+        Room,
+        matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
+        Client,
+        Arc<Config>,
+        Arc<SessionStore>,
+        SchedulerStore,
+        SharedWarmSessionManager,
+    )>(256);
+
     // NOW register event handlers after encryption is established
     // This prevents handlers from firing before the client is ready
     register_event_handlers(
@@ -908,6 +1000,8 @@ async fn run_start() -> Result<()> {
         &config_arc,
         &session_store_arc,
         scheduler_store_for_handler,
+        warm_manager.clone(),
+        msg_tx, // Pass the sender to the handler
     );
     tracing::info!("Event handlers registered");
 
@@ -920,24 +1014,83 @@ async fn run_start() -> Result<()> {
     notify_ready(&client, &config_arc).await;
 
     // Start continuous sync loop with the sync token from initial sync
+    // Use LocalSet because message handlers with ACP client futures are !Send
     let settings = SyncSettings::default().token(response.next_batch);
-    tracing::info!("Starting continuous sync loop");
-    client.sync(settings).await?;
+    tracing::info!("Starting continuous sync loop with LocalSet");
+
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async move {
+        // Spawn the message handler task inside the LocalSet
+        // This ensures spawn_local works correctly
+        let handler_task = tokio::task::spawn_local(async move {
+            tracing::info!("Message handler LocalSet task started");
+            while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
+                tracing::info!(room_id = %room.room_id(), "Processing message in LocalSet task");
+                // Now we're definitely inside the LocalSet!
+                if let Err(e) = message_handler::handle_message(
+                    room,
+                    event,
+                    client,
+                    (*config).clone(),
+                    (*session_store).clone(),
+                    scheduler,
+                    warm_mgr,
+                )
+                .await
+                {
+                    tracing::error!(error = %e, "Error handling message");
+                }
+            }
+            tracing::warn!("Message handler channel closed");
+        });
+
+        // Yield to let the handler task start before sync
+        tokio::task::yield_now().await;
+        tracing::info!("Handler task spawned, starting sync");
+
+        // Run sync and handler concurrently
+        tokio::select! {
+            sync_result = client.sync(settings) => {
+                sync_result
+            }
+            _ = handler_task => {
+                tracing::error!("Message handler task exited unexpectedly");
+                Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Message handler exited"
+                ))))
+            }
+        }
+    }).await?;
 
     Ok(())
 }
 
 /// Registers all event handlers for the Matrix client.
+/// Type alias for the message event channel
+type MessageEventSender = tokio::sync::mpsc::Sender<(
+    Room,
+    matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
+    Client,
+    Arc<Config>,
+    Arc<SessionStore>,
+    SchedulerStore,
+    SharedWarmSessionManager,
+)>;
+
 /// Called AFTER initial sync to ensure encryption is established before processing events.
 fn register_event_handlers(
     client: &Client,
     config_arc: &Arc<Config>,
     session_store_arc: &Arc<SessionStore>,
     scheduler_store: SchedulerStore,
+    warm_manager: SharedWarmSessionManager,
+    msg_tx: MessageEventSender,
 ) {
     let config_for_invite = Arc::clone(config_arc);
     let config_for_messages = Arc::clone(config_arc);
     let session_store_for_messages = Arc::clone(session_store_arc);
+    let warm_manager_for_messages = warm_manager.clone();
 
     // Auto-join room invites from allowed users
     client.add_event_handler(
@@ -991,32 +1144,25 @@ fn register_event_handlers(
         },
     );
 
-    // Register message handler - spawn each handler in background to avoid blocking
-    client.add_event_handler(move |event: SyncRoomMessageEvent, room, client| {
+    // Register message handler - send events through channel to LocalSet task
+    // This ensures spawn_local in message_handler works correctly
+    client.add_event_handler(move |event: SyncRoomMessageEvent, room: Room, client: Client| {
         let config = Arc::clone(&config_for_messages);
         let session_store = Arc::clone(&session_store_for_messages);
         let scheduler = scheduler_store.clone();
+        let warm_mgr = warm_manager_for_messages.clone();
+        let tx = msg_tx.clone();
         async move {
-            // Extract and clone original message event before spawning
+            // Extract and clone original message event before sending
             let Some(original_event) = event.as_original().cloned() else {
                 return;
             };
 
-            // Spawn handler in background so Claude requests don't block other messages
-            tokio::spawn(async move {
-                if let Err(e) = message_handler::handle_message(
-                    room,
-                    original_event,
-                    client,
-                    (*config).clone(),
-                    (*session_store).clone(),
-                    scheduler,
-                )
-                .await
-                {
-                    tracing::error!(error = %e, "Error handling message");
-                }
-            });
+            // Send to LocalSet task for processing (ensures spawn_local context)
+            tracing::debug!(room_id = %room.room_id(), "Sending message event to LocalSet handler");
+            if let Err(e) = tx.send((room, original_event, client, config, session_store, scheduler, warm_mgr)).await {
+                tracing::error!(error = %e, "Failed to send message to handler channel");
+            }
         }
     });
 
@@ -1086,31 +1232,32 @@ fn register_event_handlers(
                         use matrix_sdk::encryption::verification::SasState;
 
                         match state {
-                            SasState::KeysExchanged { emojis, .. } => {
-                                if let Some(emoji_list) = emojis {
-                                    // Log emojis for manual verification if needed
+                            SasState::KeysExchanged {
+                                emojis: Some(emoji_list),
+                                ..
+                            } => {
+                                // Log emojis for manual verification if needed
+                                tracing::warn!(
+                                    "Emoji verification required - emojis displayed below"
+                                );
+                                for emoji in emoji_list.emojis.iter() {
                                     tracing::warn!(
-                                        "Emoji verification required - emojis displayed below"
+                                        emoji = emoji.symbol,
+                                        description = emoji.description,
+                                        "Verification emoji"
                                     );
-                                    for emoji in emoji_list.emojis.iter() {
-                                        tracing::warn!(
-                                            emoji = emoji.symbol,
-                                            description = emoji.description,
-                                            "Verification emoji"
-                                        );
-                                    }
-                                    // WARNING: Auto-confirm is insecure - allows MITM attacks
-                                    // TODO: Implement proper verification for production
-                                    tracing::warn!(
-                                        "Auto-confirming verification (INSECURE - for testing only)"
+                                }
+                                // WARNING: Auto-confirm is insecure - allows MITM attacks
+                                // TODO: Implement proper verification for production
+                                tracing::warn!(
+                                    "Auto-confirming verification (INSECURE - for testing only)"
+                                );
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                                if let Err(e) = sas.confirm().await {
+                                    tracing::error!(
+                                        error = %e,
+                                        "Failed to confirm SAS verification"
                                     );
-                                    tokio::time::sleep(Duration::from_secs(5)).await;
-                                    if let Err(e) = sas.confirm().await {
-                                        tracing::error!(
-                                            error = %e,
-                                            "Failed to confirm SAS verification"
-                                        );
-                                    }
                                 }
                             }
                             SasState::Done { .. } => {

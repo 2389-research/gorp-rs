@@ -14,7 +14,15 @@ Rust bot that creates dedicated Claude Code channels via Matrix, each backed by 
 ## Prerequisites
 
 - Rust 1.70+ (`rustup` recommended)
-- Claude Code CLI installed and authenticated
+- Claude Code CLI installed and authenticated (`claude auth status` to verify)
+- ACP adapter installed (one of):
+  ```bash
+  # Codex (default, faster responses)
+  npm install -g @zed-industries/codex-acp@latest
+
+  # Claude Code (alternative)
+  npm install -g @zed-industries/claude-code-acp@latest
+  ```
 - Matrix account for the bot
 - Matrix room with E2E encryption enabled
 
@@ -39,8 +47,9 @@ password = "your-password"  # or use access_token
 device_name = "claude-matrix-bridge"
 allowed_users = ["@you:matrix.org"]
 
-[claude]
-binary_path = "claude"
+[acp]
+# agent_binary = "codex-acp"  # optional, defaults to codex-acp (or "claude-code-acp")
+# timeout_secs = 300          # optional, defaults to 300
 
 [webhook]
 port = 13000
@@ -128,9 +137,9 @@ Configuration is loaded from `config.toml` with optional environment variable ov
 - `matrix.device_name` - Device name (default: "claude-matrix-bridge")
 - `matrix.allowed_users` - Array of authorized user IDs
 
-**Claude Settings:**
-- `claude.binary_path` - Path to claude binary (default: "claude")
-- `claude.sdk_url` - Optional custom Claude SDK URL
+**ACP Settings:**
+- `acp.agent_binary` - ACP agent binary: "codex-acp" (default) or "claude-code-acp"
+- `acp.timeout_secs` - Timeout for ACP operations (default: 300)
 
 **Webhook Settings:**
 - `webhook.port` - HTTP server port (default: 13000)
@@ -152,9 +161,10 @@ Environment variables override config file values:
 - Verify the bot's device from another client
 - Check `crypto_store/` exists and has correct permissions
 
-**Claude errors:**
-- Verify `claude` binary is in PATH or set `CLAUDE_BINARY_PATH`
-- Check Claude CLI is authenticated: `claude auth status`
+**Claude/ACP errors:**
+- Verify Claude CLI is authenticated: `claude auth status`
+- Verify ACP adapter is installed: `codex-acp --version` or `claude-code-acp --version`
+- Check for ENOENT errors: update adapter with `npm install -g @zed-industries/codex-acp@latest`
 
 ## Architecture
 
@@ -170,7 +180,7 @@ workspace/
 - `src/config.rs` - TOML config loading with env var overrides
 - `src/session.rs` - SQLite-backed channel management
 - `src/webhook.rs` - HTTP server for external triggers
-- `src/claude.rs` - CLI spawning and JSON parsing
+- `src/acp_client.rs` - ACP (Agent Client Protocol) client for Claude Code
 - `src/matrix_client.rs` - Matrix login and crypto setup
 - `src/message_handler.rs` - Auth checks, channel commands, orchestration
 - `src/main.rs` - Entry point, sync loop, webhook server spawn

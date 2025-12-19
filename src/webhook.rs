@@ -16,25 +16,31 @@ use matrix_sdk::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::LocalSet,
+};
 use tower_http::trace::TraceLayer;
 
 use crate::{
+    acp_client::AcpEvent,
     admin::{admin_router, auth_middleware, AdminState},
-    claude,
     config::Config,
     mcp::{mcp_handler, McpState},
     metrics,
     scheduler::SchedulerStore,
-    session::SessionStore,
+    session::{Channel, SessionStore},
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+    warm_session::{send_prompt_with_handle, SharedWarmSessionManager},
 };
 use metrics_exporter_prometheus::PrometheusHandle;
 
 #[derive(Clone)]
-pub struct WebhookState {
-    pub session_store: SessionStore,
-    pub matrix_client: Client,
-    pub config: Arc<Config>,
+struct WebhookState {
+    session_store: SessionStore,
+    matrix_client: Client,
+    config: Arc<Config>,
+    job_tx: WebhookJobSender,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,21 +56,42 @@ pub struct WebhookResponse {
     pub message: String,
 }
 
+/// Channel sender used to queue webhook jobs onto the warm session worker.
+type WebhookJobSender = mpsc::Sender<WebhookJob>;
+
+/// Job sent from HTTP handlers to the LocalSet worker.
+struct WebhookJob {
+    channel: Channel,
+    prompt: String,
+    responder: oneshot::Sender<anyhow::Result<WebhookWorkerResponse>>,
+}
+
+/// Response returned by the worker after completing a prompt.
+struct WebhookWorkerResponse {
+    response_text: String,
+    response_len: usize,
+}
+
 /// Start the webhook HTTP server
 pub async fn start_webhook_server(
     port: u16,
     session_store: SessionStore,
     matrix_client: Client,
     config: Arc<Config>,
+    warm_manager: SharedWarmSessionManager,
 ) -> Result<()> {
+    let worker_session_store = session_store.clone();
+    let job_tx = spawn_webhook_worker(worker_session_store, warm_manager);
+
     // Initialize Prometheus metrics
-    let metrics_handle = metrics::init_metrics()
-        .context("Failed to initialize Prometheus metrics")?;
+    let metrics_handle =
+        metrics::init_metrics().context("Failed to initialize Prometheus metrics")?;
 
     let state = WebhookState {
         session_store,
         matrix_client,
         config,
+        job_tx,
     };
 
     let webhook_routes = Router::new()
@@ -78,13 +105,20 @@ pub async fn start_webhook_server(
     let scheduler_store = SchedulerStore::new(state.session_store.db_connection());
 
     // Initialize gauge metrics from current state (default to 0 on error)
-    let channel_count = state.session_store.list_all()
+    let channel_count = state
+        .session_store
+        .list_all()
         .map(|ch| ch.len())
         .unwrap_or(0);
     metrics::set_active_channels(channel_count as u64);
 
-    let active_schedule_count = scheduler_store.list_all()
-        .map(|s| s.iter().filter(|s| s.status == crate::scheduler::ScheduleStatus::Active).count())
+    let active_schedule_count = scheduler_store
+        .list_all()
+        .map(|s| {
+            s.iter()
+                .filter(|s| s.status == crate::scheduler::ScheduleStatus::Active)
+                .count()
+        })
         .unwrap_or(0);
     metrics::set_active_schedules(active_schedule_count as u64);
 
@@ -129,7 +163,8 @@ pub async fn start_webhook_server(
         .layer(TraceLayer::new_for_http());
 
     // Default to localhost, but allow override for Docker (needs 0.0.0.0)
-    let bind_addr = std::env::var("WEBHOOK_BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let bind_addr =
+        std::env::var("WEBHOOK_BIND_ADDRESS").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr = format!("{}:{}", bind_addr, port);
     tracing::info!(addr = %addr, "Starting webhook server");
 
@@ -148,12 +183,13 @@ async fn webhook_handler(
     State(state): State<Arc<WebhookState>>,
     Path(session_id): Path<String>,
     Json(payload): Json<WebhookRequest>,
-) -> impl IntoResponse {
+) -> (StatusCode, Json<WebhookResponse>) {
     let start_time = std::time::Instant::now();
 
+    let prompt_preview: String = payload.prompt.chars().take(50).collect();
     tracing::info!(
         session_id = %session_id,
-        prompt_preview = %payload.prompt.chars().take(50).collect::<String>(),
+        prompt_preview = %prompt_preview,
         "Webhook received"
     );
 
@@ -178,8 +214,10 @@ async fn webhook_handler(
         }
     }
 
+    let prompt_text = payload.prompt;
+
     // Validate prompt is not empty
-    if payload.prompt.trim().is_empty() {
+    if prompt_text.trim().is_empty() {
         tracing::warn!(session_id = %session_id, "Webhook received empty prompt");
         metrics::record_webhook_request("bad_request");
         metrics::record_error("webhook_empty_prompt");
@@ -253,9 +291,9 @@ async fn webhook_handler(
 
     // 1. Send webhook prompt to room for visibility
     if let Err(e) = room
-        .send(RoomMessageEventContent::text_plain(&format!(
+        .send(RoomMessageEventContent::text_plain(format!(
             "🤖 Webhook: {}",
-            payload.prompt
+            prompt_text
         )))
         .await
     {
@@ -272,44 +310,80 @@ async fn webhook_handler(
     }
     metrics::record_message_sent();
 
-    // 2. Invoke Claude directly
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("webhook");
-    let claude_response = match claude::invoke_claude(
-        &state.config.claude.binary_path,
-        state.config.claude.sdk_url.as_deref(),
-        channel.cli_args(),
-        &payload.prompt,
-        Some(&channel.directory),
-    )
-    .await
+
+    let room_id_for_log = channel.room_id.clone();
+    let channel_name_for_log = channel.channel_name.clone();
+
+    let (responder_tx, responder_rx) = oneshot::channel();
+    if let Err(e) = state
+        .job_tx
+        .send(WebhookJob {
+            channel: channel.clone(),
+            prompt: prompt_text,
+            responder: responder_tx,
+        })
+        .await
     {
-        Ok(resp) => {
-            let claude_duration = claude_start.elapsed().as_secs_f64();
-            metrics::record_claude_duration(claude_duration);
-            metrics::record_claude_response_length(resp.len());
-            resp
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Claude invocation failed");
+        tracing::error!(error = %e, "Warm session worker channel closed");
+        metrics::record_webhook_request("error");
+        metrics::record_error("webhook_worker_unavailable");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(WebhookResponse {
+                success: false,
+                message: "Warm session worker unavailable".to_string(),
+            }),
+        );
+    }
+
+    let worker_result = match responder_rx.await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::error!("Warm session worker dropped response channel");
             metrics::record_webhook_request("error");
-            metrics::record_error("webhook_claude_failed");
-            let error_msg = format!("⚠️ Claude error: {}", e);
-            let _ = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await;
+            metrics::record_error("webhook_worker_dropped");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
                     success: false,
-                    message: format!("Claude error: {}", e),
+                    message: "ACP worker failed to respond".to_string(),
                 }),
             );
         }
     };
 
-    // 3. Send Claude's response to room with markdown formatting and chunking
-    let chunks = chunk_message(&claude_response, MAX_CHUNK_SIZE);
+    let worker_response = match worker_result {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::error!(
+                room_id = %room_id_for_log,
+                channel = %channel_name_for_log,
+                error = %e,
+                "Warm session worker returned error"
+            );
+            let error_msg = format!("⚠️ ACP error: {}", e);
+            let _ = room
+                .send(RoomMessageEventContent::text_plain(&error_msg))
+                .await;
+            metrics::record_webhook_request("error");
+            metrics::record_error("webhook_warm_session");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(WebhookResponse {
+                    success: false,
+                    message: format!("ACP error: {}", e),
+                }),
+            );
+        }
+    };
+
+    let claude_duration = claude_start.elapsed().as_secs_f64();
+    metrics::record_claude_duration(claude_duration);
+    metrics::record_claude_response_length(worker_response.response_len);
+
+    let chunks = chunk_message(&worker_response.response_text, MAX_CHUNK_SIZE);
     let chunk_count = chunks.len();
     for (i, chunk) in chunks.iter().enumerate() {
         let html = markdown_to_html(chunk);
@@ -329,8 +403,6 @@ async fn webhook_handler(
             );
         }
         metrics::record_message_sent();
-
-        // Log the Matrix message
         log_matrix_message(
             &channel.directory,
             &channel.room_id,
@@ -346,25 +418,18 @@ async fn webhook_handler(
         )
         .await;
 
-        // Small delay between chunks for ordering
         if i < chunks.len() - 1 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 
-    // 4. Mark session as started
-    if let Err(e) = state.session_store.mark_started(&channel.room_id) {
-        tracing::error!(error = %e, "Failed to mark session as started");
-        // Don't fail the request - message was sent successfully
-    }
-
     tracing::info!(
-        session_id = %session_id,
-        room_id = %channel.room_id,
+        room_id = %room_id_for_log,
+        channel = %channel_name_for_log,
+        duration = claude_duration,
         "Webhook processed successfully"
     );
 
-    // Record success metrics
     let total_duration = start_time.elapsed().as_secs_f64();
     metrics::record_webhook_request("success");
     metrics::record_webhook_duration(total_duration);
@@ -378,9 +443,181 @@ async fn webhook_handler(
     )
 }
 
+fn spawn_webhook_worker(
+    session_store: SessionStore,
+    warm_manager: SharedWarmSessionManager,
+) -> WebhookJobSender {
+    let (tx, mut rx) = mpsc::channel::<WebhookJob>(32);
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create webhook worker runtime");
+        let local = LocalSet::new();
+
+        local.block_on(&rt, async move {
+            while let Some(job) = rx.recv().await {
+                let session_store = session_store.clone();
+                let warm_manager = warm_manager.clone();
+                let WebhookJob {
+                    channel,
+                    prompt,
+                    responder,
+                } = job;
+
+                let result =
+                    process_webhook_job(channel, prompt, session_store, warm_manager).await;
+                if responder.send(result).is_err() {
+                    tracing::warn!(
+                        "Webhook handler dropped before worker response could be delivered"
+                    );
+                }
+            }
+        });
+    });
+
+    tx
+}
+
+async fn process_webhook_job(
+    channel: Channel,
+    prompt: String,
+    session_store: SessionStore,
+    warm_manager: SharedWarmSessionManager,
+) -> Result<WebhookWorkerResponse> {
+    let (event_tx, mut event_rx) = mpsc::channel(2048);
+
+    let (session_handle, session_id, is_new_session) = {
+        let mut manager = warm_manager.write().await;
+        manager.prepare_session(&channel, event_tx).await?
+    };
+
+    if is_new_session {
+        if let Err(e) = session_store.update_session_id(&channel.room_id, &session_id) {
+            tracing::warn!(
+                error = %e,
+                room_id = %channel.room_id,
+                "Failed to persist new session ID during webhook prep"
+            );
+        }
+    }
+
+    let prompt_for_send = prompt.clone();
+    let session_id_for_prompt = session_id.clone();
+    let session_handle_for_prompt = session_handle.clone();
+    let channel_for_log = channel.channel_name.clone();
+    let prompt_handle = tokio::task::spawn_local(async move {
+        tracing::info!(
+            channel = %channel_for_log,
+            session_id = %session_id_for_prompt,
+            "Webhook worker prompt started"
+        );
+        let result = send_prompt_with_handle(
+            &session_handle_for_prompt,
+            &session_id_for_prompt,
+            &prompt_for_send,
+        )
+        .await;
+        tracing::info!(
+            channel = %channel_for_log,
+            success = result.is_ok(),
+            "Webhook worker prompt completed"
+        );
+        result
+    });
+
+    let mut response = String::new();
+    let mut session_id_from_event: Option<String> = None;
+
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            AcpEvent::SessionChanged { new_session_id } => {
+                session_id_from_event = Some(new_session_id);
+            }
+            AcpEvent::ToolUse {
+                name,
+                input_preview,
+            } => {
+                tracing::debug!(
+                    channel = %channel.channel_name,
+                    tool = %name,
+                    preview = %input_preview,
+                    "Webhook tool invocation"
+                );
+            }
+            AcpEvent::Text(text) => {
+                response.push_str(&text);
+            }
+            AcpEvent::Result { text } => {
+                if response.is_empty() {
+                    response = text;
+                }
+                break;
+            }
+            AcpEvent::Error(error) => {
+                metrics::record_error("acp_streaming");
+                return Err(anyhow::anyhow!(error));
+            }
+            AcpEvent::InvalidSession => {
+                if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
+                    tracing::error!(
+                        error = %e,
+                        room_id = %channel.room_id,
+                        "Failed to reset invalid session from webhook"
+                    );
+                }
+                metrics::record_error("invalid_session");
+                return Err(anyhow::anyhow!(
+                    "Session was reset (conversation data was lost). Please trigger the webhook again."
+                ));
+            }
+        }
+    }
+
+    if let Err(e) = prompt_handle.await {
+        tracing::warn!(
+            error = %e,
+            channel = %channel.channel_name,
+            "Prompt task failed to join for webhook worker"
+        );
+    }
+
+    if response.trim().is_empty() {
+        metrics::record_error("acp_no_response");
+        return Err(anyhow::anyhow!("ACP agent finished without a response"));
+    }
+
+    let final_session_id = session_id_from_event.unwrap_or(session_id);
+    if let Err(e) = session_store.update_session_id(&channel.room_id, &final_session_id) {
+        tracing::error!(
+            error = %e,
+            room_id = %channel.room_id,
+            "Failed to update session ID after webhook prompt"
+        );
+    }
+    if let Err(e) = session_store.mark_started(&channel.room_id) {
+        tracing::error!(
+            error = %e,
+            room_id = %channel.room_id,
+            "Failed to mark session as started after webhook"
+        );
+    }
+
+    let response_len = response.len();
+    tracing::info!(
+        channel = %channel.channel_name,
+        response_len,
+        "Webhook worker completed prompt"
+    );
+
+    Ok(WebhookWorkerResponse {
+        response_text: response,
+        response_len,
+    })
+}
+
 /// Handle GET /metrics - returns Prometheus text format
-async fn metrics_handler(
-    State(handle): State<Arc<PrometheusHandle>>,
-) -> impl IntoResponse {
+async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl IntoResponse {
     handle.render()
 }
