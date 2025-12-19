@@ -1,0 +1,83 @@
+# ABOUTME: Tool definitions for Docker image installation
+# ABOUTME: Parsed by install-tools.sh during Docker build
+# Set version to "latest" to auto-fetch from GitHub releases
+
+# MCP Servers
+- name: chronicle
+  repo: harperreed/chronicle
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/chronicle-linux-amd64.tar.gz
+  binary: chronicle-linux-amd64
+
+- name: memory
+  repo: harperreed/memory
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/memory_{version}_Linux_x86_64.tar.gz
+  binary: memory-linux-amd64
+
+- name: toki
+  repo: harperreed/toki
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/toki_{version_num}_Linux_x86_64.tar.gz
+  binary: toki_{version_num}_Linux_x86_64/toki
+
+- name: pagen
+  repo: harperreed/pagen
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/pagen_{version}_linux_amd64.tar.gz
+  binary: pagen
+
+- name: gsuite-mcp
+  repo: 2389-research/gsuite-mcp
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/gsuite-mcp_{version_num}_linux_amd64.tar.gz
+  binary: gsuite-mcp
+
+- name: digest
+  repo: harperreed/digest
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/digest_{version_num}_Linux_x86_64.tar.gz
+  binary: digest
+
+- name: memo
+  repo: harperreed/memo
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/memo_{version_num}_Linux_x86_64.tar.gz
+  binary: memo_{version_num}_Linux_x86_64/memo
+
+- name: bbs
+  repo: harperreed/bbs-mcp
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/bbs_{version_num}_Linux_x86_64.tar.gz
+  binary: bbs_{version_num}_Linux_x86_64/bbs
+
+- name: health
+  repo: harperreed/health
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/health_{version_num}_Linux_x86_64.tar.gz
+  binary: health_{version_num}_Linux_x86_64/health
+
+- name: charm
+  repo: 2389-research/charm
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/charm_{version_num}_Linux_x86_64.tar.gz
+  binary: charm_{version_num}_Linux_x86_64/charm
+
+# CLI Tools
+- name: pop
+  repo: charmbracelet/pop
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/pop_{version_num}_Linux_x86_64.tar.gz
+  binary: pop
+
+- name: push
+  repo: harperreed/push-cli
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/push_{version_num}_Linux_x86_64.tar.gz
+  binary: push_{version_num}_Linux_x86_64/push
+
+- name: position
+  repo: harperreed/position
+  version: latest
+  url: https://github.com/{repo}/releases/download/{version}/position_{version_num}_Linux_x86_64.tar.gz
+  binary: position_{version_num}_Linux_x86_64/position

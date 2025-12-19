@@ -121,9 +121,9 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g @zed-industries/claude-code-acp
 
 # Install MCP tools and CLI utilities via script
-# Edit scripts/install-tools.sh to add/update tools
-COPY scripts/install-tools.sh /tmp/install-tools.sh
-RUN chmod +x /tmp/install-tools.sh && /tmp/install-tools.sh && rm /tmp/install-tools.sh
+# Edit scripts/tools.yaml to add/update tools
+COPY scripts/install-tools.sh scripts/tools.yaml /tmp/
+RUN chmod +x /tmp/install-tools.sh && /tmp/install-tools.sh && rm /tmp/install-tools.sh /tmp/tools.yaml
 
 # Create non-root user with home directory
 RUN useradd --create-home --shell /bin/bash gorp
@@ -154,6 +154,7 @@ RUN mkdir -p /home/gorp/.config/gorp \
              /home/gorp/.local/share/toki \
              /home/gorp/.local/share/pagen \
              /home/gorp/.local/share/digest \
+             /home/gorp/.local/share/charm \
              /home/gorp/workspace && \
     chown -R gorp:gorp /home/gorp /app
 
@@ -171,8 +172,8 @@ ENV HOME=/home/gorp
 # Volumes for persistent data (XDG-compliant paths)
 # Mount .config/claude to persist Claude Code auth across container restarts
 # Mount .claude for Claude CLI settings (API key)
-# MCP tool data: chronicle, memory, toki, pagen, gsuite-mcp, digest
-VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.config/gsuite-mcp", "/home/gorp/.claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/.local/share/digest", "/home/gorp/workspace"]
+# MCP tool data: chronicle, memory, toki, pagen, gsuite-mcp, digest, charm (health, bbs, memo, position)
+VOLUME ["/home/gorp/.config/gorp", "/home/gorp/.config/claude", "/home/gorp/.config/gsuite-mcp", "/home/gorp/.claude", "/home/gorp/.local/share/gorp", "/home/gorp/.local/share/chronicle", "/home/gorp/.local/share/memory", "/home/gorp/.local/share/toki", "/home/gorp/.local/share/pagen", "/home/gorp/.local/share/digest", "/home/gorp/.local/share/charm", "/home/gorp/workspace"]
 
 # Expose webhook port
 EXPOSE 13000
