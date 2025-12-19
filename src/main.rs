@@ -9,10 +9,12 @@ use gorp::{
     matrix_client, message_handler, paths,
     scheduler::{start_scheduler, SchedulerStore},
     session::SessionStore,
+    warm_session::{create_shared_manager, SharedWarmSessionManager, WarmConfig},
     webhook,
 };
 use matrix_sdk::{
     config::SyncSettings,
+    room::Room,
     ruma::{
         events::room::message::{RoomMessageEventContent, SyncRoomMessageEvent},
         events::room::name::RoomNameEventContent,
@@ -780,6 +782,37 @@ async fn run_start() -> Result<()> {
         "Configuration loaded"
     );
 
+    // Create warm session manager
+    let warm_config = WarmConfig {
+        keep_alive_duration: std::time::Duration::from_secs(config.acp.keep_alive_secs),
+        pre_warm_lead_time: std::time::Duration::from_secs(config.acp.pre_warm_secs),
+        agent_binary: config
+            .acp
+            .agent_binary
+            .clone()
+            .unwrap_or_else(|| "claude-code-acp".to_string()),
+    };
+    let warm_manager = create_shared_manager(warm_config);
+
+    // Spawn cleanup task
+    let cleanup_manager = warm_manager.clone();
+    let cleanup_interval = config.acp.keep_alive_secs / 4; // Check 4x per keep-alive period
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(cleanup_interval));
+        loop {
+            interval.tick().await;
+            let mut manager = cleanup_manager.write().await;
+            manager.cleanup_stale();
+        }
+    });
+
+    // Keep warm_manager alive for future use (will be connected to handlers in later tasks)
+    let _ = &warm_manager;
+    tracing::info!(
+        "Warm session manager initialized with {}s keep-alive",
+        config.acp.keep_alive_secs
+    );
+
     // Initialize session store
     let session_store = SessionStore::new(&config.workspace.path)?;
     tracing::info!(workspace = %config.workspace.path, "Session store initialized");
@@ -816,12 +849,14 @@ async fn run_start() -> Result<()> {
     let webhook_store = (*session_store_arc).clone();
     let webhook_client = client.clone();
     let webhook_config_arc = Arc::clone(&config_arc);
+    let webhook_warm_manager = warm_manager.clone();
     tokio::spawn(async move {
         if let Err(e) = webhook::start_webhook_server(
             webhook_port,
             webhook_store,
             webhook_client,
             webhook_config_arc,
+            webhook_warm_manager,
         )
         .await
         {
@@ -833,18 +868,29 @@ async fn run_start() -> Result<()> {
     let scheduler_store_for_handler = scheduler_store.clone();
 
     // Start scheduler background task (checks every 60 seconds)
+    // Note: Scheduler needs LocalSet because ACP client futures are !Send
     let scheduler_session_store = (*session_store_arc).clone();
     let scheduler_client = client.clone();
     let scheduler_config = Arc::clone(&config_arc);
-    tokio::spawn(async move {
-        start_scheduler(
-            scheduler_store,
-            scheduler_session_store,
-            scheduler_client,
-            scheduler_config,
-            Duration::from_secs(60),
-        )
-        .await;
+    let scheduler_warm_manager = warm_manager.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create scheduler runtime");
+
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async move {
+            start_scheduler(
+                scheduler_store,
+                scheduler_session_store,
+                scheduler_client,
+                scheduler_config,
+                Duration::from_secs(60),
+                scheduler_warm_manager,
+            )
+            .await;
+        });
     });
 
     // Perform initial sync BEFORE registering event handlers
@@ -935,6 +981,18 @@ async fn run_start() -> Result<()> {
     // Check if room prefix changed and rename rooms if needed
     check_and_rename_rooms_for_prefix_change(&client, &config_arc, &session_store_arc).await;
 
+    // Create a channel for message events - handlers will send events here
+    // A LocalSet task will receive and process them, ensuring spawn_local works
+    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<(
+        Room,
+        matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
+        Client,
+        Arc<Config>,
+        Arc<SessionStore>,
+        SchedulerStore,
+        SharedWarmSessionManager,
+    )>(256);
+
     // NOW register event handlers after encryption is established
     // This prevents handlers from firing before the client is ready
     register_event_handlers(
@@ -942,6 +1000,8 @@ async fn run_start() -> Result<()> {
         &config_arc,
         &session_store_arc,
         scheduler_store_for_handler,
+        warm_manager.clone(),
+        msg_tx, // Pass the sender to the handler
     );
     tracing::info!("Event handlers registered");
 
@@ -954,24 +1014,83 @@ async fn run_start() -> Result<()> {
     notify_ready(&client, &config_arc).await;
 
     // Start continuous sync loop with the sync token from initial sync
+    // Use LocalSet because message handlers with ACP client futures are !Send
     let settings = SyncSettings::default().token(response.next_batch);
-    tracing::info!("Starting continuous sync loop");
-    client.sync(settings).await?;
+    tracing::info!("Starting continuous sync loop with LocalSet");
+
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async move {
+        // Spawn the message handler task inside the LocalSet
+        // This ensures spawn_local works correctly
+        let handler_task = tokio::task::spawn_local(async move {
+            tracing::info!("Message handler LocalSet task started");
+            while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
+                tracing::info!(room_id = %room.room_id(), "Processing message in LocalSet task");
+                // Now we're definitely inside the LocalSet!
+                if let Err(e) = message_handler::handle_message(
+                    room,
+                    event,
+                    client,
+                    (*config).clone(),
+                    (*session_store).clone(),
+                    scheduler,
+                    warm_mgr,
+                )
+                .await
+                {
+                    tracing::error!(error = %e, "Error handling message");
+                }
+            }
+            tracing::warn!("Message handler channel closed");
+        });
+
+        // Yield to let the handler task start before sync
+        tokio::task::yield_now().await;
+        tracing::info!("Handler task spawned, starting sync");
+
+        // Run sync and handler concurrently
+        tokio::select! {
+            sync_result = client.sync(settings) => {
+                sync_result
+            }
+            _ = handler_task => {
+                tracing::error!("Message handler task exited unexpectedly");
+                Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Message handler exited"
+                ))))
+            }
+        }
+    }).await?;
 
     Ok(())
 }
 
 /// Registers all event handlers for the Matrix client.
+/// Type alias for the message event channel
+type MessageEventSender = tokio::sync::mpsc::Sender<(
+    Room,
+    matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
+    Client,
+    Arc<Config>,
+    Arc<SessionStore>,
+    SchedulerStore,
+    SharedWarmSessionManager,
+)>;
+
 /// Called AFTER initial sync to ensure encryption is established before processing events.
 fn register_event_handlers(
     client: &Client,
     config_arc: &Arc<Config>,
     session_store_arc: &Arc<SessionStore>,
     scheduler_store: SchedulerStore,
+    warm_manager: SharedWarmSessionManager,
+    msg_tx: MessageEventSender,
 ) {
     let config_for_invite = Arc::clone(config_arc);
     let config_for_messages = Arc::clone(config_arc);
     let session_store_for_messages = Arc::clone(session_store_arc);
+    let warm_manager_for_messages = warm_manager.clone();
 
     // Auto-join room invites from allowed users
     client.add_event_handler(
@@ -1025,32 +1144,25 @@ fn register_event_handlers(
         },
     );
 
-    // Register message handler - spawn each handler in background to avoid blocking
-    client.add_event_handler(move |event: SyncRoomMessageEvent, room, client| {
+    // Register message handler - send events through channel to LocalSet task
+    // This ensures spawn_local in message_handler works correctly
+    client.add_event_handler(move |event: SyncRoomMessageEvent, room: Room, client: Client| {
         let config = Arc::clone(&config_for_messages);
         let session_store = Arc::clone(&session_store_for_messages);
         let scheduler = scheduler_store.clone();
+        let warm_mgr = warm_manager_for_messages.clone();
+        let tx = msg_tx.clone();
         async move {
-            // Extract and clone original message event before spawning
+            // Extract and clone original message event before sending
             let Some(original_event) = event.as_original().cloned() else {
                 return;
             };
 
-            // Spawn handler in background so Claude requests don't block other messages
-            tokio::spawn(async move {
-                if let Err(e) = message_handler::handle_message(
-                    room,
-                    original_event,
-                    client,
-                    (*config).clone(),
-                    (*session_store).clone(),
-                    scheduler,
-                )
-                .await
-                {
-                    tracing::error!(error = %e, "Error handling message");
-                }
-            });
+            // Send to LocalSet task for processing (ensures spawn_local context)
+            tracing::debug!(room_id = %room.room_id(), "Sending message event to LocalSet handler");
+            if let Err(e) = tx.send((room, original_event, client, config, session_store, scheduler, warm_mgr)).await {
+                tracing::error!(error = %e, "Failed to send message to handler channel");
+            }
         }
     });
 

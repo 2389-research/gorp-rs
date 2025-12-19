@@ -10,6 +10,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use crate::metrics;
+use crate::warm_session::SharedWarmSessionManager;
 
 /// Represents a scheduled prompt in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -751,7 +752,7 @@ impl SchedulerStore {
 
 // Background scheduler execution module
 use crate::{
-    acp_client::{invoke_acp, AcpEvent},
+    acp_client::AcpEvent,
     config::Config,
     session::{Channel, SessionStore},
     utils::{
@@ -761,6 +762,7 @@ use crate::{
 use matrix_sdk::{ruma::events::room::message::RoomMessageEventContent, Client};
 use std::path::Path;
 use std::time::Duration as StdDuration;
+use tokio::sync::mpsc;
 use tokio::time::interval;
 
 /// Write context file for MCP tools (used by scheduler before Claude invocation)
@@ -789,6 +791,7 @@ pub async fn start_scheduler(
     client: Client,
     config: Arc<Config>,
     check_interval: StdDuration,
+    warm_manager: SharedWarmSessionManager,
 ) {
     tracing::info!(
         interval_secs = check_interval.as_secs(),
@@ -818,15 +821,63 @@ pub async fn start_scheduler(
                     let sess_store = session_store.clone();
                     let cli = client.clone();
                     let cfg = Arc::clone(&config);
+                    let warm_mgr = warm_manager.clone();
 
                     // Execute each due schedule concurrently
-                    tokio::spawn(async move {
-                        execute_schedule(schedule, store, sess_store, cli, cfg).await;
+                    // Use spawn_local since ACP client futures are !Send
+                    tokio::task::spawn_local(async move {
+                        execute_schedule(schedule, store, sess_store, cli, cfg, warm_mgr).await;
                     });
                 }
             }
             Err(e) => {
                 tracing::error!(error = %e, "Failed to fetch due schedules");
+            }
+        }
+
+        // Check for schedules that should be pre-warmed
+        // Pre-warm if within pre_warm_secs of execution
+        let pre_warm_duration = chrono::Duration::seconds(config.acp.pre_warm_secs as i64);
+        let pre_warm_cutoff = now + pre_warm_duration;
+
+        if let Ok(all_schedules) = scheduler_store.list_all() {
+            for schedule in all_schedules {
+                // Only pre-warm active schedules
+                if schedule.status != ScheduleStatus::Active {
+                    continue;
+                }
+
+                // Parse next execution time
+                if let Ok(next_exec) =
+                    chrono::DateTime::parse_from_rfc3339(&schedule.next_execution_at)
+                {
+                    let next_exec_utc = next_exec.with_timezone(&Utc);
+
+                    // Pre-warm if within the window
+                    if next_exec_utc > now && next_exec_utc <= pre_warm_cutoff {
+                        // Get channel for this schedule
+                        if let Ok(Some(channel)) = session_store.get_by_name(&schedule.channel_name)
+                        {
+                            let channel_name = schedule.channel_name.clone();
+
+                            // Pre-warm directly (without spawning to avoid Send issues with ACP client)
+                            let (event_tx, _event_rx) = mpsc::channel(16);
+                            let mut mgr = warm_manager.write().await;
+                            if let Err(e) = mgr.pre_warm(&channel, event_tx).await {
+                                tracing::warn!(
+                                    channel = %channel_name,
+                                    error = %e,
+                                    "Pre-warm failed for upcoming schedule"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    channel = %channel_name,
+                                    "Pre-warmed session for upcoming schedule"
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -839,6 +890,7 @@ async fn execute_schedule(
     session_store: SessionStore,
     client: Client,
     config: Arc<Config>,
+    warm_manager: SharedWarmSessionManager,
 ) {
     let prompt_preview: String = schedule.prompt.chars().take(50).collect();
     tracing::info!(
@@ -939,46 +991,52 @@ async fn execute_schedule(
     // Start typing indicator
     let _ = room.typing_notice(true).await;
 
-    // Use shared ACP invocation function
-    let agent_binary = match config.acp.agent_binary.as_ref() {
-        Some(b) => b,
-        None => {
-            tracing::error!("ACP agent binary not configured");
-            let error_msg = "⚠️ ACP agent binary not configured";
-            let _ = room
-                .send(RoomMessageEventContent::text_plain(error_msg))
-                .await;
-            let _ = scheduler_store.mark_failed(&schedule.id, error_msg);
-            return;
-        }
-    };
+    // Create event channel for this scheduled prompt
+    let (event_tx, mut rx) = tokio::sync::mpsc::channel(2048);
 
-    let (mut rx, task_handle) = match invoke_acp(
-        agent_binary,
-        Path::new(&channel.directory),
-        Some(&channel.session_id),
-        channel.started,
-        &prompt,
-        config.acp.timeout_secs,
-    )
-    .await
-    {
-        Ok((rx, handle)) => (rx, handle),
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to invoke ACP for scheduled task");
-            let error_msg = format!("⚠️ Failed to invoke ACP: {}", e);
-            let _ = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await;
-            let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
-            return;
+    // Prepare session (sets up event channel, creates session if needed)
+    // Get the session handle so we can release the manager lock before sending the prompt
+    let (session_handle, session_id, is_new_session) = {
+        let mut manager = warm_manager.write().await;
+        match manager.prepare_session(&channel, event_tx).await {
+            Ok((handle, sid, is_new)) => (handle, sid, is_new),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to prepare session for scheduled task");
+                let error_msg = format!("⚠️ Failed to prepare session: {}", e);
+                let _ = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await;
+                let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
+                return;
+            }
         }
-    };
+    }; // Manager lock is released here - other channels can now prepare sessions
+
+    // Update session store if a new session was created
+    if is_new_session {
+        if let Err(e) = session_store.update_session_id(&channel.room_id, &session_id) {
+            tracing::warn!(error = %e, "Failed to update session ID in store");
+        }
+    }
+
+    // Spawn the prompt to run concurrently with event processing
+    // Uses the session handle - doesn't need the manager lock
+    let prompt_for_send = prompt.clone();
+    let session_id_for_prompt = session_id.clone();
+
+    let prompt_handle = tokio::task::spawn_local(async move {
+        crate::warm_session::send_prompt_with_handle(
+            &session_handle,
+            &session_id_for_prompt,
+            &prompt_for_send,
+        )
+        .await
+    });
 
     // Collect response from stream
     let mut response = String::new();
     let mut had_error = false;
-    let mut session_id_from_event: Option<String> = None;
+    let mut session_id_from_event: Option<String> = Some(session_id.clone());
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -1030,9 +1088,9 @@ async fn execute_schedule(
         }
     }
 
-    // Wait for the ACP task to complete and clean up
-    if let Err(e) = task_handle.wait().await {
-        tracing::warn!(error = %e, "ACP task did not complete cleanly for scheduled task");
+    // Wait for prompt to complete (it may have already finished before event loop ended)
+    if let Err(e) = prompt_handle.await {
+        tracing::warn!(error = %e, "Prompt task failed to join");
     }
 
     // Stop typing
@@ -1103,7 +1161,6 @@ async fn execute_schedule(
     }
 
     // Update session ID if a new one was created
-    // Prefer session ID from event stream over the one returned by invoke_acp (from new_session_id capture in invoke_acp call)
     let final_session_id = session_id_from_event;
     if let Some(ref sess_id) = final_session_id {
         if let Err(e) = session_store.update_session_id(&channel.room_id, sess_id) {

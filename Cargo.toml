@@ -39,3 +39,27 @@ async-trait = "0.1"
 
 [dev-dependencies]
 serial_test = "3.0"
+
+[[bin]]
+name = "test_acp_direct"
+path = ".scratch/test_acp_direct.rs"
+
+[[bin]]
+name = "test_warm_session"
+path = ".scratch/test_warm_session.rs"
+
+[[bin]]
+name = "test_shared_warm"
+path = ".scratch/test_shared_warm.rs"
+
+[[bin]]
+name = "test_spawn_local_in_callback"
+path = ".scratch/test_spawn_local_in_callback.rs"
+
+[[bin]]
+name = "test_timing"
+path = ".scratch/test_timing.rs"
+
+[[bin]]
+name = "test_rapid_prompts"
+path = ".scratch/test_rapid_prompts.rs"

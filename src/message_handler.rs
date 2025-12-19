@@ -10,7 +10,7 @@ use matrix_sdk::{
 };
 
 use crate::{
-    acp_client::{invoke_acp, AcpEvent},
+    acp_client::AcpEvent,
     config::Config,
     matrix_client, metrics,
     scheduler::{
@@ -18,6 +18,7 @@ use crate::{
     },
     session::SessionStore,
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+    warm_session::SharedWarmSessionManager,
 };
 use chrono::Utc;
 use std::path::Path;
@@ -116,6 +117,7 @@ pub async fn handle_message(
     config: Config,
     session_store: SessionStore,
     scheduler_store: SchedulerStore,
+    warm_manager: SharedWarmSessionManager,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
 
@@ -320,36 +322,55 @@ pub async fn handle_message(
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("matrix");
 
-    // Use shared ACP invocation function
-    let agent_binary = config
-        .acp
-        .agent_binary
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("ACP agent binary not configured"))?;
+    // Create event channel for this prompt
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(2048);
 
-    let (mut event_rx, task_handle) = match invoke_acp(
-        agent_binary,
-        Path::new(&channel.directory),
-        Some(&channel.session_id),
-        channel.started,
-        &prompt,
-        config.acp.timeout_secs,
-    )
-    .await
-    {
-        Ok((rx, handle)) => (rx, handle),
-        Err(e) => {
-            let _ = typing_tx.send(());
-            typing_handle.abort();
-            room.typing_notice(false).await?;
+    // Prepare session (sets up event channel, creates session if needed)
+    // Get the session handle so we can release the manager lock before sending the prompt
+    let (session_handle, session_id, is_new_session) = {
+        let mut manager = warm_manager.write().await;
+        match manager.prepare_session(&channel, event_tx).await {
+            Ok((handle, sid, is_new)) => (handle, sid, is_new),
+            Err(e) => {
+                let _ = typing_tx.send(());
+                typing_handle.abort();
+                room.typing_notice(false).await?;
 
-            metrics::record_error("acp_invocation");
-            let error_msg = format!("⚠️ Failed to invoke ACP: {}", e);
-            room.send(RoomMessageEventContent::text_plain(&error_msg))
-                .await?;
-            return Ok(());
+                metrics::record_error("warm_session");
+                let error_msg = format!("⚠️ Failed to prepare session: {}", e);
+                room.send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await?;
+                return Ok(());
+            }
         }
-    };
+    }; // Manager lock is released here - other channels can now prepare sessions
+
+    // Update session store if a new session was created
+    if is_new_session {
+        if let Err(e) = session_store.update_session_id(room.room_id().as_str(), &session_id) {
+            tracing::warn!(error = %e, "Failed to update session ID in store");
+        }
+    }
+
+    // Spawn the prompt to run concurrently with event processing
+    // Uses the session handle - doesn't need the manager lock
+    let prompt_for_send = prompt.clone();
+    let session_id_for_prompt = session_id.clone();
+    let channel_name_for_log = channel.channel_name.clone();
+
+    tracing::info!(channel = %channel_name_for_log, session_id = %session_id, "About to spawn_local for prompt");
+
+    let prompt_handle = tokio::task::spawn_local(async move {
+        tracing::info!(channel = %channel_name_for_log, session_id = %session_id_for_prompt, "spawn_local task started - calling send_prompt_with_handle");
+        let result = crate::warm_session::send_prompt_with_handle(
+            &session_handle,
+            &session_id_for_prompt,
+            &prompt_for_send,
+        )
+        .await;
+        tracing::info!(channel = %channel_name_for_log, success = result.is_ok(), "spawn_local task completed");
+        result
+    });
 
     // Check if debug mode is enabled for this channel
     // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)
@@ -361,15 +382,22 @@ pub async fn handle_message(
     // Process streaming events from ACP
     let mut final_response = String::new();
     let mut tools_used: Vec<String> = Vec::new();
-    let mut session_id_from_event: Option<String> = None;
+
+    tracing::info!(channel = %channel.channel_name, "Starting event loop - waiting for ACP events");
+    let mut event_count = 0;
 
     while let Some(event) = event_rx.recv().await {
+        event_count += 1;
+        tracing::debug!(channel = %channel.channel_name, event_count, event = ?event, "Received ACP event");
         match event {
-            AcpEvent::SessionChanged {
-                new_session_id: sess_id,
-            } => {
-                // Track session ID changes during execution
-                session_id_from_event = Some(sess_id);
+            AcpEvent::SessionChanged { new_session_id } => {
+                // Session ID changes are tracked by warm_manager.prompt()
+                // Just log for debugging
+                tracing::debug!(
+                    old_session = %channel.session_id,
+                    new_session = %new_session_id,
+                    "Session ID changed during execution"
+                );
             }
             AcpEvent::ToolUse {
                 name,
@@ -429,6 +457,7 @@ pub async fn handle_message(
                 }
                 // ACP doesn't provide token usage in current implementation
                 // TODO: Extract usage from ACP once it supports it
+                break; // Exit event loop - prompt is complete
             }
             AcpEvent::Error(error) => {
                 let _ = typing_tx.send(());
@@ -461,11 +490,14 @@ pub async fn handle_message(
         }
     }
 
-    // Wait for the ACP task to complete and clean up
-    // This ensures the child process is properly terminated
-    if let Err(e) = task_handle.wait().await {
-        tracing::warn!(error = %e, "ACP task did not complete cleanly");
+    tracing::info!(channel = %channel.channel_name, event_count, "Event loop finished");
+
+    // Wait for prompt to complete (it may have already finished before event loop ended)
+    tracing::info!(channel = %channel.channel_name, "Waiting for prompt_handle to complete");
+    if let Err(e) = prompt_handle.await {
+        tracing::warn!(error = %e, "Prompt task failed to join");
     }
+    tracing::info!(channel = %channel.channel_name, "prompt_handle completed");
 
     // Check if we got a response
     if final_response.is_empty() {
@@ -492,15 +524,8 @@ pub async fn handle_message(
 
     let response = final_response;
 
-    // Update session ID if a new one was created, then mark session as started
-    // Use session ID from event stream (which is the most authoritative source)
-    if let Some(ref sess_id) = session_id_from_event {
-        if let Err(e) = session_store.update_session_id(room.room_id().as_str(), sess_id) {
-            tracing::error!(error = %e, "Failed to update session ID");
-            // Non-fatal - continue
-        }
-    }
     // Mark session as started BEFORE sending response (to ensure consistency)
+    // Note: session ID was already updated in prepare_session if a new one was created
     session_store.mark_started(room.room_id().as_str())?;
 
     // Stop typing indicator refresh

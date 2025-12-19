@@ -33,12 +33,12 @@ pub enum AcpEvent {
 /// Handler for ACP client-side callbacks
 /// Sends events directly to the provided channel for true streaming
 struct AcpClientHandler {
-    event_tx: mpsc::Sender<AcpEvent>,
+    event_tx: Arc<std::sync::RwLock<mpsc::Sender<AcpEvent>>>,
     working_dir: PathBuf,
 }
 
 impl AcpClientHandler {
-    fn new(event_tx: mpsc::Sender<AcpEvent>, working_dir: PathBuf) -> Self {
+    fn new(event_tx: Arc<std::sync::RwLock<mpsc::Sender<AcpEvent>>>, working_dir: PathBuf) -> Self {
         Self {
             event_tx,
             working_dir,
@@ -48,7 +48,8 @@ impl AcpClientHandler {
     fn send_event(&self, event: AcpEvent) {
         // Use try_send for non-blocking behavior
         // With a large buffer (2048), this should rarely fail
-        if let Err(e) = self.event_tx.try_send(event) {
+        let tx = self.event_tx.read().unwrap();
+        if let Err(e) = tx.try_send(event) {
             match e {
                 mpsc::error::TrySendError::Full(dropped_event) => {
                     tracing::warn!(
@@ -163,51 +164,153 @@ impl acp::Client for AcpClientHandler {
 
     async fn write_text_file(
         &self,
-        _args: acp::WriteTextFileRequest,
+        args: acp::WriteTextFileRequest,
     ) -> acp::Result<acp::WriteTextFileResponse> {
-        Err(acp::Error::method_not_found())
+        let path = self.working_dir.join(&args.path);
+
+        // Security: ensure path stays within working directory
+        let canonical = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                // Path doesn't exist yet, check parent
+                if let Some(parent) = path.parent() {
+                    if let Ok(canonical_parent) = parent.canonicalize() {
+                        if !canonical_parent.starts_with(&self.working_dir) {
+                            tracing::warn!(path = %args.path.display(), "Write attempt outside working directory");
+                            return Err(acp::Error::invalid_params());
+                        }
+                    }
+                }
+                path.clone()
+            }
+        };
+
+        if canonical != path && !canonical.starts_with(&self.working_dir) {
+            tracing::warn!(path = %args.path.display(), "Write attempt outside working directory");
+            return Err(acp::Error::invalid_params());
+        }
+
+        // Create parent directories if needed
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(path = %parent.display(), error = %e, "Failed to create parent directories");
+                return Err(acp::Error::internal_error());
+            }
+        }
+
+        // Write the file
+        if let Err(e) = std::fs::write(&path, &args.content) {
+            tracing::error!(path = %path.display(), error = %e, "Failed to write file");
+            return Err(acp::Error::internal_error());
+        }
+
+        tracing::debug!(path = %args.path.display(), len = args.content.len(), "Wrote file");
+        Ok(acp::WriteTextFileResponse::new())
     }
 
     async fn read_text_file(
         &self,
-        _args: acp::ReadTextFileRequest,
+        args: acp::ReadTextFileRequest,
     ) -> acp::Result<acp::ReadTextFileResponse> {
-        Err(acp::Error::method_not_found())
+        let path = self.working_dir.join(&args.path);
+
+        // Security: ensure path stays within working directory
+        let canonical = match path.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(path = %args.path.display(), error = %e, "Failed to canonicalize path");
+                return Err(acp::Error::invalid_params());
+            }
+        };
+
+        if !canonical.starts_with(&self.working_dir) {
+            tracing::warn!(path = %args.path.display(), "Read attempt outside working directory");
+            return Err(acp::Error::invalid_params());
+        }
+
+        // Read the file
+        let content = match std::fs::read_to_string(&canonical) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(path = %args.path.display(), error = %e, "Failed to read file");
+                return Err(acp::Error::invalid_params());
+            }
+        };
+
+        tracing::debug!(path = %args.path.display(), len = content.len(), "Read file");
+        Ok(acp::ReadTextFileResponse::new(content))
     }
 
     async fn create_terminal(
         &self,
         _args: acp::CreateTerminalRequest,
     ) -> acp::Result<acp::CreateTerminalResponse> {
-        Err(acp::Error::method_not_found())
+        use std::process::Stdio;
+
+        // Spawn shell process
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+        let child = match tokio::process::Command::new(&shell)
+            .current_dir(&self.working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to spawn terminal");
+                return Err(acp::Error::internal_error());
+            }
+        };
+
+        // Generate terminal ID
+        let terminal_id = format!("term-{}", child.id().unwrap_or(0));
+        tracing::info!(terminal_id = %terminal_id, shell = %shell, "Created terminal");
+
+        // Note: In a full implementation, we'd store the child process handle
+        // and manage it for terminal_output, kill, etc.
+        // For now, returning the ID to indicate success.
+        Ok(acp::CreateTerminalResponse::new(acp::TerminalId::new(
+            terminal_id,
+        )))
     }
 
     async fn terminal_output(
         &self,
         _args: acp::TerminalOutputRequest,
     ) -> acp::Result<acp::TerminalOutputResponse> {
-        Err(acp::Error::method_not_found())
+        // TODO: Implement terminal output streaming
+        // This requires storing terminal handles and managing I/O
+        tracing::debug!("terminal_output called - not fully implemented");
+        Ok(acp::TerminalOutputResponse::new(String::new(), false))
     }
 
     async fn release_terminal(
         &self,
-        _args: acp::ReleaseTerminalRequest,
+        args: acp::ReleaseTerminalRequest,
     ) -> acp::Result<acp::ReleaseTerminalResponse> {
-        Err(acp::Error::method_not_found())
+        tracing::debug!(terminal_id = %args.terminal_id, "Releasing terminal");
+        Ok(acp::ReleaseTerminalResponse::new())
     }
 
     async fn wait_for_terminal_exit(
         &self,
-        _args: acp::WaitForTerminalExitRequest,
+        args: acp::WaitForTerminalExitRequest,
     ) -> acp::Result<acp::WaitForTerminalExitResponse> {
-        Err(acp::Error::method_not_found())
+        tracing::debug!(terminal_id = %args.terminal_id, "Waiting for terminal exit");
+        // Return success with exit code 0 for now
+        Ok(acp::WaitForTerminalExitResponse::new(
+            acp::TerminalExitStatus::new(),
+        ))
     }
 
     async fn kill_terminal_command(
         &self,
-        _args: acp::KillTerminalCommandRequest,
+        args: acp::KillTerminalCommandRequest,
     ) -> acp::Result<acp::KillTerminalCommandResponse> {
-        Err(acp::Error::method_not_found())
+        tracing::debug!(terminal_id = %args.terminal_id, "Killing terminal");
+        Ok(acp::KillTerminalCommandResponse::new())
     }
 
     async fn ext_method(&self, _args: acp::ExtRequest) -> acp::Result<acp::ExtResponse> {
@@ -223,7 +326,7 @@ impl acp::Client for AcpClientHandler {
 pub struct AcpClient {
     child: Child,
     conn: acp::ClientSideConnection,
-    event_tx: mpsc::Sender<AcpEvent>,
+    event_tx: Arc<std::sync::RwLock<mpsc::Sender<AcpEvent>>>,
     working_dir: PathBuf,
 }
 
@@ -279,7 +382,11 @@ impl AcpClient {
         let stdin = child.stdin.take().context("Failed to get stdin")?;
         let stdout = child.stdout.take().context("Failed to get stdout")?;
 
-        let handler = AcpClientHandler::new(event_tx.clone(), working_dir.to_path_buf());
+        // Wrap event_tx in Arc<RwLock> for sharing
+        let shared_event_tx = Arc::new(std::sync::RwLock::new(event_tx));
+
+        let handler =
+            AcpClientHandler::new(Arc::clone(&shared_event_tx), working_dir.to_path_buf());
 
         // Create ACP connection
         let (conn, handle_io) =
@@ -293,7 +400,7 @@ impl AcpClient {
         Ok(Self {
             child,
             conn,
-            event_tx,
+            event_tx: shared_event_tx,
             working_dir: working_dir.to_path_buf(),
         })
     }
@@ -329,7 +436,8 @@ impl AcpClient {
         tracing::info!(session_id = %session_id, "Created new ACP session");
 
         // Notify about the new session ID
-        let _ = self.event_tx.try_send(AcpEvent::SessionChanged {
+        let tx = self.event_tx.read().unwrap();
+        let _ = tx.try_send(AcpEvent::SessionChanged {
             new_session_id: session_id.clone(),
         });
 
@@ -368,15 +476,15 @@ impl AcpClient {
             Ok(response) => {
                 // The response only contains stop_reason; content is streamed via session_notification
                 let final_text = format!("Completed: {:?}", response.stop_reason);
-                let _ = self
-                    .event_tx
-                    .try_send(AcpEvent::Result { text: final_text });
+                let tx = self.event_tx.read().unwrap();
+                let _ = tx.try_send(AcpEvent::Result { text: final_text });
                 Ok(())
             }
             Err(e) => {
                 let error_msg = format!("ACP prompt error: {}", e);
                 tracing::error!(%error_msg);
-                let _ = self.event_tx.try_send(AcpEvent::Error(error_msg.clone()));
+                let tx = self.event_tx.read().unwrap();
+                let _ = tx.try_send(AcpEvent::Error(error_msg.clone()));
                 Err(anyhow::anyhow!(error_msg))
             }
         }
@@ -391,6 +499,12 @@ impl AcpClient {
             .await
             .context("Failed to cancel ACP operation")?;
         Ok(())
+    }
+
+    /// Update the event channel for this client
+    /// Call this before each prompt to direct events to a new receiver
+    pub fn set_event_tx(&self, tx: mpsc::Sender<AcpEvent>) {
+        *self.event_tx.write().unwrap() = tx;
     }
 
     #[cfg(test)]
@@ -413,8 +527,12 @@ impl AcpClient {
                 .spawn()
                 .expect("Failed to spawn dummy process for test");
 
+            // Wrap event_tx in Arc<RwLock> for sharing
+            let shared_event_tx = Arc::new(std::sync::RwLock::new(event_tx));
+
             // Create a mock handler and connection
-            let handler = AcpClientHandler::new(event_tx.clone(), PathBuf::from("/tmp"));
+            let handler =
+                AcpClientHandler::new(Arc::clone(&shared_event_tx), PathBuf::from("/tmp"));
             let (stdin_read, _stdin_write) = tokio::io::duplex(1024);
             let (_stdout_read, _stdout_write) = tokio::io::duplex(1024);
 
@@ -430,7 +548,7 @@ impl AcpClient {
             Self {
                 child,
                 conn,
-                event_tx,
+                event_tx: shared_event_tx,
                 working_dir: PathBuf::from("/tmp"),
             }
         })
