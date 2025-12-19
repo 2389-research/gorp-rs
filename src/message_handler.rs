@@ -528,17 +528,49 @@ pub async fn handle_message(
     // Note: session ID was already updated in prepare_session if a new one was created
     session_store.mark_started(room.room_id().as_str())?;
 
-    // Stop typing indicator refresh
-    let _ = typing_tx.send(());
-    let _ = typing_handle.await; // Wait for graceful shutdown
-    room.typing_notice(false).await?;
-
     // Send response with markdown formatting, chunked if too long
     // Matrix limit is ~65KB but we chunk for better display
     let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
     let chunk_count = chunks.len();
+    let mut chunks_iter = chunks.into_iter().enumerate().peekable();
 
-    for (i, chunk) in chunks.into_iter().enumerate() {
+    // Send first chunk BEFORE stopping typing indicator
+    // This ensures user sees message arriving before "stopped typing"
+    if let Some((i, chunk)) = chunks_iter.next() {
+        let html = markdown_to_html(&chunk);
+        room.send(RoomMessageEventContent::text_html(&chunk, &html))
+            .await?;
+        metrics::record_message_sent();
+
+        // Now stop typing indicator - user already sees first chunk arriving
+        let _ = typing_tx.send(());
+        let _ = typing_handle.await;
+        room.typing_notice(false).await?;
+
+        // Log the Matrix message
+        log_matrix_message(
+            &channel.directory,
+            room.room_id().as_str(),
+            "response",
+            &chunk,
+            Some(&html),
+            if chunk_count > 1 { Some(i) } else { None },
+            if chunk_count > 1 {
+                Some(chunk_count)
+            } else {
+                None
+            },
+        )
+        .await;
+
+        // Small delay before next chunk if there are more
+        if chunks_iter.peek().is_some() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    // Send remaining chunks
+    for (i, chunk) in chunks_iter {
         let html = markdown_to_html(&chunk);
         room.send(RoomMessageEventContent::text_html(&chunk, &html))
             .await?;
@@ -560,7 +592,7 @@ pub async fn handle_message(
         )
         .await;
 
-        // Small delay between chunks to maintain order
+        // Small delay between chunks to maintain order (except after last)
         if i < chunk_count - 1 {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
