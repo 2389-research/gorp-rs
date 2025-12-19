@@ -29,6 +29,8 @@ TOOLS=(
     "position|harperreed/position|v0.5.0|https://github.com/{repo}/releases/download/{version}/position_{version_num}_Linux_x86_64.tar.gz|position_{version_num}_Linux_x86_64/position"
     "sweet|harperreed/sweet|v0.2.5|https://github.com/{repo}/releases/download/{version}/sweet_{version_num}_Linux_x86_64.tar.gz|sweet_{version_num}_Linux_x86_64/sweet"
     "bbs|harperreed/bbs-mcp|v1.0.0|https://github.com/{repo}/releases/download/{version}/bbs_{version_num}_Linux_x86_64.tar.gz|bbs_{version_num}_Linux_x86_64/bbs"
+    "health|harperreed/health|v1.3.0|https://github.com/{repo}/releases/download/{version}/health_{version_num}_Linux_x86_64.tar.gz|health_{version_num}_Linux_x86_64/health"
+    "charm|2389-research/charm|v0.13.0|https://github.com/{repo}/releases/download/{version}/charm_{version_num}_Linux_x86_64.tar.gz|charm_{version_num}_Linux_x86_64/charm"
 )
 
 install_tool() {
