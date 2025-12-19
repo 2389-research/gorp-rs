@@ -15,8 +15,12 @@ Rust bot that creates dedicated Claude Code channels via Matrix, each backed by 
 
 - Rust 1.70+ (`rustup` recommended)
 - Claude Code CLI installed and authenticated (`claude auth status` to verify)
-- Claude Code ACP adapter v0.12.0+ installed:
+- ACP adapter installed (one of):
   ```bash
+  # Codex (default, faster responses)
+  npm install -g @zed-industries/codex-acp@latest
+
+  # Claude Code (alternative)
   npm install -g @zed-industries/claude-code-acp@latest
   ```
 - Matrix account for the bot
@@ -44,8 +48,8 @@ device_name = "claude-matrix-bridge"
 allowed_users = ["@you:matrix.org"]
 
 [acp]
-# agent_binary = "claude-code-acp"  # optional, defaults to this
-# timeout_secs = 300                # optional, defaults to 300
+# agent_binary = "codex-acp"  # optional, defaults to codex-acp (or "claude-code-acp")
+# timeout_secs = 300          # optional, defaults to 300
 
 [webhook]
 port = 13000
@@ -134,7 +138,7 @@ Configuration is loaded from `config.toml` with optional environment variable ov
 - `matrix.allowed_users` - Array of authorized user IDs
 
 **ACP Settings:**
-- `acp.agent_binary` - Path to ACP agent binary (default: "claude-code-acp")
+- `acp.agent_binary` - ACP agent binary: "codex-acp" (default) or "claude-code-acp"
 - `acp.timeout_secs` - Timeout for ACP operations (default: 300)
 
 **Webhook Settings:**
@@ -159,8 +163,8 @@ Environment variables override config file values:
 
 **Claude/ACP errors:**
 - Verify Claude CLI is authenticated: `claude auth status`
-- Verify ACP adapter is installed: `claude-code-acp --version`
-- Check for ENOENT errors: update adapter with `npm install -g @zed-industries/claude-code-acp@latest`
+- Verify ACP adapter is installed: `codex-acp --version` or `claude-code-acp --version`
+- Check for ENOENT errors: update adapter with `npm install -g @zed-industries/codex-acp@latest`
 
 ## Architecture
 

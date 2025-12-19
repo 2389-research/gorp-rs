@@ -157,7 +157,26 @@ impl acp::Client for AcpClientHandler {
                 self.log_event_sync(&event);
                 self.send_event(event);
             }
-            _ => {}
+            acp::SessionUpdate::AgentThoughtChunk(chunk) => {
+                // Codex may send responses as "thoughts" - treat the same as messages
+                let text = match chunk.content {
+                    acp::ContentBlock::Text(t) => t.text,
+                    acp::ContentBlock::Image(_) => "<image>".into(),
+                    acp::ContentBlock::Audio(_) => "<audio>".into(),
+                    acp::ContentBlock::ResourceLink(r) => r.uri,
+                    acp::ContentBlock::Resource(_) => "<resource>".into(),
+                    _ => String::new(),
+                };
+                if !text.is_empty() {
+                    tracing::debug!(text_len = text.len(), "Received AgentThoughtChunk");
+                    let event = AcpEvent::Text(text);
+                    self.log_event_sync(&event);
+                    self.send_event(event);
+                }
+            }
+            other => {
+                tracing::debug!(?other, "Ignoring unhandled session update type");
+            }
         }
         Ok(())
     }
