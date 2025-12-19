@@ -16,6 +16,7 @@ use crate::claude::{ClaudeEvent, ClaudeUsage};
 #[serde(tag = "type", rename_all = "snake_case")]
 enum JailRequest {
     Query {
+        query_id: String,  // Unique ID for this query (prevents race conditions)
         channel_id: String,
         workspace: String,
         prompt: String,
@@ -32,19 +33,27 @@ enum JailRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum JailResponse {
     Text {
+        query_id: String,
+        #[allow(dead_code)]
         channel_id: String,
         content: String,
     },
     ToolUse {
+        query_id: String,
+        #[allow(dead_code)]
         channel_id: String,
         tool: String,
         input: serde_json::Value,
     },
     Done {
+        query_id: String,
+        #[allow(dead_code)]
         channel_id: String,
         session_id: String,
     },
     Error {
+        query_id: String,
+        #[allow(dead_code)]
         channel_id: String,
         message: String,
     },
@@ -147,26 +156,29 @@ impl ClaudeJailClient {
         let response: JailResponse =
             serde_json::from_str(text).context("Failed to parse response")?;
 
-        let (channel_id, event) = match response {
-            JailResponse::Text { channel_id, content } => {
-                // Accumulate text for this channel
+        // Use query_id as the key (not channel_id) to prevent race conditions
+        // when multiple queries for the same channel are in flight
+        let (query_id, event) = match response {
+            JailResponse::Text { query_id, content, .. } => {
+                // Accumulate text for this query
                 let mut accumulator = text_accumulator.lock().await;
                 accumulator
-                    .entry(channel_id.clone())
+                    .entry(query_id.clone())
                     .or_insert_with(String::new)
                     .push_str(&content);
-                tracing::debug!(%channel_id, content_len = content.len(), "Text chunk received");
+                tracing::debug!(%query_id, content_len = content.len(), "Text chunk received");
                 return Ok(()); // Don't emit individual text chunks, wait for Done
             }
             JailResponse::ToolUse {
-                channel_id,
+                query_id,
                 tool,
                 input,
+                ..
             } => {
                 let input_preview = get_input_preview(&input, &tool);
-                tracing::info!(%channel_id, %tool, %input_preview, "Tool use");
+                tracing::info!(%query_id, %tool, %input_preview, "Tool use");
                 (
-                    channel_id,
+                    query_id,
                     ClaudeEvent::ToolUse {
                         name: tool,
                         input_preview,
@@ -174,43 +186,44 @@ impl ClaudeJailClient {
                 )
             }
             JailResponse::Done {
-                channel_id,
+                query_id,
                 session_id,
+                ..
             } => {
-                // Get accumulated text for this channel
+                // Get accumulated text for this query
                 let accumulated_text = {
                     let mut accumulator = text_accumulator.lock().await;
-                    accumulator.remove(&channel_id).unwrap_or_default()
+                    accumulator.remove(&query_id).unwrap_or_default()
                 };
-                tracing::info!(%channel_id, %session_id, text_len = accumulated_text.len(), "Query complete");
+                tracing::info!(%query_id, %session_id, text_len = accumulated_text.len(), "Query complete");
                 (
-                    channel_id,
+                    query_id,
                     ClaudeEvent::Result {
                         text: accumulated_text,
                         usage: ClaudeUsage::default(),
                     },
                 )
             }
-            JailResponse::Error { channel_id, message } => {
+            JailResponse::Error { query_id, message, .. } => {
                 // Clear any accumulated text on error
                 {
                     let mut accumulator = text_accumulator.lock().await;
-                    accumulator.remove(&channel_id);
+                    accumulator.remove(&query_id);
                 }
-                tracing::error!(%channel_id, %message, "Claude Jail error");
-                (channel_id, ClaudeEvent::Error(message))
+                tracing::error!(%query_id, %message, "Claude Jail error");
+                (query_id, ClaudeEvent::Error(message))
             }
         };
 
-        // Route to the appropriate channel handler and REMOVE from pending to signal completion
+        // Route to the appropriate query handler and REMOVE from pending to signal completion
         // Removing the sender causes the receiver to close, exiting the rx.recv() loop
-        if let Some(tx) = pending.lock().await.remove(&channel_id) {
+        if let Some(tx) = pending.lock().await.remove(&query_id) {
             if let Err(e) = tx.send(event).await {
-                tracing::warn!(%channel_id, error = %e, "Failed to send event to channel");
+                tracing::warn!(%query_id, error = %e, "Failed to send event to query");
             }
             // tx is dropped here, closing the channel
         } else {
-            tracing::warn!(%channel_id, "Received message for unknown channel");
+            tracing::warn!(%query_id, "Received message for unknown query");
         }
 
         Ok(())
@@ -226,14 +239,19 @@ impl ClaudeJailClient {
     ) -> Result<mpsc::Receiver<ClaudeEvent>> {
         let (tx, rx) = mpsc::channel(32);
 
-        // Register this channel for responses
+        // Generate unique query ID to prevent race conditions when multiple
+        // queries for the same channel are in flight
+        let query_id = uuid::Uuid::new_v4().to_string();
+
+        // Register this query for responses (keyed by query_id, not channel_id)
         {
             let mut pending = self.pending.lock().await;
-            pending.insert(channel_id.to_string(), tx);
+            pending.insert(query_id.clone(), tx);
         }
 
         // Send the query
         let request = JailRequest::Query {
+            query_id: query_id.clone(),
             channel_id: channel_id.to_string(),
             workspace: workspace.to_string(),
             prompt: prompt.to_string(),
@@ -251,6 +269,7 @@ impl ClaudeJailClient {
         }
 
         tracing::info!(
+            %query_id,
             %channel_id,
             prompt_len = prompt.len(),
             "Sent query to Claude Jail"

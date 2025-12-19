@@ -15,6 +15,7 @@ class QueryMessage(BaseModel):
     """Request to start or continue a conversation."""
 
     type: Literal["query"] = "query"
+    query_id: str  # Unique ID for this query (prevents race conditions)
     channel_id: str
     workspace: str
     prompt: str
@@ -38,6 +39,7 @@ class TextMessage(BaseModel):
     """Streaming text chunk from Claude."""
 
     type: Literal["text"] = "text"
+    query_id: str  # Echo back the query_id
     channel_id: str
     content: str
 
@@ -46,6 +48,7 @@ class ToolUseMessage(BaseModel):
     """Notification that Claude is calling an MCP tool."""
 
     type: Literal["tool_use"] = "tool_use"
+    query_id: str  # Echo back the query_id
     channel_id: str
     tool: str
     input: dict[str, Any]
@@ -55,6 +58,7 @@ class DoneMessage(BaseModel):
     """Conversation complete."""
 
     type: Literal["done"] = "done"
+    query_id: str  # Echo back the query_id
     channel_id: str
     session_id: str
 
@@ -63,6 +67,7 @@ class ErrorMessage(BaseModel):
     """Error occurred during processing."""
 
     type: Literal["error"] = "error"
+    query_id: str  # Echo back the query_id
     channel_id: str
     message: str
 

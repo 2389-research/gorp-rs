@@ -100,12 +100,14 @@ class ClaudeJailServer:
     ) -> None:
         """Handle a query message."""
         logger.info(
-            "Query for channel %s: %s...",
+            "Query %s for channel %s: %s...",
+            message.query_id,
             message.channel_id,
             message.prompt[:50] if len(message.prompt) > 50 else message.prompt,
         )
 
         async for response in self.session_manager.process_query(
+            query_id=message.query_id,
             channel_id=message.channel_id,
             workspace=message.workspace,
             prompt=message.prompt,

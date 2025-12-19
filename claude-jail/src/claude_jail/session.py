@@ -130,6 +130,7 @@ class SessionManager:
 
     async def process_query(
         self,
+        query_id: str,
         channel_id: str,
         workspace: str,
         prompt: str,
@@ -139,6 +140,13 @@ class SessionManager:
         Process a query and yield response messages.
 
         Uses the query() function which handles subprocess management correctly.
+
+        Args:
+            query_id: Unique ID for this query (echoed in all responses)
+            channel_id: Channel/room ID for session management
+            workspace: Path to workspace directory
+            prompt: The user's prompt
+            resume_id: Optional session ID for resumption
 
         Yields:
             OutboundMessage instances (TextMessage, ToolUseMessage, DoneMessage, ErrorMessage)
@@ -166,11 +174,13 @@ class SessionManager:
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             yield TextMessage(
+                                query_id=query_id,
                                 channel_id=channel_id,
                                 content=block.text,
                             )
                         elif isinstance(block, ToolUseBlock):
                             yield ToolUseMessage(
+                                query_id=query_id,
                                 channel_id=channel_id,
                                 tool=block.name,
                                 input=block.input,
@@ -182,6 +192,7 @@ class SessionManager:
                         session.session_id = result_session_id
 
             yield DoneMessage(
+                query_id=query_id,
                 channel_id=channel_id,
                 session_id=result_session_id or session.session_id or "",
             )
@@ -189,6 +200,7 @@ class SessionManager:
         except Exception as e:
             logger.exception("Error processing query for channel %s", channel_id)
             yield ErrorMessage(
+                query_id=query_id,
                 channel_id=channel_id,
                 message=str(e),
             )
