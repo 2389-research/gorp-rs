@@ -717,4 +717,13 @@ impl AcpBackend {
 
         AgentHandle::new(tx, name)
     }
+
+    /// Factory function for the registry
+    pub fn factory() -> crate::registry::BackendFactory {
+        Box::new(|config| {
+            let cfg: AcpConfig = serde_json::from_value(config.clone())?;
+            let backend = AcpBackend::new(cfg)?;
+            Ok(backend.into_handle())
+        })
+    }
 }

@@ -71,14 +71,14 @@ impl DirectCliBackend {
         AgentHandle::new(tx, name)
     }
 
-    // Factory function will be enabled when registry is implemented
-    // pub fn factory() -> crate::registry::BackendFactory {
-    //     Box::new(|config| {
-    //         let cfg: DirectCliConfig = serde_json::from_value(config.clone())?;
-    //         let backend = DirectCliBackend::new(cfg)?;
-    //         Ok(backend.into_handle())
-    //     })
-    // }
+    /// Factory function for the registry
+    pub fn factory() -> crate::registry::BackendFactory {
+        Box::new(|config| {
+            let cfg: DirectCliConfig = serde_json::from_value(config.clone())?;
+            let backend = DirectCliBackend::new(cfg)?;
+            Ok(backend.into_handle())
+        })
+    }
 }
 
 async fn run_prompt(

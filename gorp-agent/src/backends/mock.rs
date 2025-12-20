@@ -134,13 +134,13 @@ impl MockBackend {
         AgentHandle::new(tx, name)
     }
 
-    // Factory function will be enabled when registry is implemented
-    // pub fn factory() -> crate::registry::BackendFactory {
-    //     Box::new(|_config| {
-    //         let backend = MockBackend::new();
-    //         Ok(backend.into_handle())
-    //     })
-    // }
+    /// Factory function for the registry
+    pub fn factory() -> crate::registry::BackendFactory {
+        Box::new(|_config| {
+            let backend = MockBackend::new();
+            Ok(backend.into_handle())
+        })
+    }
 }
 
 impl Default for MockBackend {
