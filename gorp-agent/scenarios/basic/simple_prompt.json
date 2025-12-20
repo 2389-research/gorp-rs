@@ -1,0 +1,8 @@
+{
+  "name": "simple_text_response",
+  "description": "Basic prompt returns text result",
+  "prompt": "Say hello",
+  "expected_events": [
+    {"type": "Result", "contains": "hello"}
+  ]
+}
