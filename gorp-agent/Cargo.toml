@@ -6,7 +6,7 @@ description = "Pluggable agent backend abstraction for gorp"
 license = "MIT"
 
 [dependencies]
-tokio = { version = "1", features = ["sync", "rt", "macros"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "process", "io-util"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,6 +15,7 @@ anyhow = "1"
 futures = "0.3"
 pin-project-lite = "0.2"
 uuid = { version = "1", features = ["v4"] }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
@@ -22,7 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = []
-acp = ["dep:agent-client-protocol"]
+acp = ["dep:agent-client-protocol", "dep:tokio-util"]
 
 [dependencies.agent-client-protocol]
 version = "0.9"
