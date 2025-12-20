@@ -1,0 +1,9 @@
+{
+  "name": "resume_session",
+  "description": "Validates session resumption works correctly",
+  "prompt": "Remember the context from before",
+  "expected_events": [
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 10000
+}

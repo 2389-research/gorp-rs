@@ -1,0 +1,12 @@
+{
+  "name": "list_mcp_tools",
+  "description": "Agent lists available MCP tools from connected servers",
+  "setup": {
+    "mcp_servers": ["test-server"]
+  },
+  "prompt": "What MCP tools are available?",
+  "expected_events": [
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 10000
+}

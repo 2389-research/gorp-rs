@@ -1,0 +1,10 @@
+{
+  "name": "streaming_text",
+  "description": "Prompt that receives streaming text chunks before result",
+  "prompt": "Write a haiku",
+  "expected_events": [
+    {"type": "Any", "count": 1},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 10000
+}

@@ -1,0 +1,11 @@
+{
+  "name": "glob_search",
+  "description": "Agent uses Glob tool to find files",
+  "prompt": "Find all .json files in the current directory",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Glob"},
+    {"type": "ToolEnd", "name": "Glob", "success": true},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 15000
+}

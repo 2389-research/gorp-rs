@@ -1,0 +1,11 @@
+{
+  "name": "bash_command",
+  "description": "Agent executes a bash command",
+  "prompt": "Run 'echo hello' using bash",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Bash", "input_contains": {"command": "echo hello"}},
+    {"type": "ToolEnd", "name": "Bash", "success": true},
+    {"type": "Result", "contains": "hello"}
+  ],
+  "timeout_ms": 15000
+}

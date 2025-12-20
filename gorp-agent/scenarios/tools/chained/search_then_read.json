@@ -1,0 +1,18 @@
+{
+  "name": "search_then_read",
+  "description": "Agent searches for files then reads matching ones",
+  "setup": {
+    "files": {
+      "/tmp/search_test/target.txt": "found this content"
+    }
+  },
+  "prompt": "Find and read any .txt files in /tmp/search_test/",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Glob"},
+    {"type": "ToolEnd", "name": "Glob", "success": true},
+    {"type": "ToolStart", "name": "Read"},
+    {"type": "ToolEnd", "name": "Read", "success": true},
+    {"type": "Result", "contains": "found this content"}
+  ],
+  "timeout_ms": 20000
+}

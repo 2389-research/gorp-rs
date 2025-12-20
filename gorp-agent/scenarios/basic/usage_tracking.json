@@ -1,0 +1,9 @@
+{
+  "name": "usage_tracking",
+  "description": "Verifies usage statistics are reported in the result",
+  "prompt": "Say hello briefly",
+  "expected_events": [
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 5000
+}

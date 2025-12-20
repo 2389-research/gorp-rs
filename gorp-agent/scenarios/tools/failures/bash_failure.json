@@ -1,0 +1,11 @@
+{
+  "name": "bash_failure",
+  "description": "Agent handles a bash command that fails",
+  "prompt": "Run 'exit 1' using bash",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Bash"},
+    {"type": "ToolEnd", "name": "Bash", "success": false},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 15000
+}

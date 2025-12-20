@@ -1,0 +1,12 @@
+{
+  "name": "mcp_server_unavailable",
+  "description": "Agent handles MCP server being unavailable",
+  "setup": {
+    "mcp_servers": ["nonexistent-server"]
+  },
+  "prompt": "Use a tool from the MCP server",
+  "expected_events": [
+    {"type": "Error"}
+  ],
+  "timeout_ms": 10000
+}

@@ -1,0 +1,18 @@
+{
+  "name": "multi_tool_workflow",
+  "description": "Agent performs a multi-step workflow with several tools",
+  "setup": {
+    "files": {
+      "/tmp/workflow/input.txt": "process this data"
+    }
+  },
+  "prompt": "Read /tmp/workflow/input.txt, create a summary, and write it to /tmp/workflow/output.txt",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Read"},
+    {"type": "ToolEnd", "name": "Read", "success": true},
+    {"type": "ToolStart", "name": "Write"},
+    {"type": "ToolEnd", "name": "Write", "success": true},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 30000
+}

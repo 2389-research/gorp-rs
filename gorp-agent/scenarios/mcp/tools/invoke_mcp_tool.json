@@ -1,0 +1,14 @@
+{
+  "name": "invoke_mcp_tool",
+  "description": "Agent invokes an MCP tool from a connected server",
+  "setup": {
+    "mcp_servers": ["test-server"]
+  },
+  "prompt": "Use the MCP tool to perform an action",
+  "expected_events": [
+    {"type": "ToolStart", "name": "mcp__test-server__action"},
+    {"type": "ToolEnd", "name": "mcp__test-server__action", "success": true},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 15000
+}

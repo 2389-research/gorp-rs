@@ -1,0 +1,11 @@
+{
+  "name": "permission_denied",
+  "description": "Agent handles permission denied errors",
+  "prompt": "Write to /etc/some_protected_file.txt",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Write"},
+    {"type": "ToolEnd", "name": "Write", "success": false},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 15000
+}

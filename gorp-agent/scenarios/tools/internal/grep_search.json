@@ -1,0 +1,16 @@
+{
+  "name": "grep_search",
+  "description": "Agent uses Grep tool to search file contents",
+  "setup": {
+    "files": {
+      "/tmp/test_grep.txt": "line 1\nfind me here\nline 3"
+    }
+  },
+  "prompt": "Search for 'find me' in /tmp/test_grep.txt",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Grep"},
+    {"type": "ToolEnd", "name": "Grep", "success": true},
+    {"type": "Result", "contains": "find me"}
+  ],
+  "timeout_ms": 15000
+}

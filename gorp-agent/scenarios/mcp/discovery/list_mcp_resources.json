@@ -1,0 +1,12 @@
+{
+  "name": "list_mcp_resources",
+  "description": "Agent lists available MCP resources from connected servers",
+  "setup": {
+    "mcp_servers": ["test-server"]
+  },
+  "prompt": "What MCP resources are available?",
+  "expected_events": [
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 10000
+}

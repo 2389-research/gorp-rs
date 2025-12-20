@@ -1,0 +1,16 @@
+{
+  "name": "read_file",
+  "description": "Agent reads a file using the Read tool",
+  "setup": {
+    "files": {
+      "/tmp/test_read.txt": "test file content"
+    }
+  },
+  "prompt": "Read the file at /tmp/test_read.txt",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Read", "input_contains": {"file_path": "/tmp/test_read.txt"}},
+    {"type": "ToolEnd", "name": "Read", "success": true},
+    {"type": "Result", "contains": "test file content"}
+  ],
+  "timeout_ms": 15000
+}

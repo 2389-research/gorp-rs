@@ -1,0 +1,14 @@
+{
+  "name": "mcp_tool_error",
+  "description": "Agent handles MCP tool returning an error",
+  "setup": {
+    "mcp_servers": ["test-server"]
+  },
+  "prompt": "Use the MCP tool that will fail",
+  "expected_events": [
+    {"type": "ToolStart", "name": "mcp__test-server__failing_tool"},
+    {"type": "ToolEnd", "name": "mcp__test-server__failing_tool", "success": false},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 15000
+}

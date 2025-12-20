@@ -1,0 +1,12 @@
+{
+  "name": "read_mcp_resource",
+  "description": "Agent reads an MCP resource from a connected server",
+  "setup": {
+    "mcp_servers": ["test-server"]
+  },
+  "prompt": "Read the MCP resource data",
+  "expected_events": [
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 15000
+}

@@ -380,3 +380,102 @@ fn test_load_scenario_from_json() {
     // Cleanup
     std::fs::remove_file(&scenario_path).ok();
 }
+
+#[test]
+fn test_load_all_basic_scenarios() {
+    let scenarios_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scenarios")
+        .join("basic");
+
+    if scenarios_dir.exists() {
+        for entry in std::fs::read_dir(&scenarios_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                let result = load_scenario(&path);
+                assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                let scenario = result.unwrap();
+                assert!(!scenario.name.is_empty(), "Scenario name should not be empty");
+                assert!(!scenario.prompt.is_empty(), "Scenario prompt should not be empty");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_load_all_tool_scenarios() {
+    let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scenarios")
+        .join("tools");
+
+    for subdir in ["internal", "chained", "failures"] {
+        let scenarios_dir = base_dir.join(subdir);
+        if scenarios_dir.exists() {
+            for entry in std::fs::read_dir(&scenarios_dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    let result = load_scenario(&path);
+                    assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_load_all_mcp_scenarios() {
+    let base_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scenarios")
+        .join("mcp");
+
+    for subdir in ["discovery", "tools", "resources", "failures"] {
+        let scenarios_dir = base_dir.join(subdir);
+        if scenarios_dir.exists() {
+            for entry in std::fs::read_dir(&scenarios_dir).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                    let result = load_scenario(&path);
+                    assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_load_all_error_scenarios() {
+    let scenarios_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scenarios")
+        .join("errors");
+
+    if scenarios_dir.exists() {
+        for entry in std::fs::read_dir(&scenarios_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                let result = load_scenario(&path);
+                assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+            }
+        }
+    }
+}
+
+#[test]
+fn test_load_all_session_scenarios() {
+    let scenarios_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("scenarios")
+        .join("sessions");
+
+    if scenarios_dir.exists() {
+        for entry in std::fs::read_dir(&scenarios_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                let result = load_scenario(&path);
+                assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+            }
+        }
+    }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "recoverable_error",
+  "description": "Validates recoverable errors are marked appropriately",
+  "prompt": "Trigger a recoverable error",
+  "expected_events": [
+    {"type": "Error", "code": "RateLimited"}
+  ],
+  "timeout_ms": 5000
+}

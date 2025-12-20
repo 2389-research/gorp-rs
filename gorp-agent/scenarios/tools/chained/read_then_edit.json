@@ -1,0 +1,18 @@
+{
+  "name": "read_then_edit",
+  "description": "Agent reads a file then edits it based on content",
+  "setup": {
+    "files": {
+      "/tmp/test_chain.txt": "original content\nneeds update"
+    }
+  },
+  "prompt": "Read /tmp/test_chain.txt and add a header line at the top",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Read"},
+    {"type": "ToolEnd", "name": "Read", "success": true},
+    {"type": "ToolStart", "name": "Edit"},
+    {"type": "ToolEnd", "name": "Edit", "success": true},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 30000
+}

@@ -1,0 +1,9 @@
+{
+  "name": "backend_error",
+  "description": "Validates proper handling of backend errors",
+  "prompt": "Trigger an error condition",
+  "expected_events": [
+    {"type": "Error"}
+  ],
+  "timeout_ms": 5000
+}

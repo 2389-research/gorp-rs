@@ -1,0 +1,11 @@
+{
+  "name": "read_nonexistent",
+  "description": "Agent handles reading a file that does not exist",
+  "prompt": "Read the file at /tmp/this_file_does_not_exist_xyz123.txt",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Read"},
+    {"type": "ToolEnd", "name": "Read", "success": false},
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 15000
+}

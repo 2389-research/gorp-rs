@@ -1,0 +1,9 @@
+{
+  "name": "create_session",
+  "description": "Validates session creation and initial prompt",
+  "prompt": "Initialize session context",
+  "expected_events": [
+    {"type": "Result", "contains": ""}
+  ],
+  "timeout_ms": 10000
+}

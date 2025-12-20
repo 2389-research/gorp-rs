@@ -1,0 +1,9 @@
+{
+  "name": "timeout_error",
+  "description": "Validates proper handling of timeout errors",
+  "prompt": "This should timeout",
+  "expected_events": [
+    {"type": "Error", "code": "Timeout"}
+  ],
+  "timeout_ms": 100
+}

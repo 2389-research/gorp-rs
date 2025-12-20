@@ -1,0 +1,16 @@
+{
+  "name": "write_file",
+  "description": "Agent writes content to a file using the Write tool",
+  "prompt": "Write 'hello from agent' to /tmp/test_write.txt",
+  "expected_events": [
+    {"type": "ToolStart", "name": "Write"},
+    {"type": "ToolEnd", "name": "Write", "success": true},
+    {"type": "Result", "contains": ""}
+  ],
+  "assertions": {
+    "files": {
+      "/tmp/test_write.txt": {"contains": "hello from agent"}
+    }
+  },
+  "timeout_ms": 15000
+}
