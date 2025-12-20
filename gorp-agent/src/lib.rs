@@ -10,7 +10,7 @@ pub mod backends;
 pub mod testing;
 
 // Re-exports will be enabled as we implement each module
-// pub use event::{AgentEvent, ErrorCode, Usage};
+pub use event::{AgentEvent, ErrorCode, Usage};
 // pub use traits::AgentBackend;
 // pub use handle::{AgentHandle, EventReceiver};
 // pub use registry::{AgentRegistry, BackendFactory};
