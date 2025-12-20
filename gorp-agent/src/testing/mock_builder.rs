@@ -204,6 +204,12 @@ impl MockAgentBuilder {
     fn finalize_builder(mut self, builder: EnhancedExpectationBuilder) -> Self {
         let mut events = Vec::new();
 
+        // Add marker to track when this expectation is consumed
+        events.push(AgentEvent::Custom {
+            kind: "mock_expectation_consumed".to_string(),
+            payload: serde_json::json!({}),
+        });
+
         // Add streaming chunks
         for chunk in builder.streaming_chunks {
             events.push(AgentEvent::Text(chunk));
@@ -221,9 +227,6 @@ impl MockAgentBuilder {
 
         // Add to backend
         self.backend = self.backend.on_prompt(&builder.pattern).respond_with(events);
-
-        // Mark expectation as potentially consumed
-        self.expectations.lock().unwrap().consumed_expectations += 1;
 
         self
     }
@@ -278,10 +281,13 @@ impl EnhancedMockHandle {
         // Create a new channel for filtered events
         let (tx, rx) = tokio::sync::mpsc::channel(2048);
 
+        // Clone expectations to track consumption
+        let expectations = self.expectations.clone();
+
         // Spawn a task to filter delay events and apply delays
         tokio::spawn(async move {
             while let Some(event) = receiver.recv().await {
-                // Check if this is a delay event
+                // Check if this is a special mock event
                 if let AgentEvent::Custom { kind, payload } = &event {
                     if kind == "mock_delay" {
                         if let Some(duration_ms) = payload.get("duration_ms").and_then(|v| v.as_u64())
@@ -289,6 +295,10 @@ impl EnhancedMockHandle {
                             tokio::time::sleep(Duration::from_millis(duration_ms)).await;
                         }
                         continue; // Don't send the delay event to the client
+                    } else if kind == "mock_expectation_consumed" {
+                        // Track that an expectation was consumed
+                        expectations.lock().unwrap().consumed_expectations += 1;
+                        continue; // Don't send this marker to the client
                     }
                 }
 
