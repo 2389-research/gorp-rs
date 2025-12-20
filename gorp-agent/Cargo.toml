@@ -1,0 +1,29 @@
+[package]
+name = "gorp-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Pluggable agent backend abstraction for gorp"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+anyhow = "1"
+futures = "0.3"
+pin-project-lite = "0.2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[features]
+default = []
+acp = ["dep:agent-client-protocol"]
+
+[dependencies.agent-client-protocol]
+version = "0.9"
+optional = true
