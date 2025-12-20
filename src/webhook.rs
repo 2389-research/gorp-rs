@@ -23,7 +23,6 @@ use tokio::{
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    acp_client::AcpEvent,
     admin::{admin_router, auth_middleware, AdminState},
     config::Config,
     mcp::{mcp_handler, McpState},
@@ -33,6 +32,7 @@ use crate::{
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
     warm_session::{send_prompt_with_handle, SharedWarmSessionManager},
 };
+use gorp_agent::AgentEvent;
 use metrics_exporter_prometheus::PrometheusHandle;
 
 #[derive(Clone)]
@@ -532,13 +532,18 @@ async fn process_webhook_job(
 
     while let Some(event) = event_rx.recv().await {
         match event {
-            AcpEvent::SessionChanged { new_session_id } => {
-                session_id_from_event = Some(new_session_id);
-            }
-            AcpEvent::ToolUse {
-                name,
-                input_preview,
-            } => {
+            AgentEvent::ToolStart { name, input, .. } => {
+                // Extract input preview from JSON input
+                let input_preview: String = input
+                    .as_object()
+                    .and_then(|o| {
+                        o.get("command")
+                            .or(o.get("file_path"))
+                            .or(o.get("pattern"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.chars().take(50).collect())
+                    .unwrap_or_default();
                 tracing::debug!(
                     channel = %channel.channel_name,
                     tool = %name,
@@ -546,20 +551,39 @@ async fn process_webhook_job(
                     "Webhook tool invocation"
                 );
             }
-            AcpEvent::Text(text) => {
+            AgentEvent::ToolEnd { .. } => {
+                // Tool completion - just log for now
+                tracing::debug!("Tool completed");
+            }
+            AgentEvent::Text(text) => {
                 response.push_str(&text);
             }
-            AcpEvent::Result { text } => {
+            AgentEvent::Result { text, .. } => {
                 if response.is_empty() {
                     response = text;
                 }
                 break;
             }
-            AcpEvent::Error(error) => {
-                metrics::record_error("acp_streaming");
-                return Err(anyhow::anyhow!(error));
+            AgentEvent::Error { code, message, .. } => {
+                // Check for session orphaned error
+                if code == gorp_agent::ErrorCode::SessionOrphaned {
+                    if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
+                        tracing::error!(
+                            error = %e,
+                            room_id = %channel.room_id,
+                            "Failed to reset invalid session from webhook"
+                        );
+                    }
+                    metrics::record_error("invalid_session");
+                    return Err(anyhow::anyhow!(
+                        "Session was reset (conversation data was lost). Please trigger the webhook again."
+                    ));
+                }
+                metrics::record_error("agent_streaming");
+                return Err(anyhow::anyhow!(message));
             }
-            AcpEvent::InvalidSession => {
+            AgentEvent::SessionInvalid { reason } => {
+                tracing::warn!(reason = %reason, "Session invalid");
                 if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
                     tracing::error!(
                         error = %e,
@@ -571,6 +595,15 @@ async fn process_webhook_job(
                 return Err(anyhow::anyhow!(
                     "Session was reset (conversation data was lost). Please trigger the webhook again."
                 ));
+            }
+            AgentEvent::SessionChanged { new_session_id } => {
+                session_id_from_event = Some(new_session_id);
+            }
+            AgentEvent::ToolProgress { .. } => {
+                tracing::debug!("Tool progress update");
+            }
+            AgentEvent::Custom { kind, .. } => {
+                tracing::debug!(kind = %kind, "Received custom event");
             }
         }
     }

@@ -10,7 +10,6 @@ use matrix_sdk::{
 };
 
 use crate::{
-    acp_client::AcpEvent,
     config::Config,
     matrix_client, metrics,
     scheduler::{
@@ -20,6 +19,7 @@ use crate::{
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
     warm_session::SharedWarmSessionManager,
 };
+use gorp_agent::AgentEvent;
 use chrono::Utc;
 use std::path::Path;
 
@@ -323,7 +323,7 @@ pub async fn handle_message(
     metrics::record_claude_invocation("matrix");
 
     // Create event channel for this prompt
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(2048);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(2048);
 
     // Prepare session (sets up event channel, creates session if needed)
     // Get the session handle so we can release the manager lock before sending the prompt
@@ -388,23 +388,23 @@ pub async fn handle_message(
 
     while let Some(event) = event_rx.recv().await {
         event_count += 1;
-        tracing::debug!(channel = %channel.channel_name, event_count, event = ?event, "Received ACP event");
+        tracing::debug!(channel = %channel.channel_name, event_count, event = ?event, "Received agent event");
         match event {
-            AcpEvent::SessionChanged { new_session_id } => {
-                // Session ID changes are tracked by warm_manager.prompt()
-                // Just log for debugging
-                tracing::debug!(
-                    old_session = %channel.session_id,
-                    new_session = %new_session_id,
-                    "Session ID changed during execution"
-                );
-            }
-            AcpEvent::ToolUse {
-                name,
-                input_preview,
-            } => {
+            AgentEvent::ToolStart { name, input, .. } => {
                 tools_used.push(name.clone());
                 metrics::record_tool_used(&name);
+
+                // Extract input preview from JSON input
+                let input_preview: String = input
+                    .as_object()
+                    .and_then(|o| {
+                        o.get("command")
+                            .or(o.get("file_path"))
+                            .or(o.get("pattern"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.chars().take(50).collect())
+                    .unwrap_or_default();
 
                 // Only send tool notifications if debug mode is enabled
                 if debug_enabled {
@@ -438,54 +438,83 @@ pub async fn handle_message(
                     }
                 }
             }
-            AcpEvent::Text(text) => {
+            AgentEvent::ToolEnd { .. } => {
+                // Tool completion - just log for now
+                tracing::debug!("Tool completed");
+            }
+            AgentEvent::Text(text) => {
                 // Accumulate text chunks
                 final_response.push_str(&text);
             }
-            AcpEvent::Result { text } => {
+            AgentEvent::Result { text, .. } => {
                 // Final result - use the accumulated text if we have it, otherwise use result text
                 if !final_response.is_empty() {
                     // We already accumulated text, result is just completion marker
-                    tracing::info!(response_len = final_response.len(), "ACP session completed");
+                    tracing::info!(response_len = final_response.len(), "Agent session completed");
                 } else {
                     // No accumulated text, use the result text
                     final_response = text;
                     tracing::info!(
                         response_len = final_response.len(),
-                        "ACP session completed with result text"
+                        "Agent session completed with result text"
                     );
                 }
-                // ACP doesn't provide token usage in current implementation
-                // TODO: Extract usage from ACP once it supports it
                 break; // Exit event loop - prompt is complete
             }
-            AcpEvent::Error(error) => {
+            AgentEvent::Error { code, message, .. } => {
                 let _ = typing_tx.send(());
                 typing_handle.abort();
                 room.typing_notice(false).await?;
 
-                metrics::record_error("acp_streaming");
-                let error_msg = format!("⚠️ ACP error: {}", error);
-                room.send(RoomMessageEventContent::text_plain(&error_msg))
+                // Check for session orphaned error
+                if code == gorp_agent::ErrorCode::SessionOrphaned {
+                    // Reset the session so next message starts fresh
+                    if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
+                        tracing::error!(error = %e, "Failed to reset invalid session");
+                    }
+                    metrics::record_error("invalid_session");
+                    room.send(RoomMessageEventContent::text_plain(
+                        "🔄 Session was reset (conversation data was lost). Please send your message again.",
+                    ))
                     .await?;
+                } else {
+                    metrics::record_error("agent_streaming");
+                    let error_msg = format!("⚠️ Agent error: {}", message);
+                    room.send(RoomMessageEventContent::text_plain(&error_msg))
+                        .await?;
+                }
                 return Ok(());
             }
-            AcpEvent::InvalidSession => {
+            AgentEvent::SessionInvalid { reason } => {
                 let _ = typing_tx.send(());
                 typing_handle.abort();
                 room.typing_notice(false).await?;
 
+                tracing::warn!(reason = %reason, "Session invalid");
                 // Reset the session so next message starts fresh
                 if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
                     tracing::error!(error = %e, "Failed to reset invalid session");
                 }
-
                 metrics::record_error("invalid_session");
                 room.send(RoomMessageEventContent::text_plain(
                     "🔄 Session was reset (conversation data was lost). Please send your message again.",
                 ))
                 .await?;
                 return Ok(());
+            }
+            AgentEvent::SessionChanged { new_session_id } => {
+                tracing::debug!(
+                    old_session = %channel.session_id,
+                    new_session = %new_session_id,
+                    "Session ID changed during execution"
+                );
+            }
+            AgentEvent::ToolProgress { .. } => {
+                // Tool progress updates - just log for now
+                tracing::debug!("Tool progress update");
+            }
+            AgentEvent::Custom { kind, .. } => {
+                tracing::debug!(kind = %kind, "Received custom event");
             }
         }
     }

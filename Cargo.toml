@@ -37,5 +37,8 @@ agent-client-protocol = "0.9"
 tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
 
+# Internal crates
+gorp-agent = { path = "gorp-agent" }
+
 [dev-dependencies]
 serial_test = "3.0"

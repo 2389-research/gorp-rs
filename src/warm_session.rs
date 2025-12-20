@@ -1,14 +1,12 @@
 // ABOUTME: Manages warm Claude Code sessions to avoid 2-minute startup latency.
-// ABOUTME: Keeps AcpClient instances alive per channel, with lazy creation and TTL cleanup.
+// ABOUTME: Keeps AgentHandle instances alive per channel, with lazy creation and TTL cleanup.
 
-use crate::acp_client::{AcpClient, AcpEvent};
 use crate::session::Channel;
 use anyhow::Result;
+use gorp_agent::{AgentEvent, AgentHandle, AgentRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-#[cfg(test)]
-use tokio::sync::mpsc as test_mpsc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 /// Configuration for warm session behavior
@@ -19,13 +17,15 @@ pub struct WarmConfig {
     pub agent_binary: String,
 }
 
-/// A warm session holding an active AcpClient
+/// A warm session holding an active AgentHandle
 /// Each session is wrapped in its own Mutex for per-channel locking
 /// Fields are private to ensure proper locking semantics
 pub struct WarmSession {
-    client: AcpClient,
+    handle: AgentHandle,
     session_id: String,
     last_used: Instant,
+    /// Channel to send events to - updated before each prompt
+    event_tx: Option<mpsc::Sender<AgentEvent>>,
 }
 
 /// Handle to a warm session, allowing concurrent access across channels
@@ -38,6 +38,8 @@ pub struct WarmSessionManager {
     /// Each session has its own Mutex for per-channel locking
     sessions: HashMap<String, WarmSessionHandle>,
     config: WarmConfig,
+    /// Registry for creating agent backends
+    registry: AgentRegistry,
 }
 
 impl WarmSessionManager {
@@ -45,6 +47,16 @@ impl WarmSessionManager {
         Self {
             sessions: HashMap::new(),
             config,
+            registry: AgentRegistry::default(),
+        }
+    }
+
+    /// Create with a custom registry (useful for testing)
+    pub fn with_registry(config: WarmConfig, registry: AgentRegistry) -> Self {
+        Self {
+            sessions: HashMap::new(),
+            config,
+            registry,
         }
     }
 
@@ -88,12 +100,22 @@ impl WarmSessionManager {
         });
     }
 
+    /// Create an AgentHandle using the registry
+    fn create_agent_handle(&self, working_dir: &str) -> Result<AgentHandle> {
+        // Use ACP backend by default (matches previous behavior)
+        let config = serde_json::json!({
+            "working_dir": working_dir,
+            "agent_binary": self.config.agent_binary,
+        });
+
+        self.registry.create("acp", &config)
+    }
+
     /// Get an existing session handle or create a new one
     /// Returns (session_handle, session_id, is_new_session)
     pub async fn get_or_create_session(
         &mut self,
         channel: &Channel,
-        event_tx: mpsc::Sender<AcpEvent>,
     ) -> Result<(WarmSessionHandle, String, bool)> {
         let channel_name = &channel.channel_name;
 
@@ -106,52 +128,47 @@ impl WarmSessionManager {
             return Ok((Arc::clone(handle), session_id, false));
         }
 
-        // Need to spawn a new ACP client
-        tracing::info!(channel = %channel_name, "Creating new ACP client");
+        // Need to create a new agent handle
+        tracing::info!(channel = %channel_name, "Creating new agent handle");
 
-        // Use absolute path for working directory - Claude Code may have issues with relative paths
+        // Use absolute path for working directory
         let working_dir = std::path::Path::new(&channel.directory)
             .canonicalize()
             .unwrap_or_else(|_| std::path::Path::new(&channel.directory).to_path_buf());
-        let working_dir = working_dir.as_path();
-        tracing::info!(channel = %channel_name, working_dir = %working_dir.display(), "Using working directory");
-        let env_vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let working_dir_str = working_dir.to_string_lossy().to_string();
 
-        let client =
-            AcpClient::spawn(working_dir, &self.config.agent_binary, event_tx, &env_vars).await?;
+        tracing::info!(channel = %channel_name, working_dir = %working_dir_str, "Using working directory");
 
-        tracing::info!(channel = %channel_name, "Calling initialize()");
-        client.initialize().await?;
-        tracing::info!(channel = %channel_name, "initialize() completed successfully");
+        let agent_handle = self.create_agent_handle(&working_dir_str)?;
 
         // Try to resume existing session if channel has one
         let (session_id, is_new) = if channel.started && !channel.session_id.is_empty() {
             tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Attempting to resume existing session");
-            match client.load_session(&channel.session_id).await {
+            match agent_handle.load_session(&channel.session_id).await {
                 Ok(()) => {
                     tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Successfully resumed session");
                     (channel.session_id.clone(), false)
                 }
                 Err(e) => {
                     tracing::warn!(channel = %channel_name, session_id = %channel.session_id, error = %e, "Failed to resume session, creating new one");
-                    tracing::info!(channel = %channel_name, "Calling new_session() after resume failure...");
-                    let new_id = client.new_session().await?;
+                    let new_id = agent_handle.new_session().await?;
                     tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after resume failure");
                     (new_id, true)
                 }
             }
         } else {
             // No existing session, create new one
-            tracing::info!(channel = %channel_name, "Calling new_session() for fresh session...");
-            let new_id = client.new_session().await?;
+            tracing::info!(channel = %channel_name, "Creating new session");
+            let new_id = agent_handle.new_session().await?;
             tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session");
             (new_id, true)
         };
 
         let warm_session = WarmSession {
-            client,
+            handle: agent_handle,
             session_id: session_id.clone(),
             last_used: Instant::now(),
+            event_tx: None,
         };
 
         let handle = Arc::new(Mutex::new(warm_session));
@@ -167,7 +184,7 @@ impl WarmSessionManager {
     pub async fn prepare_session(
         &mut self,
         channel: &Channel,
-        event_tx: mpsc::Sender<AcpEvent>,
+        event_tx: mpsc::Sender<AgentEvent>,
     ) -> Result<(WarmSessionHandle, String, bool)> {
         let channel_name = &channel.channel_name;
 
@@ -175,14 +192,21 @@ impl WarmSessionManager {
         if let Some(handle) = self.sessions.get(channel_name) {
             let mut session = handle.lock().await;
             session.last_used = Instant::now();
-            session.client.set_event_tx(event_tx);
+            session.event_tx = Some(event_tx);
             let session_id = session.session_id.clone();
             tracing::info!(channel = %channel_name, session_id = %session_id, "Prepared warm session for prompt");
             return Ok((Arc::clone(handle), session_id, false));
         }
 
         // Create new session (may resume existing or create fresh)
-        let (handle, session_id, is_new) = self.get_or_create_session(channel, event_tx).await?;
+        let (handle, session_id, is_new) = self.get_or_create_session(channel).await?;
+
+        // Set up event channel
+        {
+            let mut session = handle.lock().await;
+            session.event_tx = Some(event_tx);
+        }
+
         tracing::info!(channel = %channel_name, session_id = %session_id, is_new = is_new, "Prepared session for prompt");
         Ok((handle, session_id, is_new))
     }
@@ -190,11 +214,7 @@ impl WarmSessionManager {
     /// Pre-warm a session for a channel (called before scheduled prompts)
     /// Returns Some(session_id) if a NEW session was created (caller should update store)
     /// Returns None if channel was already warm or session was resumed
-    pub async fn pre_warm(
-        &mut self,
-        channel: &Channel,
-        event_tx: mpsc::Sender<AcpEvent>,
-    ) -> Result<Option<String>> {
+    pub async fn pre_warm(&mut self, channel: &Channel) -> Result<Option<String>> {
         let channel_name = &channel.channel_name;
 
         if self.sessions.contains_key(channel_name) {
@@ -203,7 +223,7 @@ impl WarmSessionManager {
         }
 
         tracing::info!(channel = %channel_name, "Pre-warming channel");
-        let (_handle, session_id, is_new) = self.get_or_create_session(channel, event_tx).await?;
+        let (_handle, session_id, is_new) = self.get_or_create_session(channel).await?;
 
         if is_new {
             Ok(Some(session_id))
@@ -219,14 +239,16 @@ impl WarmSessionManager {
         session_id: String,
         last_used: Instant,
     ) {
-        // Create a mock AcpClient with a dummy mpsc channel
-        let (tx, _rx) = test_mpsc::channel(1);
-        let client = AcpClient::new_test_mock_blocking(tx);
+        use gorp_agent::backends::mock::MockBackend;
+
+        let mock = MockBackend::new();
+        let handle = mock.into_handle();
 
         let session = WarmSession {
-            client,
+            handle,
             session_id,
             last_used,
+            event_tx: None,
         };
 
         self.sessions
@@ -242,12 +264,27 @@ pub async fn send_prompt_with_handle(
     text: &str,
 ) -> Result<()> {
     tracing::info!(session_id = %session_id, prompt_len = text.len(), "send_prompt_with_handle: acquiring session lock");
-    let mut session = handle.lock().await;
+    let session = handle.lock().await;
     tracing::info!(session_id = %session_id, "send_prompt_with_handle: lock acquired, calling prompt");
-    session.last_used = Instant::now();
-    let result = session.client.prompt(session_id, text).await;
-    tracing::info!(session_id = %session_id, success = result.is_ok(), "send_prompt_with_handle: prompt completed");
-    result
+
+    // Send prompt and get event receiver
+    let mut receiver = session.handle.prompt(session_id, text).await?;
+
+    // Forward events to the session's event channel if set
+    if let Some(ref event_tx) = session.event_tx {
+        // Spawn a task to forward events
+        let event_tx = event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                if event_tx.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    tracing::info!(session_id = %session_id, "send_prompt_with_handle: prompt started");
+    Ok(())
 }
 
 /// Thread-safe wrapper for WarmSessionManager
@@ -274,8 +311,8 @@ mod tests {
         assert_eq!(manager.keep_alive_duration(), Duration::from_secs(3600));
     }
 
-    #[test]
-    fn test_cleanup_stale_removes_old_sessions() {
+    #[tokio::test]
+    async fn test_cleanup_stale_removes_old_sessions() {
         let config = WarmConfig {
             keep_alive_duration: Duration::from_secs(2), // 2 seconds for test
             pre_warm_lead_time: Duration::from_secs(300),
@@ -325,8 +362,8 @@ mod tests {
         assert_eq!(manager.sessions.len(), 0);
     }
 
-    #[test]
-    fn test_cleanup_stale_keeps_all_recent_sessions() {
+    #[tokio::test]
+    async fn test_cleanup_stale_keeps_all_recent_sessions() {
         let config = WarmConfig {
             keep_alive_duration: Duration::from_secs(10), // 10 seconds
             pre_warm_lead_time: Duration::from_secs(300),

@@ -752,17 +752,16 @@ impl SchedulerStore {
 
 // Background scheduler execution module
 use crate::{
-    acp_client::AcpEvent,
     config::Config,
     session::{Channel, SessionStore},
     utils::{
         chunk_message, expand_slash_command, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE,
     },
 };
+use gorp_agent::AgentEvent;
 use matrix_sdk::{ruma::events::room::message::RoomMessageEventContent, Client};
 use std::path::Path;
 use std::time::Duration as StdDuration;
-use tokio::sync::mpsc;
 use tokio::time::interval;
 
 /// Write context file for MCP tools (used by scheduler before Claude invocation)
@@ -860,10 +859,9 @@ pub async fn start_scheduler(
                         {
                             let channel_name = schedule.channel_name.clone();
 
-                            // Pre-warm directly (without spawning to avoid Send issues with ACP client)
-                            let (event_tx, _event_rx) = mpsc::channel(16);
+                            // Pre-warm directly (without spawning to avoid Send issues)
                             let mut mgr = warm_manager.write().await;
-                            if let Err(e) = mgr.pre_warm(&channel, event_tx).await {
+                            if let Err(e) = mgr.pre_warm(&channel).await {
                                 tracing::warn!(
                                     channel = %channel_name,
                                     error = %e,
@@ -1040,39 +1038,60 @@ async fn execute_schedule(
 
     while let Some(event) = rx.recv().await {
         match event {
-            AcpEvent::SessionChanged {
-                new_session_id: sess_id,
-            } => {
-                // Track session ID changes during execution
-                session_id_from_event = Some(sess_id);
-            }
-            AcpEvent::ToolUse {
-                name,
-                input_preview,
-            } => {
+            AgentEvent::ToolStart { name, input, .. } => {
+                // Extract input preview from JSON input
+                let input_preview: String = input
+                    .as_object()
+                    .and_then(|o| {
+                        o.get("command")
+                            .or(o.get("file_path"))
+                            .or(o.get("pattern"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.chars().take(50).collect())
+                    .unwrap_or_default();
                 tracing::debug!(tool = %name, preview = %input_preview, "Scheduled task tool use");
             }
-            AcpEvent::Text(text) => {
+            AgentEvent::ToolEnd { .. } => {
+                // Tool completion - just log for now
+                tracing::debug!("Tool completed");
+            }
+            AgentEvent::Text(text) => {
                 // Accumulate text chunks
                 response.push_str(&text);
             }
-            AcpEvent::Result { text } => {
+            AgentEvent::Result { text, .. } => {
                 // If we haven't accumulated text, use the result text
                 if response.is_empty() {
                     response = text;
                 }
                 tracing::info!(
                     response_len = response.len(),
-                    "Scheduled task ACP completed"
+                    "Scheduled task agent completed"
                 );
             }
-            AcpEvent::Error(e) => {
-                tracing::warn!(error = %e, "Scheduled task ACP error");
+            AgentEvent::Error { code, message, .. } => {
+                // Check for session orphaned error
+                if code == gorp_agent::ErrorCode::SessionOrphaned {
+                    tracing::warn!("Scheduled task hit invalid session");
+                    // Reset the session so future executions start fresh
+                    if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
+                        tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
+                    }
+                    let _ = room
+                        .send(RoomMessageEventContent::text_plain(
+                            "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
+                        ))
+                        .await;
+                    let _ = scheduler_store.mark_failed(&schedule.id, "Session was invalid");
+                    return;
+                }
+                tracing::warn!(error = %message, "Scheduled task agent error");
                 had_error = true;
                 // Don't return yet - we might have captured text before the error
             }
-            AcpEvent::InvalidSession => {
-                tracing::warn!("Scheduled task hit invalid session");
+            AgentEvent::SessionInvalid { reason } => {
+                tracing::warn!(reason = %reason, "Scheduled task hit invalid session");
                 // Reset the session so future executions start fresh
                 if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
                     tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
@@ -1084,6 +1103,16 @@ async fn execute_schedule(
                     .await;
                 let _ = scheduler_store.mark_failed(&schedule.id, "Session was invalid");
                 return;
+            }
+            AgentEvent::SessionChanged { new_session_id } => {
+                // Track session ID changes during execution
+                session_id_from_event = Some(new_session_id);
+            }
+            AgentEvent::ToolProgress { .. } => {
+                tracing::debug!("Tool progress update");
+            }
+            AgentEvent::Custom { kind, .. } => {
+                tracing::debug!(kind = %kind, "Received custom event");
             }
         }
     }

@@ -1443,6 +1443,7 @@ dependencies = [
  "directories",
  "dotenvy",
  "futures-util",
+ "gorp-agent",
  "matrix-sdk",
  "metrics",
  "metrics-exporter-prometheus",
@@ -1463,6 +1464,21 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "two_timer",
+ "uuid",
+]
+
+[[package]]
+name = "gorp-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
