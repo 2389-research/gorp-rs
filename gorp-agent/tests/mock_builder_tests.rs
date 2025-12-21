@@ -49,7 +49,14 @@ async fn test_respond_with_tools_single_tool() {
 
     assert_eq!(events.len(), 3); // ToolStart, ToolEnd, Result
     assert!(matches!(&events[0], AgentEvent::ToolStart { name, .. } if name == "Read"));
-    assert!(matches!(&events[1], AgentEvent::ToolEnd { success: true, duration_ms: 10, .. }));
+    assert!(matches!(
+        &events[1],
+        AgentEvent::ToolEnd {
+            success: true,
+            duration_ms: 10,
+            ..
+        }
+    ));
     match &events[2] {
         AgentEvent::Result { text, .. } => assert_eq!(text, "Read the file successfully"),
         _ => panic!("Expected Result event"),
@@ -120,7 +127,10 @@ async fn test_respond_with_tools_failed_tool() {
     }
 
     assert_eq!(events.len(), 3);
-    assert!(matches!(&events[1], AgentEvent::ToolEnd { success: false, .. }));
+    assert!(matches!(
+        &events[1],
+        AgentEvent::ToolEnd { success: false, .. }
+    ));
 }
 
 #[tokio::test]
@@ -145,16 +155,16 @@ async fn test_with_delay() {
     }
 
     // Should take at least 100ms
-    assert!(elapsed >= Duration::from_millis(100), "Expected delay of at least 100ms, got {:?}", elapsed);
+    assert!(
+        elapsed >= Duration::from_millis(100),
+        "Expected delay of at least 100ms, got {:?}",
+        elapsed
+    );
 }
 
 #[tokio::test]
 async fn test_with_streaming() {
-    let chunks = vec![
-        "Hello ".to_string(),
-        "world".to_string(),
-        "!".to_string(),
-    ];
+    let chunks = vec!["Hello ".to_string(), "world".to_string(), "!".to_string()];
 
     let mock = MockAgentBuilder::new()
         .on_prompt("stream")

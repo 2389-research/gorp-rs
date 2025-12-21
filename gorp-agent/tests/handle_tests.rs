@@ -21,8 +21,12 @@ async fn test_event_receiver_receives_events() {
     let (tx, rx) = mpsc::channel(32);
     let mut receiver = EventReceiver::new(rx);
 
-    tx.send(AgentEvent::Text("hello".to_string())).await.unwrap();
-    tx.send(AgentEvent::Text("world".to_string())).await.unwrap();
+    tx.send(AgentEvent::Text("hello".to_string()))
+        .await
+        .unwrap();
+    tx.send(AgentEvent::Text("world".to_string()))
+        .await
+        .unwrap();
     drop(tx);
 
     let event1 = receiver.recv().await.unwrap();

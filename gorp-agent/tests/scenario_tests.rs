@@ -1,9 +1,9 @@
 // ABOUTME: Tests for the scenario test runner functionality.
 // ABOUTME: Covers loading scenarios, matching events, and running scenarios against backends.
 
-use gorp_agent::testing::scenarios::{EventMatcher, Scenario};
-use gorp_agent::testing::scenarios::{load_scenario, run_scenario};
 use gorp_agent::backends::mock::MockBackend;
+use gorp_agent::testing::scenarios::{load_scenario, run_scenario};
+use gorp_agent::testing::scenarios::{EventMatcher, Scenario};
 use gorp_agent::{AgentEvent, ErrorCode};
 use serde_json::json;
 
@@ -54,7 +54,10 @@ fn test_deserialize_full_scenario() {
 
     let scenario: Scenario = serde_json::from_str(json).unwrap();
     assert_eq!(scenario.name, "full_test");
-    assert_eq!(scenario.description, Some("A comprehensive test".to_string()));
+    assert_eq!(
+        scenario.description,
+        Some("A comprehensive test".to_string())
+    );
     assert_eq!(scenario.timeout_ms, Some(5000));
 
     let setup = scenario.setup.as_ref().unwrap();
@@ -223,11 +226,9 @@ async fn test_run_simple_scenario() {
         description: None,
         setup: None,
         prompt: "Say hello".to_string(),
-        expected_events: vec![
-            EventMatcher::Result {
-                contains: "hello".to_string(),
-            },
-        ],
+        expected_events: vec![EventMatcher::Result {
+            contains: "hello".to_string(),
+        }],
         assertions: None,
         timeout_ms: None,
     };
@@ -268,27 +269,25 @@ async fn test_run_scenario_with_tool_events() {
         timeout_ms: None,
     };
 
-    let mock = MockBackend::new()
-        .on_prompt("read file")
-        .respond_with(vec![
-            AgentEvent::ToolStart {
-                id: "t1".to_string(),
-                name: "Read".to_string(),
-                input: json!({"path": "/tmp/test"}),
-            },
-            AgentEvent::ToolEnd {
-                id: "t1".to_string(),
-                name: "Read".to_string(),
-                output: json!({"content": "file contents"}),
-                success: true,
-                duration_ms: 10,
-            },
-            AgentEvent::Result {
-                text: "Read the file".to_string(),
-                usage: None,
-                metadata: json!({}),
-            },
-        ]);
+    let mock = MockBackend::new().on_prompt("read file").respond_with(vec![
+        AgentEvent::ToolStart {
+            id: "t1".to_string(),
+            name: "Read".to_string(),
+            input: json!({"path": "/tmp/test"}),
+        },
+        AgentEvent::ToolEnd {
+            id: "t1".to_string(),
+            name: "Read".to_string(),
+            output: json!({"content": "file contents"}),
+            success: true,
+            duration_ms: 10,
+        },
+        AgentEvent::Result {
+            text: "Read the file".to_string(),
+            usage: None,
+            metadata: json!({}),
+        },
+    ]);
 
     let handle = mock.into_handle();
     let result = run_scenario(&handle, &scenario).await;
@@ -303,11 +302,9 @@ async fn test_run_scenario_failure() {
         description: None,
         setup: None,
         prompt: "test".to_string(),
-        expected_events: vec![
-            EventMatcher::Result {
-                contains: "expected text".to_string(),
-            },
-        ],
+        expected_events: vec![EventMatcher::Result {
+            contains: "expected text".to_string(),
+        }],
         assertions: None,
         timeout_ms: None,
     };
@@ -340,17 +337,15 @@ async fn test_run_scenario_with_any_matcher() {
         timeout_ms: None,
     };
 
-    let mock = MockBackend::new()
-        .on_prompt("stream")
-        .respond_with(vec![
-            AgentEvent::Text("Hello ".to_string()),
-            AgentEvent::Text("world!".to_string()),
-            AgentEvent::Result {
-                text: "done".to_string(),
-                usage: None,
-                metadata: json!({}),
-            },
-        ]);
+    let mock = MockBackend::new().on_prompt("stream").respond_with(vec![
+        AgentEvent::Text("Hello ".to_string()),
+        AgentEvent::Text("world!".to_string()),
+        AgentEvent::Result {
+            text: "done".to_string(),
+            usage: None,
+            metadata: json!({}),
+        },
+    ]);
 
     let handle = mock.into_handle();
     let result = run_scenario(&handle, &scenario).await;
@@ -393,10 +388,21 @@ fn test_load_all_basic_scenarios() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 let result = load_scenario(&path);
-                assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                assert!(
+                    result.is_ok(),
+                    "Failed to load {:?}: {:?}",
+                    path,
+                    result.err()
+                );
                 let scenario = result.unwrap();
-                assert!(!scenario.name.is_empty(), "Scenario name should not be empty");
-                assert!(!scenario.prompt.is_empty(), "Scenario prompt should not be empty");
+                assert!(
+                    !scenario.name.is_empty(),
+                    "Scenario name should not be empty"
+                );
+                assert!(
+                    !scenario.prompt.is_empty(),
+                    "Scenario prompt should not be empty"
+                );
             }
         }
     }
@@ -416,7 +422,12 @@ fn test_load_all_tool_scenarios() {
                 let path = entry.path();
                 if path.extension().and_then(|s| s.to_str()) == Some("json") {
                     let result = load_scenario(&path);
-                    assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                    assert!(
+                        result.is_ok(),
+                        "Failed to load {:?}: {:?}",
+                        path,
+                        result.err()
+                    );
                 }
             }
         }
@@ -437,7 +448,12 @@ fn test_load_all_mcp_scenarios() {
                 let path = entry.path();
                 if path.extension().and_then(|s| s.to_str()) == Some("json") {
                     let result = load_scenario(&path);
-                    assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                    assert!(
+                        result.is_ok(),
+                        "Failed to load {:?}: {:?}",
+                        path,
+                        result.err()
+                    );
                 }
             }
         }
@@ -456,7 +472,12 @@ fn test_load_all_error_scenarios() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 let result = load_scenario(&path);
-                assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                assert!(
+                    result.is_ok(),
+                    "Failed to load {:?}: {:?}",
+                    path,
+                    result.err()
+                );
             }
         }
     }
@@ -474,7 +495,12 @@ fn test_load_all_session_scenarios() {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 let result = load_scenario(&path);
-                assert!(result.is_ok(), "Failed to load {:?}: {:?}", path, result.err());
+                assert!(
+                    result.is_ok(),
+                    "Failed to load {:?}: {:?}",
+                    path,
+                    result.err()
+                );
             }
         }
     }

@@ -32,16 +32,29 @@ pub struct ScenarioSetup {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum EventMatcher {
-    Text { contains: String },
+    Text {
+        contains: String,
+    },
     ToolStart {
         name: String,
         input_contains: Option<Value>,
     },
-    ToolEnd { name: String, success: bool },
-    Result { contains: String },
-    Error { code: Option<ErrorCode> },
-    Custom { kind: String },
-    Any { count: usize },
+    ToolEnd {
+        name: String,
+        success: bool,
+    },
+    Result {
+        contains: String,
+    },
+    Error {
+        code: Option<ErrorCode>,
+    },
+    Custom {
+        kind: String,
+    },
+    Any {
+        count: usize,
+    },
 }
 
 impl EventMatcher {
@@ -84,7 +97,12 @@ impl EventMatcher {
                 text.contains(contains)
             }
 
-            (EventMatcher::Error { code }, AgentEvent::Error { code: event_code, .. }) => {
+            (
+                EventMatcher::Error { code },
+                AgentEvent::Error {
+                    code: event_code, ..
+                },
+            ) => {
                 if let Some(expected_code) = code {
                     expected_code == event_code
                 } else {
@@ -92,9 +110,12 @@ impl EventMatcher {
                 }
             }
 
-            (EventMatcher::Custom { kind }, AgentEvent::Custom { kind: event_kind, .. }) => {
-                kind == event_kind
-            }
+            (
+                EventMatcher::Custom { kind },
+                AgentEvent::Custom {
+                    kind: event_kind, ..
+                },
+            ) => kind == event_kind,
 
             (EventMatcher::Any { .. }, _) => true,
 

@@ -18,8 +18,14 @@ async fn scenario_registry_multi_backend_creation() {
 
     // Verify available backends
     let backends = registry.available();
-    assert!(backends.contains(&"mock"), "Mock backend should be available");
-    assert!(backends.contains(&"direct"), "Direct backend should be available");
+    assert!(
+        backends.contains(&"mock"),
+        "Mock backend should be available"
+    );
+    assert!(
+        backends.contains(&"direct"),
+        "Direct backend should be available"
+    );
 
     // Create a mock backend via registry
     let mock_config = serde_json::json!({});
@@ -37,12 +43,12 @@ async fn scenario_registry_multi_backend_creation() {
 /// Then: The custom backend can be created and used
 #[tokio::test]
 async fn scenario_registry_custom_factory() {
-    let registry = AgentRegistry::new()
-        .register("custom-test", |_config| {
-            let mock = MockBackend::new()
-                .on_prompt("custom").respond_text("Custom backend response");
-            Ok(mock.into_handle())
-        });
+    let registry = AgentRegistry::new().register("custom-test", |_config| {
+        let mock = MockBackend::new()
+            .on_prompt("custom")
+            .respond_text("Custom backend response");
+        Ok(mock.into_handle())
+    });
 
     // Create and use the custom backend
     let config = serde_json::json!({});
@@ -80,8 +86,10 @@ async fn scenario_registry_unknown_backend_error() {
 #[tokio::test]
 async fn scenario_recording_captures_full_interaction() {
     let mock = MockBackend::new()
-        .on_prompt("first").respond_text("First response")
-        .on_prompt("second").respond_with(vec![
+        .on_prompt("first")
+        .respond_text("First response")
+        .on_prompt("second")
+        .respond_with(vec![
             AgentEvent::Text("Streaming...".to_string()),
             AgentEvent::Text(" more text".to_string()),
             AgentEvent::Result {
@@ -113,7 +121,11 @@ async fn scenario_recording_captures_full_interaction() {
 
     // Verify second interaction has streaming events
     assert!(transcript[1].prompt.contains("second"));
-    assert_eq!(transcript[1].events.len(), 3, "Should have 3 events for streaming");
+    assert_eq!(
+        transcript[1].events.len(),
+        3,
+        "Should have 3 events for streaming"
+    );
 }
 
 /// Scenario: Replay agent reproduces recorded behavior exactly
@@ -123,22 +135,20 @@ async fn scenario_recording_captures_full_interaction() {
 #[tokio::test]
 async fn scenario_replay_reproduces_recorded_behavior() {
     // Create a transcript manually
-    let transcript = vec![
-        Interaction {
-            timestamp: std::time::SystemTime::now(),
-            session_id: "test-session".to_string(),
-            prompt: "hello".to_string(),
-            events: vec![
-                AgentEvent::Text("Hi ".to_string()),
-                AgentEvent::Text("there!".to_string()),
-                AgentEvent::Result {
-                    text: "Greeting complete".to_string(),
-                    usage: None,
-                    metadata: serde_json::json!({}),
-                },
-            ],
-        },
-    ];
+    let transcript = vec![Interaction {
+        timestamp: std::time::SystemTime::now(),
+        session_id: "test-session".to_string(),
+        prompt: "hello".to_string(),
+        events: vec![
+            AgentEvent::Text("Hi ".to_string()),
+            AgentEvent::Text("there!".to_string()),
+            AgentEvent::Result {
+                text: "Greeting complete".to_string(),
+                usage: None,
+                metadata: serde_json::json!({}),
+            },
+        ],
+    }];
 
     let replay = ReplayAgent::from_transcript(transcript);
     let handle = replay.into_handle();
@@ -165,26 +175,25 @@ async fn scenario_replay_reproduces_recorded_behavior() {
 #[tokio::test]
 async fn scenario_record_replay_roundtrip() {
     // Record
-    let mock = MockBackend::new()
-        .on_prompt("test").respond_with(vec![
-            AgentEvent::ToolStart {
-                id: "t1".to_string(),
-                name: "TestTool".to_string(),
-                input: serde_json::json!({"arg": "value"}),
-            },
-            AgentEvent::ToolEnd {
-                id: "t1".to_string(),
-                name: "TestTool".to_string(),
-                output: serde_json::json!({"result": "success"}),
-                success: true,
-                duration_ms: 100,
-            },
-            AgentEvent::Result {
-                text: "Tool executed".to_string(),
-                usage: None,
-                metadata: serde_json::json!({}),
-            },
-        ]);
+    let mock = MockBackend::new().on_prompt("test").respond_with(vec![
+        AgentEvent::ToolStart {
+            id: "t1".to_string(),
+            name: "TestTool".to_string(),
+            input: serde_json::json!({"arg": "value"}),
+        },
+        AgentEvent::ToolEnd {
+            id: "t1".to_string(),
+            name: "TestTool".to_string(),
+            output: serde_json::json!({"result": "success"}),
+            success: true,
+            duration_ms: 100,
+        },
+        AgentEvent::Result {
+            text: "Tool executed".to_string(),
+            usage: None,
+            metadata: serde_json::json!({}),
+        },
+    ]);
 
     let recording = RecordingAgent::wrap(mock.into_handle());
     let session = recording.new_session().await.unwrap();
@@ -203,7 +212,10 @@ async fn scenario_record_replay_roundtrip() {
     let replay_handle = replay.into_handle();
     let replay_session = replay_handle.new_session().await.unwrap();
 
-    let mut rx = replay_handle.prompt(&replay_session, "run test").await.unwrap();
+    let mut rx = replay_handle
+        .prompt(&replay_session, "run test")
+        .await
+        .unwrap();
     let mut replayed_events = vec![];
     while let Some(event) = rx.recv().await {
         replayed_events.push(event);
@@ -213,8 +225,13 @@ async fn scenario_record_replay_roundtrip() {
     assert_eq!(recorded_events.len(), replayed_events.len());
 
     // Verify tool events match
-    assert!(matches!(&replayed_events[0], AgentEvent::ToolStart { name, .. } if name == "TestTool"));
-    assert!(matches!(&replayed_events[1], AgentEvent::ToolEnd { success: true, .. }));
+    assert!(
+        matches!(&replayed_events[0], AgentEvent::ToolStart { name, .. } if name == "TestTool")
+    );
+    assert!(matches!(
+        &replayed_events[1],
+        AgentEvent::ToolEnd { success: true, .. }
+    ));
     assert!(matches!(&replayed_events[2], AgentEvent::Result { .. }));
 }
 
@@ -278,7 +295,10 @@ async fn scenario_mock_builder_tool_simulation() {
         .into_handle();
 
     let session = handle.new_session().await.unwrap();
-    let mut rx = handle.prompt(&session, "read and write files").await.unwrap();
+    let mut rx = handle
+        .prompt(&session, "read and write files")
+        .await
+        .unwrap();
 
     let mut events = vec![];
     while let Some(event) = rx.recv().await {
@@ -290,11 +310,15 @@ async fn scenario_mock_builder_tool_simulation() {
 
     // Verify first tool
     assert!(matches!(&events[0], AgentEvent::ToolStart { name, .. } if name == "Read"));
-    assert!(matches!(&events[1], AgentEvent::ToolEnd { name, success: true, .. } if name == "Read"));
+    assert!(
+        matches!(&events[1], AgentEvent::ToolEnd { name, success: true, .. } if name == "Read")
+    );
 
     // Verify second tool
     assert!(matches!(&events[2], AgentEvent::ToolStart { name, .. } if name == "Write"));
-    assert!(matches!(&events[3], AgentEvent::ToolEnd { name, success: true, .. } if name == "Write"));
+    assert!(
+        matches!(&events[3], AgentEvent::ToolEnd { name, success: true, .. } if name == "Write")
+    );
 
     // Verify result
     assert!(matches!(&events[4], AgentEvent::Result { text, .. } if text.contains("processed")));
@@ -307,8 +331,10 @@ async fn scenario_mock_builder_tool_simulation() {
 #[tokio::test]
 async fn scenario_mock_builder_expectation_verification() {
     let handle = MockAgentBuilder::new()
-        .on_prompt("a").respond_text("A")
-        .on_prompt("b").respond_text("B")
+        .on_prompt("a")
+        .respond_text("A")
+        .on_prompt("b")
+        .respond_text("B")
         .expect_prompt_count(2)
         .into_handle();
 
@@ -322,7 +348,9 @@ async fn scenario_mock_builder_expectation_verification() {
     while rx2.recv().await.is_some() {}
 
     // Verify expectations are met
-    handle.verify_all_expectations_met().expect("All expectations should be met");
+    handle
+        .verify_all_expectations_met()
+        .expect("All expectations should be met");
 }
 
 /// Scenario: Cancel command on mock backend
@@ -332,7 +360,8 @@ async fn scenario_mock_builder_expectation_verification() {
 #[tokio::test]
 async fn scenario_cancel_command_on_mock() {
     let mock = MockBackend::new()
-        .on_prompt("test").respond_text("Response");
+        .on_prompt("test")
+        .respond_text("Response");
 
     let handle = mock.into_handle();
     let session = handle.new_session().await.unwrap();
@@ -358,7 +387,8 @@ async fn scenario_high_volume_stress_test() {
 
     let mut mock = MockBackend::new();
     for i in 0..NUM_PROMPTS {
-        mock = mock.on_prompt(&format!("prompt-{}", i))
+        mock = mock
+            .on_prompt(&format!("prompt-{}", i))
             .respond_text(&format!("response-{}", i));
     }
 
@@ -366,12 +396,19 @@ async fn scenario_high_volume_stress_test() {
     let session = handle.new_session().await.unwrap();
 
     for i in 0..NUM_PROMPTS {
-        let mut rx = handle.prompt(&session, &format!("prompt-{}", i)).await.unwrap();
+        let mut rx = handle
+            .prompt(&session, &format!("prompt-{}", i))
+            .await
+            .unwrap();
         let event = rx.recv().await.unwrap();
 
         if let AgentEvent::Result { text, .. } = event {
-            assert!(text.contains(&format!("response-{}", i)),
-                "Prompt {} should get response-{}", i, i);
+            assert!(
+                text.contains(&format!("response-{}", i)),
+                "Prompt {} should get response-{}",
+                i,
+                i
+            );
         } else {
             panic!("Expected Result event for prompt {}", i);
         }
@@ -391,11 +428,18 @@ async fn scenario_session_id_uniqueness() {
 
     for _ in 0..50 {
         let session = handle.new_session().await.unwrap();
-        assert!(session_ids.insert(session.clone()),
-            "Session ID {} should be unique", session);
+        assert!(
+            session_ids.insert(session.clone()),
+            "Session ID {} should be unique",
+            session
+        );
     }
 
-    assert_eq!(session_ids.len(), 50, "All 50 sessions should have unique IDs");
+    assert_eq!(
+        session_ids.len(),
+        50,
+        "All 50 sessions should have unique IDs"
+    );
 }
 
 /// Scenario: MockBuilder with delay between events
@@ -421,5 +465,9 @@ async fn scenario_mock_builder_with_delay() {
     let elapsed = start.elapsed();
 
     // Should have some delay (at least 50ms for the configured delay)
-    assert!(elapsed >= Duration::from_millis(40), "Should have delay: {:?}", elapsed);
+    assert!(
+        elapsed >= Duration::from_millis(40),
+        "Should have delay: {:?}",
+        elapsed
+    );
 }

@@ -111,9 +111,17 @@ async fn test_recording_agent_records_tool_events() {
     let transcript = recording.transcript();
     assert_eq!(transcript.len(), 1);
     assert_eq!(transcript[0].events.len(), 3);
-    assert!(matches!(&transcript[0].events[0], AgentEvent::ToolStart { name, .. } if name == "Read"));
-    assert!(matches!(&transcript[0].events[1], AgentEvent::ToolEnd { success: true, .. }));
-    assert!(matches!(&transcript[0].events[2], AgentEvent::Result { .. }));
+    assert!(
+        matches!(&transcript[0].events[0], AgentEvent::ToolStart { name, .. } if name == "Read")
+    );
+    assert!(matches!(
+        &transcript[0].events[1],
+        AgentEvent::ToolEnd { success: true, .. }
+    ));
+    assert!(matches!(
+        &transcript[0].events[2],
+        AgentEvent::Result { .. }
+    ));
 }
 
 #[tokio::test]
@@ -283,16 +291,14 @@ async fn test_record_and_replay_roundtrip() {
 
     // Step 1: Record interactions
     {
-        let mock = MockBackend::new()
-            .on_prompt("test")
-            .respond_with(vec![
-                AgentEvent::Text("Thinking...".to_string()),
-                AgentEvent::Result {
-                    text: "Done!".to_string(),
-                    usage: None,
-                    metadata: json!({}),
-                },
-            ]);
+        let mock = MockBackend::new().on_prompt("test").respond_with(vec![
+            AgentEvent::Text("Thinking...".to_string()),
+            AgentEvent::Result {
+                text: "Done!".to_string(),
+                usage: None,
+                metadata: json!({}),
+            },
+        ]);
 
         let handle = mock.into_handle();
         let recording = RecordingAgent::wrap(handle);

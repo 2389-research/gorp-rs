@@ -19,8 +19,8 @@ use crate::{
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
     warm_session::SharedWarmSessionManager,
 };
-use gorp_agent::AgentEvent;
 use chrono::Utc;
+use gorp_agent::AgentEvent;
 use std::path::Path;
 
 /// Help documentation loaded at compile time
@@ -397,11 +397,7 @@ pub async fn handle_message(
                 // Extract input preview from JSON input
                 let input_preview: String = input
                     .as_object()
-                    .and_then(|o| {
-                        o.get("command")
-                            .or(o.get("file_path"))
-                            .or(o.get("pattern"))
-                    })
+                    .and_then(|o| o.get("command").or(o.get("file_path")).or(o.get("pattern")))
                     .and_then(|v| v.as_str())
                     .map(|s| s.chars().take(50).collect())
                     .unwrap_or_default();
@@ -450,7 +446,10 @@ pub async fn handle_message(
                 // Final result - use the accumulated text if we have it, otherwise use result text
                 if !final_response.is_empty() {
                     // We already accumulated text, result is just completion marker
-                    tracing::info!(response_len = final_response.len(), "Agent session completed");
+                    tracing::info!(
+                        response_len = final_response.len(),
+                        "Agent session completed"
+                    );
                 } else {
                     // No accumulated text, use the result text
                     final_response = text;

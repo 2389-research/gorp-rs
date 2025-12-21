@@ -1042,11 +1042,7 @@ async fn execute_schedule(
                 // Extract input preview from JSON input
                 let input_preview: String = input
                     .as_object()
-                    .and_then(|o| {
-                        o.get("command")
-                            .or(o.get("file_path"))
-                            .or(o.get("pattern"))
-                    })
+                    .and_then(|o| o.get("command").or(o.get("file_path")).or(o.get("pattern")))
                     .and_then(|v| v.as_str())
                     .map(|s| s.chars().take(50).collect())
                     .unwrap_or_default();

@@ -226,7 +226,10 @@ impl MockAgentBuilder {
         }
 
         // Add to backend
-        self.backend = self.backend.on_prompt(&builder.pattern).respond_with(events);
+        self.backend = self
+            .backend
+            .on_prompt(&builder.pattern)
+            .respond_with(events);
 
         self
     }
@@ -290,7 +293,8 @@ impl EnhancedMockHandle {
                 // Check if this is a special mock event
                 if let AgentEvent::Custom { kind, payload } = &event {
                     if kind == "mock_delay" {
-                        if let Some(duration_ms) = payload.get("duration_ms").and_then(|v| v.as_u64())
+                        if let Some(duration_ms) =
+                            payload.get("duration_ms").and_then(|v| v.as_u64())
                         {
                             tokio::time::sleep(Duration::from_millis(duration_ms)).await;
                         }

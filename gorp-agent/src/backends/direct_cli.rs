@@ -57,7 +57,9 @@ impl DirectCliBackend {
                         is_new_session,
                     } => {
                         let _ = reply.send(Ok(()));
-                        if let Err(e) = run_prompt(&config, &session_id, &text, event_tx, is_new_session).await {
+                        if let Err(e) =
+                            run_prompt(&config, &session_id, &text, event_tx, is_new_session).await
+                        {
                             tracing::error!(error = %e, "Direct CLI prompt failed");
                         }
                     }
@@ -237,7 +239,8 @@ fn parse_cli_event(json: &Value, accumulated_text: &mut String) -> Option<Vec<Ag
                                 // 2. The accumulated text doesn't end with whitespace
                                 // 3. The new text doesn't start with whitespace or punctuation
                                 if !accumulated_text.is_empty() {
-                                    let ends_with_ws = accumulated_text.ends_with(|c: char| c.is_whitespace());
+                                    let ends_with_ws =
+                                        accumulated_text.ends_with(|c: char| c.is_whitespace());
                                     let starts_with_ws_or_punct = text.starts_with(|c: char| {
                                         c.is_whitespace() || c.is_ascii_punctuation()
                                     });
@@ -341,7 +344,9 @@ fn extract_usage(json: &Value) -> Option<Usage> {
             .get("output_tokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        usage.cache_read_tokens = usage_obj.get("cache_read_input_tokens").and_then(|v| v.as_u64());
+        usage.cache_read_tokens = usage_obj
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64());
         usage.cache_write_tokens = usage_obj
             .get("cache_creation_input_tokens")
             .and_then(|v| v.as_u64());
@@ -363,9 +368,11 @@ fn extract_usage(json: &Value) -> Option<Usage> {
                 usage.cache_read_tokens = usage
                     .cache_read_tokens
                     .or_else(|| stats.get("cacheReadInputTokens").and_then(|v| v.as_u64()));
-                usage.cache_write_tokens = usage
-                    .cache_write_tokens
-                    .or_else(|| stats.get("cacheCreationInputTokens").and_then(|v| v.as_u64()));
+                usage.cache_write_tokens = usage.cache_write_tokens.or_else(|| {
+                    stats
+                        .get("cacheCreationInputTokens")
+                        .and_then(|v| v.as_u64())
+                });
                 found_usage = true;
             }
         }

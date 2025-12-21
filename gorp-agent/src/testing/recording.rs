@@ -173,7 +173,10 @@ impl ReplayAgent {
                             let _ = event_tx
                                 .send(AgentEvent::Error {
                                     code: crate::event::ErrorCode::Unknown,
-                                    message: format!("No recorded interaction for prompt: {}", text),
+                                    message: format!(
+                                        "No recorded interaction for prompt: {}",
+                                        text
+                                    ),
                                     recoverable: false,
                                 })
                                 .await;

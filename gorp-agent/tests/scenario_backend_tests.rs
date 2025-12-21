@@ -11,14 +11,20 @@ use gorp_agent::{AgentEvent, ErrorCode};
 #[tokio::test]
 async fn scenario_concurrent_prompts_to_new_session() {
     let mock = MockBackend::new()
-        .on_prompt("first").respond_text("Response to first")
-        .on_prompt("second").respond_text("Response to second");
+        .on_prompt("first")
+        .respond_text("Response to first")
+        .on_prompt("second")
+        .respond_text("Response to second");
 
     let handle = mock.into_handle();
     let session_id = handle.new_session().await.unwrap();
 
     // Verify session is being tracked
-    assert_eq!(handle.tracked_session_count(), 1, "New session should be tracked");
+    assert_eq!(
+        handle.tracked_session_count(),
+        1,
+        "New session should be tracked"
+    );
 
     // Launch two concurrent prompts
     let handle1 = handle.clone();
@@ -50,7 +56,11 @@ async fn scenario_concurrent_prompts_to_new_session() {
     assert!(!result2.is_empty(), "Second prompt should get response");
 
     // Session should no longer be tracked (cleaned up after first prompt)
-    assert_eq!(handle.tracked_session_count(), 0, "Session should be cleaned up after prompts");
+    assert_eq!(
+        handle.tracked_session_count(),
+        0,
+        "Session should be cleaned up after prompts"
+    );
 }
 
 /// Scenario: Session abandonment prevents memory leaks
@@ -67,20 +77,36 @@ async fn scenario_session_abandonment_cleans_up_memory() {
     let session2 = handle.new_session().await.unwrap();
     let session3 = handle.new_session().await.unwrap();
 
-    assert_eq!(handle.tracked_session_count(), 3, "All sessions should be tracked");
+    assert_eq!(
+        handle.tracked_session_count(),
+        3,
+        "All sessions should be tracked"
+    );
 
     // Abandon session2 without using it
     handle.abandon_session(&session2);
-    assert_eq!(handle.tracked_session_count(), 2, "Abandoned session should be removed");
+    assert_eq!(
+        handle.tracked_session_count(),
+        2,
+        "Abandoned session should be removed"
+    );
 
     // Abandon a session that doesn't exist (should be safe no-op)
     handle.abandon_session("nonexistent-session");
-    assert_eq!(handle.tracked_session_count(), 2, "Abandoning nonexistent session is safe");
+    assert_eq!(
+        handle.tracked_session_count(),
+        2,
+        "Abandoning nonexistent session is safe"
+    );
 
     // Abandon remaining sessions
     handle.abandon_session(&session1);
     handle.abandon_session(&session3);
-    assert_eq!(handle.tracked_session_count(), 0, "All sessions should be cleaned up");
+    assert_eq!(
+        handle.tracked_session_count(),
+        0,
+        "All sessions should be cleaned up"
+    );
 }
 
 /// Scenario: Loaded sessions are treated differently from new sessions
@@ -90,7 +116,8 @@ async fn scenario_session_abandonment_cleans_up_memory() {
 #[tokio::test]
 async fn scenario_loaded_session_not_marked_as_new() {
     let mock = MockBackend::new()
-        .on_prompt("resume").respond_text("Resumed session");
+        .on_prompt("resume")
+        .respond_text("Resumed session");
 
     let handle = mock.into_handle();
 
@@ -99,14 +126,24 @@ async fn scenario_loaded_session_not_marked_as_new() {
     handle.load_session(session_id).await.unwrap();
 
     // Loaded sessions are not tracked in the new session map
-    assert_eq!(handle.tracked_session_count(), 0, "Loaded session should not be in new session map");
+    assert_eq!(
+        handle.tracked_session_count(),
+        0,
+        "Loaded session should not be in new session map"
+    );
 
     // Send a prompt - it should work normally
-    let mut rx = handle.prompt(session_id, "resume previous work").await.unwrap();
+    let mut rx = handle
+        .prompt(session_id, "resume previous work")
+        .await
+        .unwrap();
     let event = rx.recv().await.unwrap();
 
     if let AgentEvent::Result { text, .. } = event {
-        assert!(text.contains("Resumed"), "Should get response for loaded session");
+        assert!(
+            text.contains("Resumed"),
+            "Should get response for loaded session"
+        );
     } else {
         panic!("Expected Result event");
     }
@@ -119,9 +156,12 @@ async fn scenario_loaded_session_not_marked_as_new() {
 #[tokio::test]
 async fn scenario_multiple_concurrent_sessions() {
     let mock = MockBackend::new()
-        .on_prompt("session-a").respond_text("Response A")
-        .on_prompt("session-b").respond_text("Response B")
-        .on_prompt("session-c").respond_text("Response C");
+        .on_prompt("session-a")
+        .respond_text("Response A")
+        .on_prompt("session-b")
+        .respond_text("Response B")
+        .on_prompt("session-c")
+        .respond_text("Response C");
 
     let handle = mock.into_handle();
 
@@ -171,7 +211,8 @@ async fn scenario_multiple_concurrent_sessions() {
 #[tokio::test]
 async fn scenario_cloned_handles_share_session_state() {
     let mock = MockBackend::new()
-        .on_prompt("test").respond_text("Shared response");
+        .on_prompt("test")
+        .respond_text("Shared response");
 
     let handle1 = mock.into_handle();
     let handle2 = handle1.clone();
@@ -184,7 +225,10 @@ async fn scenario_cloned_handles_share_session_state() {
     assert_eq!(handle2.tracked_session_count(), 1);
 
     // Use handle2 to send prompt to session created by handle1
-    let mut rx = handle2.prompt(&session_id, "test from handle2").await.unwrap();
+    let mut rx = handle2
+        .prompt(&session_id, "test from handle2")
+        .await
+        .unwrap();
     let event = rx.recv().await.unwrap();
 
     assert!(matches!(event, AgentEvent::Result { text, .. } if text.contains("Shared")));
@@ -201,9 +245,12 @@ async fn scenario_cloned_handles_share_session_state() {
 #[tokio::test]
 async fn scenario_mock_backend_fifo_ordering() {
     let mock = MockBackend::new()
-        .on_prompt("step").respond_text("First step")
-        .on_prompt("step").respond_text("Second step")
-        .on_prompt("step").respond_text("Third step");
+        .on_prompt("step")
+        .respond_text("First step")
+        .on_prompt("step")
+        .respond_text("Second step")
+        .on_prompt("step")
+        .respond_text("Third step");
 
     let handle = mock.into_handle();
     let session = handle.new_session().await.unwrap();
@@ -230,9 +277,12 @@ async fn scenario_mock_backend_fifo_ordering() {
 #[tokio::test]
 async fn scenario_mock_backend_fallback_matching() {
     let mock = MockBackend::new()
-        .on_prompt("alpha").respond_text("Alpha response")
-        .on_prompt("beta").respond_text("Beta response")
-        .on_prompt("gamma").respond_text("Gamma response");
+        .on_prompt("alpha")
+        .respond_text("Alpha response")
+        .on_prompt("beta")
+        .respond_text("Beta response")
+        .on_prompt("gamma")
+        .respond_text("Gamma response");
 
     let handle = mock.into_handle();
     let session = handle.new_session().await.unwrap();
@@ -263,18 +313,26 @@ async fn scenario_mock_backend_fallback_matching() {
 #[tokio::test]
 async fn scenario_mock_backend_unmatched_prompt() {
     let mock = MockBackend::new()
-        .on_prompt("specific").respond_text("Matched");
+        .on_prompt("specific")
+        .respond_text("Matched");
 
     let handle = mock.into_handle();
     let session = handle.new_session().await.unwrap();
 
     // Send a prompt that doesn't match
-    let mut rx = handle.prompt(&session, "completely different").await.unwrap();
+    let mut rx = handle
+        .prompt(&session, "completely different")
+        .await
+        .unwrap();
     let event = rx.recv().await.unwrap();
 
     // Should get a "no expectation" message
     if let AgentEvent::Result { text, .. } = event {
-        assert!(text.contains("no expectation"), "Should indicate no match found: {}", text);
+        assert!(
+            text.contains("no expectation"),
+            "Should indicate no match found: {}",
+            text
+        );
     } else {
         panic!("Expected Result event for unmatched prompt");
     }
@@ -286,31 +344,33 @@ async fn scenario_mock_backend_unmatched_prompt() {
 /// Then: All tool events are streamed in order
 #[tokio::test]
 async fn scenario_mock_backend_tool_events() {
-    let mock = MockBackend::new()
-        .on_prompt("read file").respond_with(vec![
-            AgentEvent::ToolStart {
-                id: "tool-1".to_string(),
-                name: "Read".to_string(),
-                input: serde_json::json!({"path": "/tmp/test.txt"}),
-            },
-            AgentEvent::ToolEnd {
-                id: "tool-1".to_string(),
-                name: "Read".to_string(),
-                output: serde_json::json!({"content": "file contents here"}),
-                success: true,
-                duration_ms: 42,
-            },
-            AgentEvent::Result {
-                text: "I read the file for you".to_string(),
-                usage: None,
-                metadata: serde_json::json!({}),
-            },
-        ]);
+    let mock = MockBackend::new().on_prompt("read file").respond_with(vec![
+        AgentEvent::ToolStart {
+            id: "tool-1".to_string(),
+            name: "Read".to_string(),
+            input: serde_json::json!({"path": "/tmp/test.txt"}),
+        },
+        AgentEvent::ToolEnd {
+            id: "tool-1".to_string(),
+            name: "Read".to_string(),
+            output: serde_json::json!({"content": "file contents here"}),
+            success: true,
+            duration_ms: 42,
+        },
+        AgentEvent::Result {
+            text: "I read the file for you".to_string(),
+            usage: None,
+            metadata: serde_json::json!({}),
+        },
+    ]);
 
     let handle = mock.into_handle();
     let session = handle.new_session().await.unwrap();
 
-    let mut rx = handle.prompt(&session, "please read file /tmp/test.txt").await.unwrap();
+    let mut rx = handle
+        .prompt(&session, "please read file /tmp/test.txt")
+        .await
+        .unwrap();
 
     // Collect all events
     let mut events = vec![];
@@ -322,7 +382,10 @@ async fn scenario_mock_backend_tool_events() {
 
     // Verify event order and types
     assert!(matches!(&events[0], AgentEvent::ToolStart { name, .. } if name == "Read"));
-    assert!(matches!(&events[1], AgentEvent::ToolEnd { success: true, .. }));
+    assert!(matches!(
+        &events[1],
+        AgentEvent::ToolEnd { success: true, .. }
+    ));
     assert!(matches!(&events[2], AgentEvent::Result { .. }));
 }
 
@@ -333,7 +396,8 @@ async fn scenario_mock_backend_tool_events() {
 #[tokio::test]
 async fn scenario_mock_backend_error_response() {
     let mock = MockBackend::new()
-        .on_prompt("fail").respond_error(ErrorCode::BackendError, "Simulated backend failure");
+        .on_prompt("fail")
+        .respond_error(ErrorCode::BackendError, "Simulated backend failure");
 
     let handle = mock.into_handle();
     let session = handle.new_session().await.unwrap();
@@ -341,7 +405,12 @@ async fn scenario_mock_backend_error_response() {
     let mut rx = handle.prompt(&session, "this should fail").await.unwrap();
     let event = rx.recv().await.unwrap();
 
-    if let AgentEvent::Error { code, message, recoverable } = event {
+    if let AgentEvent::Error {
+        code,
+        message,
+        recoverable,
+    } = event
+    {
         assert_eq!(code, ErrorCode::BackendError);
         assert!(message.contains("Simulated"));
         assert!(!recoverable);
@@ -357,32 +426,52 @@ async fn scenario_mock_backend_error_response() {
 #[tokio::test]
 async fn scenario_rapid_session_lifecycle() {
     let mock = MockBackend::new()
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong")
-        .on_prompt("ping").respond_text("pong");
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong")
+        .on_prompt("ping")
+        .respond_text("pong");
 
     let handle = mock.into_handle();
 
     // Rapidly create and use sessions
     for i in 0..10 {
         let session = handle.new_session().await.unwrap();
-        assert!(handle.tracked_session_count() <= 1, "At most 1 session tracked at a time");
+        assert!(
+            handle.tracked_session_count() <= 1,
+            "At most 1 session tracked at a time"
+        );
 
-        let mut rx = handle.prompt(&session, &format!("ping {}", i)).await.unwrap();
+        let mut rx = handle
+            .prompt(&session, &format!("ping {}", i))
+            .await
+            .unwrap();
         let event = rx.recv().await.unwrap();
 
         assert!(matches!(event, AgentEvent::Result { text, .. } if text.contains("pong")));
     }
 
     // All sessions should be cleaned up
-    assert_eq!(handle.tracked_session_count(), 0, "All sessions cleaned up after rapid usage");
+    assert_eq!(
+        handle.tracked_session_count(),
+        0,
+        "All sessions cleaned up after rapid usage"
+    );
 }
 
 /// Scenario: Backend name is correctly reported
@@ -394,7 +483,11 @@ async fn scenario_backend_name_identification() {
     let mock = MockBackend::new();
     let handle = mock.into_handle();
 
-    assert_eq!(handle.name(), "mock", "Mock backend should identify as 'mock'");
+    assert_eq!(
+        handle.name(),
+        "mock",
+        "Mock backend should identify as 'mock'"
+    );
 }
 
 /// Scenario: Empty session ID handling
@@ -403,8 +496,7 @@ async fn scenario_backend_name_identification() {
 /// Then: Operations should handle gracefully (no panic)
 #[tokio::test]
 async fn scenario_empty_session_id_handling() {
-    let mock = MockBackend::new()
-        .on_prompt("test").respond_text("OK");
+    let mock = MockBackend::new().on_prompt("test").respond_text("OK");
 
     let handle = mock.into_handle();
 
@@ -416,7 +508,10 @@ async fn scenario_empty_session_id_handling() {
     let mut rx = handle.prompt("", "test").await.unwrap();
     let event = rx.recv().await.unwrap();
 
-    assert!(matches!(event, AgentEvent::Result { .. }), "Should still get response");
+    assert!(
+        matches!(event, AgentEvent::Result { .. }),
+        "Should still get response"
+    );
 
     // Abandon empty session ID
     handle.abandon_session(""); // Should not panic

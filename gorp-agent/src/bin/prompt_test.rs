@@ -99,7 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let min_args = if config_path.is_some() { 2 } else { 3 };
 
     if remaining_args.len() < min_args {
-        eprintln!("Usage: {} [--config <file>] <backend> <session-id> <prompt>", args[0]);
+        eprintln!(
+            "Usage: {} [--config <file>] <backend> <session-id> <prompt>",
+            args[0]
+        );
         eprintln!("       {} --config <file> <session-id> <prompt>", args[0]);
         eprintln!();
         eprintln!("Backends (when not using --config):");
@@ -171,7 +174,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[tool: {}]", name);
             }
             AgentEvent::ToolEnd { name, success, .. } => {
-                eprintln!("[tool {} done: {}]", name, if success { "ok" } else { "fail" });
+                eprintln!(
+                    "[tool {} done: {}]",
+                    name,
+                    if success { "ok" } else { "fail" }
+                );
             }
             AgentEvent::Result { usage, .. } => {
                 println!();

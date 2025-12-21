@@ -3,8 +3,8 @@
 
 use crate::event::{AgentEvent, ErrorCode};
 use crate::handle::{AgentHandle, Command};
-use agent_client_protocol as acp;
 use acp::Agent as _;
+use agent_client_protocol as acp;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -64,7 +64,10 @@ struct AcpClientHandler {
 }
 
 impl AcpClientHandler {
-    fn new(event_tx: Arc<std::sync::RwLock<mpsc::Sender<AgentEvent>>>, working_dir: PathBuf) -> Self {
+    fn new(
+        event_tx: Arc<std::sync::RwLock<mpsc::Sender<AgentEvent>>>,
+        working_dir: PathBuf,
+    ) -> Self {
         Self {
             event_tx,
             working_dir,
@@ -482,10 +485,14 @@ impl PersistentAcpClient {
         // Clone handler for the connection (it implements Client)
         let handler_for_conn = HandlerWrapper(Arc::clone(&handler));
 
-        let (conn, handle_io) =
-            acp::ClientSideConnection::new(handler_for_conn, stdin.compat_write(), stdout.compat(), |fut| {
+        let (conn, handle_io) = acp::ClientSideConnection::new(
+            handler_for_conn,
+            stdin.compat_write(),
+            stdout.compat(),
+            |fut| {
                 tokio::task::spawn_local(fut);
-            });
+            },
+        );
 
         tokio::task::spawn_local(handle_io);
 
@@ -681,10 +688,7 @@ impl acp::Client for HandlerWrapper {
 }
 
 /// Run the persistent ACP worker on a dedicated thread
-fn run_persistent_worker(
-    config: AcpConfig,
-    mut cmd_rx: mpsc::Receiver<WorkerCommand>,
-) {
+fn run_persistent_worker(config: AcpConfig, mut cmd_rx: mpsc::Receiver<WorkerCommand>) {
     // Create a new runtime for this thread
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -699,71 +703,79 @@ fn run_persistent_worker(
 
     rt.block_on(async {
         let local = tokio::task::LocalSet::new();
-        local.run_until(async {
-            let env_vars: HashMap<String, String> = std::env::vars().collect();
+        local
+            .run_until(async {
+                let env_vars: HashMap<String, String> = std::env::vars().collect();
 
-            // Create a dummy channel for initial spawn - will be replaced on first prompt
-            let (dummy_tx, _dummy_rx) = mpsc::channel(1);
+                // Create a dummy channel for initial spawn - will be replaced on first prompt
+                let (dummy_tx, _dummy_rx) = mpsc::channel(1);
 
-            // Spawn the ACP client
-            let mut client = match PersistentAcpClient::spawn(
-                &config.working_dir,
-                &config.binary,
-                &config.extra_args,
-                dummy_tx,
-                &env_vars,
-            ).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to spawn persistent ACP client");
+                // Spawn the ACP client
+                let mut client = match PersistentAcpClient::spawn(
+                    &config.working_dir,
+                    &config.binary,
+                    &config.extra_args,
+                    dummy_tx,
+                    &env_vars,
+                )
+                .await
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to spawn persistent ACP client");
+                        return;
+                    }
+                };
+
+                // Initialize the connection
+                if let Err(e) = client.initialize().await {
+                    tracing::error!(error = %e, "Failed to initialize ACP connection");
                     return;
                 }
-            };
 
-            // Initialize the connection
-            if let Err(e) = client.initialize().await {
-                tracing::error!(error = %e, "Failed to initialize ACP connection");
-                return;
-            }
+                tracing::info!("Persistent ACP worker started");
 
-            tracing::info!("Persistent ACP worker started");
-
-            // Process commands
-            while let Some(cmd) = cmd_rx.recv().await {
-                match cmd {
-                    WorkerCommand::NewSession { reply } => {
-                        let result = client.new_session().await;
-                        let _ = reply.send(result.map_err(|e| e.to_string()));
-                    }
-                    WorkerCommand::LoadSession { session_id, reply } => {
-                        let result = client.load_session(&session_id).await;
-                        let _ = reply.send(result.map_err(|e| e.to_string()));
-                    }
-                    WorkerCommand::Prompt { session_id, text, event_tx } => {
-                        // Update the event channel for this prompt
-                        client.update_event_tx(event_tx);
-
-                        // Send the prompt
-                        if let Err(e) = client.prompt(&session_id, &text).await {
-                            tracing::error!(error = %e, "Prompt failed");
+                // Process commands
+                while let Some(cmd) = cmd_rx.recv().await {
+                    match cmd {
+                        WorkerCommand::NewSession { reply } => {
+                            let result = client.new_session().await;
+                            let _ = reply.send(result.map_err(|e| e.to_string()));
                         }
-
-                        // Close the event channel to signal that this prompt is complete.
-                        // This causes the receiver's recv() to return None.
-                        client.close_event_channel();
-                    }
-                    WorkerCommand::Cancel { session_id } => {
-                        if let Err(e) = client.cancel(&session_id).await {
-                            tracing::warn!(error = %e, "Cancel failed");
+                        WorkerCommand::LoadSession { session_id, reply } => {
+                            let result = client.load_session(&session_id).await;
+                            let _ = reply.send(result.map_err(|e| e.to_string()));
                         }
-                    }
-                    WorkerCommand::Shutdown => {
-                        tracing::info!("ACP worker shutting down");
-                        break;
+                        WorkerCommand::Prompt {
+                            session_id,
+                            text,
+                            event_tx,
+                        } => {
+                            // Update the event channel for this prompt
+                            client.update_event_tx(event_tx);
+
+                            // Send the prompt
+                            if let Err(e) = client.prompt(&session_id, &text).await {
+                                tracing::error!(error = %e, "Prompt failed");
+                            }
+
+                            // Close the event channel to signal that this prompt is complete.
+                            // This causes the receiver's recv() to return None.
+                            client.close_event_channel();
+                        }
+                        WorkerCommand::Cancel { session_id } => {
+                            if let Err(e) = client.cancel(&session_id).await {
+                                tracing::warn!(error = %e, "Cancel failed");
+                            }
+                        }
+                        WorkerCommand::Shutdown => {
+                            tracing::info!("ACP worker shutting down");
+                            break;
+                        }
                     }
                 }
-            }
-        }).await;
+            })
+            .await;
     });
 }
 
@@ -799,7 +811,11 @@ impl AcpBackend {
                     Command::NewSession { reply } => {
                         // Create a new session via the worker
                         let (tx, rx) = oneshot::channel();
-                        if worker_tx_clone.send(WorkerCommand::NewSession { reply: tx }).await.is_err() {
+                        if worker_tx_clone
+                            .send(WorkerCommand::NewSession { reply: tx })
+                            .await
+                            .is_err()
+                        {
                             let _ = reply.send(Err(anyhow::anyhow!("Worker channel closed")));
                             continue;
                         }
@@ -818,10 +834,14 @@ impl AcpBackend {
                     Command::LoadSession { session_id, reply } => {
                         // Load an existing session
                         let (tx, rx) = oneshot::channel();
-                        if worker_tx_clone.send(WorkerCommand::LoadSession {
-                            session_id: session_id.clone(),
-                            reply: tx
-                        }).await.is_err() {
+                        if worker_tx_clone
+                            .send(WorkerCommand::LoadSession {
+                                session_id: session_id.clone(),
+                                reply: tx,
+                            })
+                            .await
+                            .is_err()
+                        {
                             let _ = reply.send(Err(anyhow::anyhow!("Worker channel closed")));
                             continue;
                         }
@@ -848,16 +868,24 @@ impl AcpBackend {
                         let _ = reply.send(Ok(()));
 
                         // Send prompt to worker
-                        if worker_tx_clone.send(WorkerCommand::Prompt {
-                            session_id,
-                            text,
-                            event_tx,
-                        }).await.is_err() {
+                        if worker_tx_clone
+                            .send(WorkerCommand::Prompt {
+                                session_id,
+                                text,
+                                event_tx,
+                            })
+                            .await
+                            .is_err()
+                        {
                             tracing::error!("Failed to send prompt to worker");
                         }
                     }
                     Command::Cancel { session_id, reply } => {
-                        if worker_tx_clone.send(WorkerCommand::Cancel { session_id }).await.is_err() {
+                        if worker_tx_clone
+                            .send(WorkerCommand::Cancel { session_id })
+                            .await
+                            .is_err()
+                        {
                             tracing::warn!("Failed to send cancel to worker");
                         }
                         let _ = reply.send(Ok(()));

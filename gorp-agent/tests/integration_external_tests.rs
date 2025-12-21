@@ -98,14 +98,19 @@ async fn integration_claude_cli_simple_prompt() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     let events = collect_events_with_timeout(&handle, &session, "Reply with exactly: PONG", 60)
         .await
         .expect("Failed to collect events");
 
     // Should have at least one Result event
-    let has_result = events.iter().any(|e| matches!(e, AgentEvent::Result { .. }));
+    let has_result = events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Result { .. }));
     assert!(has_result, "Expected Result event, got: {:?}", events);
 
     // Result should contain some text
@@ -138,7 +143,10 @@ async fn integration_claude_cli_reports_usage() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     let events = collect_events_with_timeout(&handle, &session, "Say hello briefly", 60)
         .await
@@ -151,8 +159,14 @@ async fn integration_claude_cli_reports_usage() {
     });
 
     if let Some(u) = usage {
-        println!("Usage: input={}, output={}", u.input_tokens, u.output_tokens);
-        assert!(u.input_tokens > 0 || u.output_tokens > 0, "Expected some token usage");
+        println!(
+            "Usage: input={}, output={}",
+            u.input_tokens, u.output_tokens
+        );
+        assert!(
+            u.input_tokens > 0 || u.output_tokens > 0,
+            "Expected some token usage"
+        );
     } else {
         println!("Warning: No usage stats in response (may be expected for some configurations)");
     }
@@ -178,7 +192,10 @@ async fn integration_tool_invocation_read() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     // Ask Claude to read Cargo.toml which should exist
     let events = collect_events_with_timeout(
@@ -196,14 +213,22 @@ async fn integration_tool_invocation_read() {
         _ => false,
     });
 
-    println!("Events received: {:?}", events.iter().map(|e| match e {
-        AgentEvent::ToolStart { name, .. } => format!("ToolStart({})", name),
-        AgentEvent::ToolEnd { name, success, .. } => format!("ToolEnd({}, success={})", name, success),
-        AgentEvent::Text(t) => format!("Text({}...)", &t[..t.len().min(20)]),
-        AgentEvent::Result { text, .. } => format!("Result({}...)", &text[..text.len().min(30)]),
-        AgentEvent::Error { message, .. } => format!("Error({})", message),
-        _ => format!("{:?}", e),
-    }).collect::<Vec<_>>());
+    println!(
+        "Events received: {:?}",
+        events
+            .iter()
+            .map(|e| match e {
+                AgentEvent::ToolStart { name, .. } => format!("ToolStart({})", name),
+                AgentEvent::ToolEnd { name, success, .. } =>
+                    format!("ToolEnd({}, success={})", name, success),
+                AgentEvent::Text(t) => format!("Text({}...)", &t[..t.len().min(20)]),
+                AgentEvent::Result { text, .. } =>
+                    format!("Result({}...)", &text[..text.len().min(30)]),
+                AgentEvent::Error { message, .. } => format!("Error({})", message),
+                _ => format!("{:?}", e),
+            })
+            .collect::<Vec<_>>()
+    );
 
     assert!(has_read_tool, "Expected Read tool to be invoked");
 }
@@ -224,7 +249,10 @@ async fn integration_tool_invocation_bash() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     let events = collect_events_with_timeout(
         &handle,
@@ -284,7 +312,10 @@ async fn integration_mcp_tool_invocation() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     // This prompt asks Claude to list MCP tools - if any are configured, it will show them
     let events = collect_events_with_timeout(
@@ -306,14 +337,18 @@ async fn integration_mcp_tool_invocation() {
         .collect();
 
     if mcp_tools.is_empty() {
-        println!("No MCP tools were invoked - this may be expected if no MCP servers are configured");
+        println!(
+            "No MCP tools were invoked - this may be expected if no MCP servers are configured"
+        );
         println!("Configure MCP servers with: claude mcp add <server-name>");
     } else {
         println!("MCP tools invoked: {:?}", mcp_tools);
     }
 
     // Test passes either way - we're validating the infrastructure handles MCP events
-    let has_result = events.iter().any(|e| matches!(e, AgentEvent::Result { .. }));
+    let has_result = events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Result { .. }));
     assert!(has_result, "Expected at least a Result event");
 }
 
@@ -333,7 +368,10 @@ async fn integration_mcp_memory_server() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     // Generate a unique marker
     let marker = format!("TEST_MARKER_{}", uuid::Uuid::new_v4());
@@ -388,7 +426,10 @@ async fn integration_websearch_tool() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     // Ask something that requires web search
     let events = collect_events_with_timeout(
@@ -405,7 +446,8 @@ async fn integration_websearch_tool() {
         .iter()
         .filter_map(|e| match e {
             AgentEvent::ToolStart { name, .. }
-                if name.to_lowercase().contains("search") || name.to_lowercase().contains("web") =>
+                if name.to_lowercase().contains("search")
+                    || name.to_lowercase().contains("web") =>
             {
                 Some(name.clone())
             }
@@ -421,7 +463,9 @@ async fn integration_websearch_tool() {
     }
 
     // Should still get a result
-    let has_result = events.iter().any(|e| matches!(e, AgentEvent::Result { .. }));
+    let has_result = events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Result { .. }));
     assert!(has_result, "Expected Result event");
 }
 
@@ -445,14 +489,20 @@ async fn integration_multi_turn_context() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let initial_session = handle.new_session().await.expect("Failed to create session");
+    let initial_session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     // First turn: establish a fact and capture the real session ID
     let magic_number = 42;
     let (events1, real_session_id) = collect_events_with_session(
         &handle,
         &initial_session,
-        &format!("Remember this number for our conversation: {}", magic_number),
+        &format!(
+            "Remember this number for our conversation: {}",
+            magic_number
+        ),
         60,
     )
     .await
@@ -506,7 +556,10 @@ async fn integration_session_resume() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let initial_session = handle.new_session().await.expect("Failed to create session");
+    let initial_session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
     // Establish a persona and capture real session ID
     let (_events1, real_session_id) = collect_events_with_session(
@@ -522,14 +575,10 @@ async fn integration_session_resume() {
     let session = real_session_id.unwrap_or(initial_session);
 
     // Ask something - should maintain persona
-    let events2 = collect_events_with_timeout(
-        &handle,
-        &session,
-        "What is your name and profession?",
-        60,
-    )
-    .await
-    .expect("Second prompt failed");
+    let events2 =
+        collect_events_with_timeout(&handle, &session, "What is your name and profession?", 60)
+            .await
+            .expect("Second prompt failed");
 
     let result_text: String = events2
         .iter()
@@ -623,13 +672,12 @@ async fn integration_rapid_prompts() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let initial_session = handle.new_session().await.expect("Failed to create session");
+    let initial_session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
-    let prompts = vec![
-        "Count: 1",
-        "Count: 2",
-        "Count: 3",
-    ];
+    let prompts = vec!["Count: 1", "Count: 2", "Count: 3"];
 
     let mut session = initial_session;
 
@@ -643,7 +691,9 @@ async fn integration_rapid_prompts() {
             session = new_id;
         }
 
-        let has_result = events.iter().any(|e| matches!(e, AgentEvent::Result { .. }));
+        let has_result = events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Result { .. }));
         assert!(has_result, "Prompt {} should get result", i + 1);
         println!("Prompt {} completed with {} events", i + 1, events.len());
     }

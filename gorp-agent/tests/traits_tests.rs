@@ -1,7 +1,7 @@
-use gorp_agent::traits::AgentBackend;
-use gorp_agent::AgentEvent;
 use anyhow::Result;
 use futures::stream::BoxStream;
+use gorp_agent::traits::AgentBackend;
+use gorp_agent::AgentEvent;
 
 // Test that a simple mock can implement the trait
 struct TestBackend;
@@ -15,7 +15,10 @@ impl AgentBackend for TestBackend {
         Box::pin(async { Ok("session-1".to_string()) })
     }
 
-    fn load_session<'a>(&'a self, _session_id: &'a str) -> futures::future::BoxFuture<'a, Result<()>> {
+    fn load_session<'a>(
+        &'a self,
+        _session_id: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<()>> {
         Box::pin(async { Ok(()) })
     }
 

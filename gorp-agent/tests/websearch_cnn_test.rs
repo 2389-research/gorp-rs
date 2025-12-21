@@ -54,9 +54,13 @@ async fn test_websearch_cnn_direct_cli() {
     let backend = DirectCliBackend::new(config).expect("Failed to create backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
-    let prompt = "Use web search to check CNN.com and tell me the top 3 headlines you find. Be brief.";
+    let prompt =
+        "Use web search to check CNN.com and tell me the top 3 headlines you find. Be brief.";
 
     println!("Prompt: {}", prompt);
     println!("Waiting for response...\n");
@@ -161,9 +165,13 @@ async fn run_acp_websearch_test(binary_name: &str, display_name: &str) {
     let backend = AcpBackend::new(config).expect("Failed to create ACP backend");
     let handle = backend.into_handle();
 
-    let session = handle.new_session().await.expect("Failed to create session");
+    let session = handle
+        .new_session()
+        .await
+        .expect("Failed to create session");
 
-    let prompt = "Use web search to check CNN.com and tell me the top 3 headlines you find. Be brief.";
+    let prompt =
+        "Use web search to check CNN.com and tell me the top 3 headlines you find. Be brief.";
 
     println!("Prompt: {}", prompt);
     println!("Waiting for response...\n");

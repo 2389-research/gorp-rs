@@ -40,7 +40,9 @@ impl Config {
     /// Searches: ./gorp-agent.toml, ~/.config/gorp/agent.toml
     pub fn find_and_load() -> Result<Option<Self>> {
         let candidates = [
-            std::env::current_dir().ok().map(|p| p.join("gorp-agent.toml")),
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.join("gorp-agent.toml")),
             dirs_next().map(|p| p.join("gorp/agent.toml")),
         ];
 

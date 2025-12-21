@@ -22,27 +22,25 @@ async fn test_mock_backend_returns_configured_text_response() {
 
 #[tokio::test]
 async fn test_mock_backend_tool_response() {
-    let mock = MockBackend::new()
-        .on_prompt("read file")
-        .respond_with(vec![
-            AgentEvent::ToolStart {
-                id: "t1".to_string(),
-                name: "Read".to_string(),
-                input: json!({"path": "/tmp/foo"}),
-            },
-            AgentEvent::ToolEnd {
-                id: "t1".to_string(),
-                name: "Read".to_string(),
-                output: json!({"content": "file contents"}),
-                success: true,
-                duration_ms: 10,
-            },
-            AgentEvent::Result {
-                text: "Read the file".to_string(),
-                usage: None,
-                metadata: json!({}),
-            },
-        ]);
+    let mock = MockBackend::new().on_prompt("read file").respond_with(vec![
+        AgentEvent::ToolStart {
+            id: "t1".to_string(),
+            name: "Read".to_string(),
+            input: json!({"path": "/tmp/foo"}),
+        },
+        AgentEvent::ToolEnd {
+            id: "t1".to_string(),
+            name: "Read".to_string(),
+            output: json!({"content": "file contents"}),
+            success: true,
+            duration_ms: 10,
+        },
+        AgentEvent::Result {
+            text: "Read the file".to_string(),
+            usage: None,
+            metadata: json!({}),
+        },
+    ]);
 
     let handle = mock.into_handle();
     let session_id = handle.new_session().await.unwrap();
@@ -55,7 +53,10 @@ async fn test_mock_backend_tool_response() {
 
     assert_eq!(events.len(), 3);
     assert!(matches!(&events[0], AgentEvent::ToolStart { name, .. } if name == "Read"));
-    assert!(matches!(&events[1], AgentEvent::ToolEnd { success: true, .. }));
+    assert!(matches!(
+        &events[1],
+        AgentEvent::ToolEnd { success: true, .. }
+    ));
     assert!(matches!(&events[2], AgentEvent::Result { .. }));
 }
 
@@ -117,7 +118,10 @@ async fn test_mock_backend_partial_match() {
     let session_id = handle.new_session().await.unwrap();
 
     // Should match prompts containing "read"
-    let mut receiver = handle.prompt(&session_id, "please read the file").await.unwrap();
+    let mut receiver = handle
+        .prompt(&session_id, "please read the file")
+        .await
+        .unwrap();
     let event = receiver.recv().await.unwrap();
     match event {
         AgentEvent::Result { text, .. } => assert_eq!(text, "Reading..."),
@@ -135,7 +139,10 @@ async fn test_mock_backend_unmatched_prompt() {
     let session_id = handle.new_session().await.unwrap();
 
     // Prompt that doesn't match any expectation
-    let mut receiver = handle.prompt(&session_id, "completely different").await.unwrap();
+    let mut receiver = handle
+        .prompt(&session_id, "completely different")
+        .await
+        .unwrap();
     let event = receiver.recv().await.unwrap();
     match event {
         AgentEvent::Result { text, .. } => {
@@ -164,17 +171,15 @@ async fn test_mock_backend_session_management() {
 
 #[tokio::test]
 async fn test_mock_backend_streaming_text() {
-    let mock = MockBackend::new()
-        .on_prompt("stream")
-        .respond_with(vec![
-            AgentEvent::Text("Hello ".to_string()),
-            AgentEvent::Text("world!".to_string()),
-            AgentEvent::Result {
-                text: "Hello world!".to_string(),
-                usage: None,
-                metadata: json!({}),
-            },
-        ]);
+    let mock = MockBackend::new().on_prompt("stream").respond_with(vec![
+        AgentEvent::Text("Hello ".to_string()),
+        AgentEvent::Text("world!".to_string()),
+        AgentEvent::Result {
+            text: "Hello world!".to_string(),
+            usage: None,
+            metadata: json!({}),
+        },
+    ]);
 
     let handle = mock.into_handle();
     let session_id = handle.new_session().await.unwrap();
