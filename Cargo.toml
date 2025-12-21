@@ -32,7 +32,7 @@ askama = "0.14"
 tower-sessions = { version = "0.13", features = ["memory-store"] }
 mime_guess = "2.0"
 metrics = "0.24"
-metrics-exporter-prometheus = "0.16"
+metrics-exporter-prometheus = "0.18"
 agent-client-protocol = "0.9"
 tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
