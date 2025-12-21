@@ -44,6 +44,12 @@ impl AgentRegistry {
     pub fn available(&self) -> Vec<&str> {
         self.factories.keys().map(|s| s.as_str()).collect()
     }
+
+    /// Create a backend from a BackendConfig
+    pub fn create_from_config(&self, config: &crate::config::BackendConfig) -> Result<AgentHandle> {
+        let json_config = config.to_json_value();
+        self.create(config.backend_type(), &json_config)
+    }
 }
 
 impl Default for AgentRegistry {

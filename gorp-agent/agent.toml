@@ -1,0 +1,6 @@
+[backend]
+type = "acp"
+binary = "claude-code-acp"
+timeout_secs = 300
+working_dir = "."
+extra_args = []
