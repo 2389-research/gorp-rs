@@ -118,8 +118,12 @@ cmd_update() {
             continue
         fi
 
-        echo "gorp-$num: updating..."
-        (cd "$dir" && docker compose up -d --force-recreate)
+        echo "gorp-$num: stopping..."
+        (cd "$dir" && docker compose down --remove-orphans)
+        # Force remove container in case it was created by different compose context
+        docker rm -f "gorp-$num" 2>/dev/null || true
+        echo "gorp-$num: starting with new image..."
+        (cd "$dir" && docker compose up -d)
     done
 }
 
