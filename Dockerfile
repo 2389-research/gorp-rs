@@ -9,6 +9,9 @@ WORKDIR /app
 # Copy manifests first (changes rarely)
 COPY Cargo.toml Cargo.lock ./
 
+# Copy gorp-agent crate (local path dependency)
+COPY gorp-agent ./gorp-agent
+
 # Create dummy source to build dependencies only
 RUN mkdir src && \
     echo 'fn main() { println!("dummy"); }' > src/main.rs && \
