@@ -791,7 +791,8 @@ async fn run_start() -> Result<()> {
             .backend
             .binary
             .clone()
-            .unwrap_or_else(|| "claude-code-acp".to_string()),
+            .unwrap_or_else(|| "claude".to_string()),
+        backend_type: config.backend.backend_type.clone(),
     };
     let warm_manager = create_shared_manager(warm_config);
 

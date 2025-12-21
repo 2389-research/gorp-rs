@@ -15,6 +15,8 @@ pub struct WarmConfig {
     pub keep_alive_duration: Duration,
     pub pre_warm_lead_time: Duration,
     pub agent_binary: String,
+    /// Backend type: "acp", "direct", "mock"
+    pub backend_type: String,
 }
 
 /// A warm session holding an active AgentHandle
@@ -135,13 +137,12 @@ impl WarmSessionManager {
     /// Create an AgentHandle using the registry
     /// This is synchronous and fast
     fn create_agent_handle(&self, working_dir: &str) -> Result<AgentHandle> {
-        // Use ACP backend by default (matches previous behavior)
         let config = serde_json::json!({
             "working_dir": working_dir,
             "binary": self.config.agent_binary,
         });
 
-        self.registry.create("acp", &config)
+        self.registry.create(&self.config.backend_type, &config)
     }
 
     /// Create agent handle with explicit config (for use outside lock)
@@ -149,12 +150,13 @@ impl WarmSessionManager {
         registry: &AgentRegistry,
         working_dir: &str,
         agent_binary: &str,
+        backend_type: &str,
     ) -> Result<AgentHandle> {
         let config = serde_json::json!({
             "working_dir": working_dir,
             "binary": agent_binary,
         });
-        registry.create("acp", &config)
+        registry.create(backend_type, &config)
     }
 
     /// Get a clone of the registry for use outside the lock
@@ -380,9 +382,10 @@ pub async fn prepare_session_async(
     tracing::info!(channel = %channel_name, "Creating new agent handle (async, outside lock)");
 
     // Get config values we need (quick read lock)
-    let (agent_binary, registry) = {
+    let (agent_binary, backend_type, registry) = {
         let mgr = manager.read().await;
-        (mgr.config().agent_binary, mgr.registry())
+        let cfg = mgr.config();
+        (cfg.agent_binary, cfg.backend_type, mgr.registry())
     };
 
     // Use absolute path for working directory
@@ -395,7 +398,7 @@ pub async fn prepare_session_async(
 
     // Create agent handle (synchronous, fast)
     let agent_handle =
-        WarmSessionManager::create_agent_handle_with_config(&registry, &working_dir_str, &agent_binary)?;
+        WarmSessionManager::create_agent_handle_with_config(&registry, &working_dir_str, &agent_binary, &backend_type)?;
 
     // Step 3: Do slow async session creation OUTSIDE the lock
     let (session_id, is_new) = if channel.started && !channel.session_id.is_empty() {
@@ -448,10 +451,11 @@ mod tests {
         let config = WarmConfig {
             keep_alive_duration: Duration::from_secs(3600),
             pre_warm_lead_time: Duration::from_secs(300),
-            agent_binary: "claude-code-acp".to_string(),
+            agent_binary: "claude".to_string(),
+            backend_type: "acp".to_string(),
         };
         let manager = WarmSessionManager::new(config);
-        assert_eq!(manager.agent_binary(), "claude-code-acp");
+        assert_eq!(manager.agent_binary(), "claude");
         assert_eq!(manager.keep_alive_duration(), Duration::from_secs(3600));
     }
 
@@ -460,7 +464,8 @@ mod tests {
         let config = WarmConfig {
             keep_alive_duration: Duration::from_secs(2), // 2 seconds for test
             pre_warm_lead_time: Duration::from_secs(300),
-            agent_binary: "claude-code-acp".to_string(),
+            agent_binary: "claude".to_string(),
+            backend_type: "acp".to_string(),
         };
         let mut manager = WarmSessionManager::new(config);
 
@@ -497,7 +502,8 @@ mod tests {
         let config = WarmConfig {
             keep_alive_duration: Duration::from_secs(1),
             pre_warm_lead_time: Duration::from_secs(300),
-            agent_binary: "claude-code-acp".to_string(),
+            agent_binary: "claude".to_string(),
+            backend_type: "acp".to_string(),
         };
         let mut manager = WarmSessionManager::new(config);
 
@@ -511,7 +517,8 @@ mod tests {
         let config = WarmConfig {
             keep_alive_duration: Duration::from_secs(10), // 10 seconds
             pre_warm_lead_time: Duration::from_secs(300),
-            agent_binary: "claude-code-acp".to_string(),
+            agent_binary: "claude".to_string(),
+            backend_type: "acp".to_string(),
         };
         let mut manager = WarmSessionManager::new(config);
 
