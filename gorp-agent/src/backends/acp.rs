@@ -1,5 +1,5 @@
 // ABOUTME: ACP protocol backend - communicates with claude-code-acp or codex-acp.
-// ABOUTME: Wraps agent-client-protocol crate, handles !Send futures via worker task.
+// ABOUTME: Keeps ACP process alive across prompts for session persistence.
 
 use crate::event::{AgentEvent, ErrorCode};
 use crate::handle::{AgentHandle, Command};
@@ -9,11 +9,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::thread;
 use tokio::process::{Child, Command as ProcessCommand};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Configuration for the ACP backend
@@ -26,10 +25,33 @@ pub struct AcpConfig {
     pub timeout_secs: u64,
     /// Working directory for the agent
     pub working_dir: PathBuf,
+    /// Extra CLI arguments to pass to the ACP binary
+    #[serde(default)]
+    pub extra_args: Vec<String>,
 }
 
 fn default_timeout() -> u64 {
     300 // 5 minutes
+}
+
+/// Commands sent to the persistent ACP worker thread
+enum WorkerCommand {
+    NewSession {
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    LoadSession {
+        session_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Prompt {
+        session_id: String,
+        text: String,
+        event_tx: mpsc::Sender<AgentEvent>,
+    },
+    Cancel {
+        session_id: String,
+    },
+    Shutdown,
 }
 
 /// Handler for ACP client-side callbacks
@@ -37,6 +59,8 @@ fn default_timeout() -> u64 {
 struct AcpClientHandler {
     event_tx: Arc<std::sync::RwLock<mpsc::Sender<AgentEvent>>>,
     working_dir: PathBuf,
+    /// Buffer for accumulating text to parse **status** patterns across chunks
+    text_buffer: std::sync::Mutex<String>,
 }
 
 impl AcpClientHandler {
@@ -44,11 +68,26 @@ impl AcpClientHandler {
         Self {
             event_tx,
             working_dir,
+            text_buffer: std::sync::Mutex::new(String::new()),
         }
     }
 
+    fn update_event_tx(&self, new_tx: mpsc::Sender<AgentEvent>) {
+        let mut tx = self.event_tx.write().expect("event_tx lock poisoned");
+        *tx = new_tx;
+    }
+
+    /// Create a new dummy sender and drop the old one to close the channel.
+    /// This signals to the receiver that no more events are coming.
+    fn close_event_channel(&self) {
+        let (dummy_tx, _dummy_rx) = mpsc::channel(1);
+        let mut tx = self.event_tx.write().expect("event_tx lock poisoned");
+        *tx = dummy_tx;
+        // Old tx is dropped here, closing the channel for the receiver
+    }
+
     fn send_event(&self, event: AgentEvent) {
-        let tx = self.event_tx.read().unwrap();
+        let tx = self.event_tx.read().expect("event_tx lock poisoned");
         if let Err(e) = tx.try_send(event) {
             match e {
                 mpsc::error::TrySendError::Full(dropped_event) => {
@@ -61,6 +100,94 @@ impl AcpClientHandler {
                     tracing::debug!("Event channel closed, receiver dropped");
                 }
             }
+        }
+    }
+
+    /// Buffer text and parse **status** patterns (used by codex).
+    /// Emits complete patterns immediately, buffers incomplete ones.
+    fn buffer_and_parse_text(&self, text: &str) {
+        let mut buffer = self.text_buffer.lock().expect("text_buffer lock poisoned");
+        buffer.push_str(text);
+
+        // Process complete **...** patterns from the buffer
+        loop {
+            if let Some(start) = buffer.find("**") {
+                // Look for closing **
+                let after_start = &buffer[start + 2..];
+                if let Some(end) = after_start.find("**") {
+                    // Found complete pattern
+                    // Emit any text before the **
+                    let before = &buffer[..start];
+                    if !before.is_empty() {
+                        self.send_event(AgentEvent::Text(before.to_string()));
+                    }
+
+                    // Emit the status as a Custom "thinking" event
+                    let status_text = &after_start[..end];
+                    self.send_event(AgentEvent::Custom {
+                        kind: "thinking".to_string(),
+                        payload: serde_json::json!({ "status": status_text }),
+                    });
+
+                    // Remove processed text from buffer
+                    let consumed = start + 2 + end + 2;
+                    *buffer = buffer[consumed..].to_string();
+                } else {
+                    // Have opening ** but no closing yet - keep buffering
+                    // But emit any text before the ** to avoid buffering too much
+                    if start > 0 {
+                        let before = buffer[..start].to_string();
+                        self.send_event(AgentEvent::Text(before));
+                        *buffer = buffer[start..].to_string();
+                    }
+                    break;
+                }
+            } else {
+                // No ** pattern found
+                // Check if buffer ends with a single * (might be start of **)
+                if buffer.ends_with('*') && buffer.len() > 1 {
+                    // Keep the trailing * in buffer, emit the rest
+                    let emit_len = buffer.len() - 1;
+                    if emit_len > 0 {
+                        let to_emit = buffer[..emit_len].to_string();
+                        self.send_event(AgentEvent::Text(to_emit));
+                        *buffer = buffer[emit_len..].to_string();
+                    }
+                } else if !buffer.is_empty() && !buffer.contains('*') {
+                    // No asterisks at all, safe to emit everything
+                    let to_emit = std::mem::take(&mut *buffer);
+                    self.send_event(AgentEvent::Text(to_emit));
+                }
+                break;
+            }
+        }
+    }
+
+    /// Flush any remaining buffered text (call when message is complete)
+    fn flush_text_buffer(&self) {
+        let mut buffer = self.text_buffer.lock().expect("text_buffer lock poisoned");
+        if !buffer.is_empty() {
+            let remaining = std::mem::take(&mut *buffer);
+            // Try one more parse in case we have a complete pattern
+            if let Some(start) = remaining.find("**") {
+                let after_start = &remaining[start + 2..];
+                if let Some(end) = after_start.find("**") {
+                    if start > 0 {
+                        self.send_event(AgentEvent::Text(remaining[..start].to_string()));
+                    }
+                    self.send_event(AgentEvent::Custom {
+                        kind: "thinking".to_string(),
+                        payload: serde_json::json!({ "status": &after_start[..end] }),
+                    });
+                    let after = &after_start[end + 2..];
+                    if !after.is_empty() {
+                        self.send_event(AgentEvent::Text(after.to_string()));
+                    }
+                    return;
+                }
+            }
+            // No complete pattern, emit as text
+            self.send_event(AgentEvent::Text(remaining));
         }
     }
 }
@@ -110,10 +237,13 @@ impl acp::Client for AcpClientHandler {
                     _ => String::new(),
                 };
                 if !text.is_empty() {
-                    self.send_event(AgentEvent::Text(text));
+                    // Buffer and parse **status** patterns (used by codex for thinking/status)
+                    self.buffer_and_parse_text(&text);
                 }
             }
             acp::SessionUpdate::ToolCall(tool_call) => {
+                // Flush text buffer before tool call
+                self.flush_text_buffer();
                 let name = tool_call.title.clone();
                 let id = tool_call.tool_call_id.to_string();
                 let input = tool_call.raw_input.clone().unwrap_or(serde_json::json!({}));
@@ -131,10 +261,13 @@ impl acp::Client for AcpClientHandler {
                 };
                 if !text.is_empty() {
                     tracing::debug!(text_len = text.len(), "Received AgentThoughtChunk");
-                    self.send_event(AgentEvent::Text(text));
+                    // Buffer and parse **status** patterns (used by codex for thinking/status)
+                    self.buffer_and_parse_text(&text);
                 }
             }
             other => {
+                // Flush text buffer on any other event type
+                self.flush_text_buffer();
                 tracing::debug!(?other, "Ignoring unhandled session update type");
             }
         }
@@ -288,15 +421,17 @@ impl acp::Client for AcpClientHandler {
     }
 }
 
-/// ACP client for communicating with an agent process
-struct AcpClient {
+/// Persistent ACP client that stays alive across prompts
+struct PersistentAcpClient {
     child: Child,
     conn: acp::ClientSideConnection,
-    event_tx: Arc<std::sync::RwLock<mpsc::Sender<AgentEvent>>>,
+    handler: Arc<AcpClientHandler>,
     working_dir: PathBuf,
+    /// Currently active session ID
+    current_session: Option<String>,
 }
 
-impl Drop for AcpClient {
+impl Drop for PersistentAcpClient {
     fn drop(&mut self) {
         if let Err(e) = self.child.start_kill() {
             tracing::warn!(error = %e, "Failed to kill ACP agent process during Drop");
@@ -304,11 +439,12 @@ impl Drop for AcpClient {
     }
 }
 
-impl AcpClient {
+impl PersistentAcpClient {
     async fn spawn(
         working_dir: &Path,
         agent_binary: &str,
-        event_tx: mpsc::Sender<AgentEvent>,
+        extra_args: &[String],
+        initial_event_tx: mpsc::Sender<AgentEvent>,
         env_vars: &HashMap<String, String>,
     ) -> Result<Self> {
         if agent_binary.contains("..") || agent_binary.contains('\0') {
@@ -321,9 +457,10 @@ impl AcpClient {
             );
         }
 
-        tracing::info!(binary = %agent_binary, cwd = %working_dir.display(), "Spawning ACP agent");
+        tracing::info!(binary = %agent_binary, ?extra_args, cwd = %working_dir.display(), "Spawning persistent ACP agent");
 
         let mut child = ProcessCommand::new(agent_binary)
+            .args(extra_args)
             .current_dir(working_dir)
             .envs(env_vars)
             .stdin(std::process::Stdio::piped())
@@ -336,13 +473,17 @@ impl AcpClient {
         let stdin = child.stdin.take().context("Failed to get stdin")?;
         let stdout = child.stdout.take().context("Failed to get stdout")?;
 
-        let shared_event_tx = Arc::new(std::sync::RwLock::new(event_tx));
+        let shared_event_tx = Arc::new(std::sync::RwLock::new(initial_event_tx));
+        let handler = Arc::new(AcpClientHandler::new(
+            Arc::clone(&shared_event_tx),
+            working_dir.to_path_buf(),
+        ));
 
-        let handler =
-            AcpClientHandler::new(Arc::clone(&shared_event_tx), working_dir.to_path_buf());
+        // Clone handler for the connection (it implements Client)
+        let handler_for_conn = HandlerWrapper(Arc::clone(&handler));
 
         let (conn, handle_io) =
-            acp::ClientSideConnection::new(handler, stdin.compat_write(), stdout.compat(), |fut| {
+            acp::ClientSideConnection::new(handler_for_conn, stdin.compat_write(), stdout.compat(), |fut| {
                 tokio::task::spawn_local(fut);
             });
 
@@ -351,8 +492,9 @@ impl AcpClient {
         Ok(Self {
             child,
             conn,
-            event_tx: shared_event_tx,
+            handler,
             working_dir: working_dir.to_path_buf(),
+            current_session: None,
         })
     }
 
@@ -373,7 +515,7 @@ impl AcpClient {
         Ok(())
     }
 
-    async fn new_session(&self) -> Result<String> {
+    async fn new_session(&mut self) -> Result<String> {
         tracing::info!(cwd = %self.working_dir.display(), "Calling ACP new_session");
         let response = self
             .conn
@@ -382,27 +524,36 @@ impl AcpClient {
             .context("Failed to create new ACP session")?;
 
         let session_id = response.session_id.to_string();
+        self.current_session = Some(session_id.clone());
         tracing::info!(session_id = %session_id, "Created new ACP session");
-
-        let tx = self.event_tx.read().unwrap();
-        let _ = tx.try_send(AgentEvent::SessionChanged {
-            new_session_id: session_id.clone(),
-        });
 
         Ok(session_id)
     }
 
-    async fn load_session(&self, session_id: &str) -> Result<()> {
+    async fn load_session(&mut self, session_id: &str) -> Result<()> {
+        // Use resume_session (session/resume) instead of load_session (session/load)
+        // as claude-code-acp implements the former but not the latter.
         self.conn
-            .load_session(acp::LoadSessionRequest::new(
+            .resume_session(acp::ResumeSessionRequest::new(
                 acp::SessionId::new(session_id.to_string()),
                 self.working_dir.clone(),
             ))
             .await
-            .context("Failed to load ACP session")?;
+            .context("Failed to resume ACP session")?;
 
-        tracing::info!(session_id = %session_id, "Loaded existing ACP session");
+        // Session ID remains the same after resume
+        self.current_session = Some(session_id.to_string());
+        tracing::info!(session_id = %session_id, "Resumed ACP session");
         Ok(())
+    }
+
+    fn update_event_tx(&self, new_tx: mpsc::Sender<AgentEvent>) {
+        self.handler.update_event_tx(new_tx);
+    }
+
+    /// Close the event channel to signal that no more events are coming.
+    fn close_event_channel(&self) {
+        self.handler.close_event_channel();
     }
 
     async fn prompt(&self, session_id: &str, text: &str) -> Result<()> {
@@ -418,11 +569,13 @@ impl AcpClient {
             ))
             .await;
 
+        // Flush any remaining buffered text
+        self.handler.flush_text_buffer();
+
         match result {
             Ok(response) => {
                 let final_text = format!("Completed: {:?}", response.stop_reason);
-                let tx = self.event_tx.read().unwrap();
-                let _ = tx.try_send(AgentEvent::Result {
+                self.handler.send_event(AgentEvent::Result {
                     text: final_text,
                     usage: None,
                     metadata: serde_json::json!({}),
@@ -432,8 +585,7 @@ impl AcpClient {
             Err(e) => {
                 let error_msg = format!("ACP prompt error: {}", e);
                 tracing::error!(%error_msg);
-                let tx = self.event_tx.read().unwrap();
-                let _ = tx.try_send(AgentEvent::Error {
+                self.handler.send_event(AgentEvent::Error {
                     code: ErrorCode::BackendError,
                     message: error_msg.clone(),
                     recoverable: false,
@@ -454,152 +606,165 @@ impl AcpClient {
     }
 }
 
-/// Helper to poll cancellation flag periodically
-async fn wait_for_cancellation(cancelled: &AtomicBool) {
-    loop {
-        if cancelled.load(Ordering::SeqCst) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+/// Wrapper to implement acp::Client for Arc<AcpClientHandler>
+struct HandlerWrapper(Arc<AcpClientHandler>);
+
+#[async_trait::async_trait(?Send)]
+impl acp::Client for HandlerWrapper {
+    async fn request_permission(
+        &self,
+        args: acp::RequestPermissionRequest,
+    ) -> acp::Result<acp::RequestPermissionResponse> {
+        self.0.request_permission(args).await
+    }
+
+    async fn session_notification(&self, args: acp::SessionNotification) -> acp::Result<()> {
+        self.0.session_notification(args).await
+    }
+
+    async fn write_text_file(
+        &self,
+        args: acp::WriteTextFileRequest,
+    ) -> acp::Result<acp::WriteTextFileResponse> {
+        self.0.write_text_file(args).await
+    }
+
+    async fn read_text_file(
+        &self,
+        args: acp::ReadTextFileRequest,
+    ) -> acp::Result<acp::ReadTextFileResponse> {
+        self.0.read_text_file(args).await
+    }
+
+    async fn create_terminal(
+        &self,
+        args: acp::CreateTerminalRequest,
+    ) -> acp::Result<acp::CreateTerminalResponse> {
+        self.0.create_terminal(args).await
+    }
+
+    async fn terminal_output(
+        &self,
+        args: acp::TerminalOutputRequest,
+    ) -> acp::Result<acp::TerminalOutputResponse> {
+        self.0.terminal_output(args).await
+    }
+
+    async fn release_terminal(
+        &self,
+        args: acp::ReleaseTerminalRequest,
+    ) -> acp::Result<acp::ReleaseTerminalResponse> {
+        self.0.release_terminal(args).await
+    }
+
+    async fn wait_for_terminal_exit(
+        &self,
+        args: acp::WaitForTerminalExitRequest,
+    ) -> acp::Result<acp::WaitForTerminalExitResponse> {
+        self.0.wait_for_terminal_exit(args).await
+    }
+
+    async fn kill_terminal_command(
+        &self,
+        args: acp::KillTerminalCommandRequest,
+    ) -> acp::Result<acp::KillTerminalCommandResponse> {
+        self.0.kill_terminal_command(args).await
+    }
+
+    async fn ext_method(&self, args: acp::ExtRequest) -> acp::Result<acp::ExtResponse> {
+        self.0.ext_method(args).await
+    }
+
+    async fn ext_notification(&self, args: acp::ExtNotification) -> acp::Result<()> {
+        self.0.ext_notification(args).await
     }
 }
 
-/// Synchronous function to run the ACP operation inside spawn_blocking
-#[allow(clippy::too_many_arguments)]
-fn run_acp_worker(
-    event_tx: mpsc::Sender<AgentEvent>,
-    cancelled: Arc<AtomicBool>,
-    working_dir: PathBuf,
-    agent_binary: String,
-    session_id_owned: Option<String>,
-    started: bool,
-    prompt_text: String,
-    env_vars: HashMap<String, String>,
-) -> Result<Option<String>> {
-    if cancelled.load(Ordering::SeqCst) {
-        return Err(anyhow::anyhow!("ACP operation cancelled before start"));
-    }
-
-    let rt = match tokio::runtime::Runtime::new() {
+/// Run the persistent ACP worker on a dedicated thread
+fn run_persistent_worker(
+    config: AcpConfig,
+    mut cmd_rx: mpsc::Receiver<WorkerCommand>,
+) {
+    // Create a new runtime for this thread
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
-            tracing::error!(error = %e, "Failed to create tokio runtime for ACP invocation");
-            let _ = event_tx.try_send(AgentEvent::Error {
-                code: ErrorCode::BackendError,
-                message: format!("Failed to create runtime: {}", e),
-                recoverable: false,
-            });
-            return Err(anyhow::anyhow!("Failed to create runtime: {}", e));
+            tracing::error!(error = %e, "Failed to create tokio runtime for ACP worker");
+            return;
         }
     };
 
     rt.block_on(async {
         let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                let client =
-                    match AcpClient::spawn(&working_dir, &agent_binary, event_tx.clone(), &env_vars).await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to spawn ACP client");
-                            let _ = event_tx.try_send(AgentEvent::Error {
-                                code: ErrorCode::BackendError,
-                                message: format!("Failed to spawn ACP client: {}", e),
-                                recoverable: false,
-                            });
-                            return Err(e);
+        local.run_until(async {
+            let env_vars: HashMap<String, String> = std::env::vars().collect();
+
+            // Create a dummy channel for initial spawn - will be replaced on first prompt
+            let (dummy_tx, _dummy_rx) = mpsc::channel(1);
+
+            // Spawn the ACP client
+            let mut client = match PersistentAcpClient::spawn(
+                &config.working_dir,
+                &config.binary,
+                &config.extra_args,
+                dummy_tx,
+                &env_vars,
+            ).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to spawn persistent ACP client");
+                    return;
+                }
+            };
+
+            // Initialize the connection
+            if let Err(e) = client.initialize().await {
+                tracing::error!(error = %e, "Failed to initialize ACP connection");
+                return;
+            }
+
+            tracing::info!("Persistent ACP worker started");
+
+            // Process commands
+            while let Some(cmd) = cmd_rx.recv().await {
+                match cmd {
+                    WorkerCommand::NewSession { reply } => {
+                        let result = client.new_session().await;
+                        let _ = reply.send(result.map_err(|e| e.to_string()));
+                    }
+                    WorkerCommand::LoadSession { session_id, reply } => {
+                        let result = client.load_session(&session_id).await;
+                        let _ = reply.send(result.map_err(|e| e.to_string()));
+                    }
+                    WorkerCommand::Prompt { session_id, text, event_tx } => {
+                        // Update the event channel for this prompt
+                        client.update_event_tx(event_tx);
+
+                        // Send the prompt
+                        if let Err(e) = client.prompt(&session_id, &text).await {
+                            tracing::error!(error = %e, "Prompt failed");
                         }
-                    };
 
-                if cancelled.load(Ordering::SeqCst) {
-                    tracing::info!("ACP operation cancelled after spawn");
-                    return Err(anyhow::anyhow!("ACP operation cancelled"));
-                }
-
-                if let Err(e) = client.initialize().await {
-                    tracing::error!(error = %e, "Failed to initialize ACP connection");
-                    let _ = event_tx.try_send(AgentEvent::Error {
-                        code: ErrorCode::BackendError,
-                        message: format!("Failed to initialize ACP: {}", e),
-                        recoverable: false,
-                    });
-                    return Err(e);
-                }
-
-                if cancelled.load(Ordering::SeqCst) {
-                    tracing::info!("ACP operation cancelled after initialize");
-                    return Err(anyhow::anyhow!("ACP operation cancelled"));
-                }
-
-                let active_session_id = if !started {
-                    match client.new_session().await {
-                        Ok(new_id) => {
-                            tracing::info!(session_id = %new_id, "Created new ACP session");
-                            new_id
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to create new ACP session");
-                            let _ = event_tx.try_send(AgentEvent::Error {
-                                code: ErrorCode::BackendError,
-                                message: format!("Failed to create session: {}", e),
-                                recoverable: false,
-                            });
-                            return Err(e);
+                        // Close the event channel to signal that this prompt is complete.
+                        // This causes the receiver's recv() to return None.
+                        client.close_event_channel();
+                    }
+                    WorkerCommand::Cancel { session_id } => {
+                        if let Err(e) = client.cancel(&session_id).await {
+                            tracing::warn!(error = %e, "Cancel failed");
                         }
                     }
-                } else {
-                    let existing_session_id = session_id_owned.clone().unwrap_or_default();
-                    if let Err(e) = client.load_session(&existing_session_id).await {
-                        tracing::warn!(error = %e, session_id = %existing_session_id, "Failed to load existing session, will create new one");
-                        match client.new_session().await {
-                            Ok(new_id) => {
-                                tracing::info!(session_id = %new_id, "Created new ACP session after load failure");
-                                let _ = event_tx.try_send(AgentEvent::SessionInvalid {
-                                    reason: format!("Original session {} not found", existing_session_id),
-                                });
-                                new_id
-                            }
-                            Err(e2) => {
-                                tracing::error!(error = %e2, "Failed to create fallback session");
-                                let _ = event_tx.try_send(AgentEvent::Error {
-                                    code: ErrorCode::SessionOrphaned,
-                                    message: format!("Failed to create session: {}", e2),
-                                    recoverable: false,
-                                });
-                                return Err(e2);
-                            }
-                        }
-                    } else {
-                        existing_session_id.clone()
+                    WorkerCommand::Shutdown => {
+                        tracing::info!("ACP worker shutting down");
+                        break;
                     }
-                };
-
-                if cancelled.load(Ordering::SeqCst) {
-                    tracing::info!("ACP operation cancelled before prompt");
-                    return Err(anyhow::anyhow!("ACP operation cancelled"));
                 }
-
-                let prompt_result = tokio::select! {
-                    result = client.prompt(&active_session_id, &prompt_text) => {
-                        result
-                    }
-                    _ = wait_for_cancellation(&cancelled) => {
-                        tracing::info!("ACP operation cancelled during prompt, sending cancel notification");
-                        let _ = client.cancel(&active_session_id).await;
-                        return Err(anyhow::anyhow!("ACP operation cancelled during prompt"));
-                    }
-                };
-
-                prompt_result?;
-
-                if !started {
-                    Ok(Some(active_session_id))
-                } else {
-                    Ok(None)
-                }
-            })
-            .await
-    })
+            }
+        }).await;
+    });
 }
 
 /// ACP backend implementation
@@ -615,107 +780,96 @@ impl AcpBackend {
 
     /// Create an AgentHandle that communicates with this backend
     pub fn into_handle(self) -> AgentHandle {
-        let (tx, mut rx) = mpsc::channel::<Command>(32);
+        let (handle_tx, mut handle_rx) = mpsc::channel::<Command>(32);
+        let (worker_tx, worker_rx) = mpsc::channel::<WorkerCommand>(32);
         let name = "acp";
         let config = self.config;
 
-        // Spawn worker task that handles commands
-        tokio::spawn(async move {
-            // Capture environment variables for child processes
-            let env_vars: HashMap<String, String> = std::env::vars().collect();
+        // Spawn the persistent worker on a dedicated thread
+        let worker_config = config.clone();
+        thread::spawn(move || {
+            run_persistent_worker(worker_config, worker_rx);
+        });
 
-            while let Some(cmd) = rx.recv().await {
+        // Spawn the command router that translates Handle commands to Worker commands
+        let worker_tx_clone = worker_tx.clone();
+        tokio::spawn(async move {
+            while let Some(cmd) = handle_rx.recv().await {
                 match cmd {
                     Command::NewSession { reply } => {
-                        // For new session, we'll create it when the first prompt arrives
-                        // For now, just generate a placeholder ID
-                        let session_id = uuid::Uuid::new_v4().to_string();
-                        let _ = reply.send(Ok(session_id));
+                        // Create a new session via the worker
+                        let (tx, rx) = oneshot::channel();
+                        if worker_tx_clone.send(WorkerCommand::NewSession { reply: tx }).await.is_err() {
+                            let _ = reply.send(Err(anyhow::anyhow!("Worker channel closed")));
+                            continue;
+                        }
+                        match rx.await {
+                            Ok(Ok(session_id)) => {
+                                let _ = reply.send(Ok(session_id));
+                            }
+                            Ok(Err(e)) => {
+                                let _ = reply.send(Err(anyhow::anyhow!(e)));
+                            }
+                            Err(_) => {
+                                let _ = reply.send(Err(anyhow::anyhow!("Worker dropped reply")));
+                            }
+                        }
                     }
-                    Command::LoadSession { reply, .. } => {
-                        // Session loading happens during prompt
-                        let _ = reply.send(Ok(()));
+                    Command::LoadSession { session_id, reply } => {
+                        // Load an existing session
+                        let (tx, rx) = oneshot::channel();
+                        if worker_tx_clone.send(WorkerCommand::LoadSession {
+                            session_id: session_id.clone(),
+                            reply: tx
+                        }).await.is_err() {
+                            let _ = reply.send(Err(anyhow::anyhow!("Worker channel closed")));
+                            continue;
+                        }
+                        match rx.await {
+                            Ok(Ok(())) => {
+                                let _ = reply.send(Ok(()));
+                            }
+                            Ok(Err(e)) => {
+                                let _ = reply.send(Err(anyhow::anyhow!(e)));
+                            }
+                            Err(_) => {
+                                let _ = reply.send(Err(anyhow::anyhow!("Worker dropped reply")));
+                            }
+                        }
                     }
                     Command::Prompt {
                         session_id,
                         text,
                         event_tx,
                         reply,
+                        is_new_session: _,
                     } => {
-                        // Acknowledge prompt started
+                        // Acknowledge immediately
                         let _ = reply.send(Ok(()));
 
-                        // Determine if this is a new session or existing one
-                        let started = !session_id.contains("00000000-0000-0000-0000");
-                        let session_id_opt = if started {
-                            Some(session_id.clone())
-                        } else {
-                            None
-                        };
-
-                        let cancelled = Arc::new(AtomicBool::new(false));
-                        let cancelled_for_task = Arc::clone(&cancelled);
-                        let cancelled_for_timeout = Arc::clone(&cancelled);
-
-                        let working_dir = config.working_dir.clone();
-                        let agent_binary = config.binary.clone();
-                        let prompt_text = text.clone();
-                        let event_tx_for_timeout = event_tx.clone();
-                        let timeout_secs = config.timeout_secs;
-                        let env_vars_clone = env_vars.clone();
-
-                        // Spawn the blocking task
-                        let blocking_handle = tokio::task::spawn_blocking(move || {
-                            run_acp_worker(
-                                event_tx,
-                                cancelled_for_task,
-                                working_dir,
-                                agent_binary,
-                                session_id_opt,
-                                started,
-                                prompt_text,
-                                env_vars_clone,
-                            )
-                        });
-
-                        // Race between completion and timeout
-                        tokio::select! {
-                            result = blocking_handle => {
-                                match result {
-                                    Ok(inner) => {
-                                        if let Err(e) = inner {
-                                            tracing::error!(error = %e, "ACP worker failed");
-                                        }
-                                    }
-                                    Err(e) if e.is_cancelled() => {
-                                        tracing::debug!("ACP blocking task was cancelled");
-                                    }
-                                    Err(e) => {
-                                        tracing::error!(error = %e, "ACP blocking task panicked");
-                                    }
-                                }
-                            }
-                            _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
-                                cancelled_for_timeout.store(true, Ordering::SeqCst);
-                                let _ = event_tx_for_timeout.try_send(AgentEvent::Error {
-                                    code: ErrorCode::Timeout,
-                                    message: format!("ACP operation timed out after {} seconds", timeout_secs),
-                                    recoverable: false,
-                                });
-                                tracing::error!(timeout_secs, "ACP operation timed out");
-                            }
+                        // Send prompt to worker
+                        if worker_tx_clone.send(WorkerCommand::Prompt {
+                            session_id,
+                            text,
+                            event_tx,
+                        }).await.is_err() {
+                            tracing::error!("Failed to send prompt to worker");
                         }
                     }
                     Command::Cancel { session_id, reply } => {
-                        tracing::debug!(session_id = %session_id, "Cancel requested for ACP session");
-                        // Cancellation is handled via the cancelled flag in the worker
+                        if worker_tx_clone.send(WorkerCommand::Cancel { session_id }).await.is_err() {
+                            tracing::warn!("Failed to send cancel to worker");
+                        }
                         let _ = reply.send(Ok(()));
                     }
                 }
             }
+
+            // Shutdown the worker when handle is dropped
+            let _ = worker_tx_clone.send(WorkerCommand::Shutdown).await;
         });
 
-        AgentHandle::new(tx, name)
+        AgentHandle::new(handle_tx, name)
     }
 
     /// Factory function for the registry

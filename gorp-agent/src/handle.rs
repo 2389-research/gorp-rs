@@ -5,6 +5,19 @@ use crate::AgentEvent;
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 
+/// State of a session for tracking whether it needs initialization
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionState {
+    /// Session was created via new_session() and no prompt has been sent yet.
+    /// The first prompt should initialize this session on the backend.
+    New,
+    /// First prompt is currently being processed. Subsequent prompts should
+    /// wait or treat this as an active session.
+    FirstPromptInFlight,
+    /// Session is active - first prompt has been processed.
+    Active,
+}
+
 /// Commands sent from AgentHandle to the backend worker
 #[derive(Debug)]
 pub enum Command {
@@ -20,6 +33,9 @@ pub enum Command {
         text: String,
         event_tx: mpsc::Sender<AgentEvent>,
         reply: oneshot::Sender<Result<()>>,
+        /// True if this is the first prompt for a new session (needs backend initialization).
+        /// False if the session was loaded or already has had a prompt.
+        is_new_session: bool,
     },
     Cancel {
         session_id: String,
@@ -36,12 +52,24 @@ pub enum Command {
 pub struct AgentHandle {
     tx: mpsc::Sender<Command>,
     name: &'static str,
+    /// Track session state to determine if a prompt needs to initialize the backend.
+    /// Sessions created via new_session() start as New, transition to FirstPromptInFlight
+    /// during the first prompt, then become Active. Sessions loaded via load_session()
+    /// are not tracked here (treated as Active implicitly).
+    session_states:
+        std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, SessionState>>>,
 }
 
 impl AgentHandle {
     /// Create a new AgentHandle with the given command channel and backend name
     pub fn new(tx: mpsc::Sender<Command>, name: &'static str) -> Self {
-        Self { tx, name }
+        Self {
+            tx,
+            name,
+            session_states: std::sync::Arc::new(std::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+        }
     }
 
     /// Get the backend name
@@ -56,9 +84,16 @@ impl AgentHandle {
             .send(Command::NewSession { reply: reply_tx })
             .await
             .map_err(|_| anyhow::anyhow!("Backend worker closed"))?;
-        reply_rx
+        let session_id = reply_rx
             .await
-            .map_err(|_| anyhow::anyhow!("Backend worker dropped reply channel"))?
+            .map_err(|_| anyhow::anyhow!("Backend worker dropped reply channel"))??;
+
+        // Track that this session is new and needs initialization on first prompt.
+        self.session_states
+            .write()
+            .expect("session_states lock poisoned")
+            .insert(session_id.clone(), SessionState::New);
+        Ok(session_id)
     }
 
     /// Load an existing session
@@ -81,12 +116,41 @@ impl AgentHandle {
         let (event_tx, event_rx) = mpsc::channel(2048);
         let (reply_tx, reply_rx) = oneshot::channel();
 
+        // Determine if this is a new session that needs initialization.
+        // Use a state machine to handle concurrent prompts correctly:
+        // - New -> FirstPromptInFlight: This prompt initializes the session
+        // - FirstPromptInFlight -> FirstPromptInFlight: This prompt waits (is_new_session=false)
+        // - Active -> Active: Session already initialized (is_new_session=false)
+        // - Not tracked (loaded session) -> is_new_session=false
+        let is_new_session = {
+            let mut states = self
+                .session_states
+                .write()
+                .expect("session_states lock poisoned");
+            match states.get(session_id) {
+                Some(SessionState::New) => {
+                    // First prompt for this new session - we'll initialize it
+                    states.insert(session_id.to_string(), SessionState::FirstPromptInFlight);
+                    true
+                }
+                Some(SessionState::FirstPromptInFlight) | Some(SessionState::Active) => {
+                    // Session is already being initialized or is active
+                    false
+                }
+                None => {
+                    // Session was loaded via load_session() or is unknown
+                    false
+                }
+            }
+        };
+
         self.tx
             .send(Command::Prompt {
                 session_id: session_id.to_string(),
                 text: text.to_string(),
                 event_tx,
                 reply: reply_tx,
+                is_new_session,
             })
             .await
             .map_err(|_| anyhow::anyhow!("Backend worker closed"))?;
@@ -95,6 +159,18 @@ impl AgentHandle {
         reply_rx
             .await
             .map_err(|_| anyhow::anyhow!("Backend worker dropped reply channel"))??;
+
+        // If this was the first prompt, transition to Active state and clean up.
+        // This prevents memory leaks from accumulating session state.
+        if is_new_session {
+            let mut states = self
+                .session_states
+                .write()
+                .expect("session_states lock poisoned");
+            // Transition to Active, then remove to prevent memory leaks.
+            // We don't need to track active sessions - they're the default.
+            states.remove(session_id);
+        }
 
         Ok(EventReceiver::new(event_rx))
     }
@@ -112,6 +188,30 @@ impl AgentHandle {
         reply_rx
             .await
             .map_err(|_| anyhow::anyhow!("Backend worker dropped reply channel"))?
+    }
+
+    /// Abandon a session that was created but will never be used.
+    ///
+    /// Call this if you create a session via `new_session()` but decide not to
+    /// send any prompts to it. This cleans up internal tracking state to prevent
+    /// memory leaks. Calling this on a session that has already received a prompt
+    /// or was never created is safe (no-op).
+    pub fn abandon_session(&self, session_id: &str) {
+        self.session_states
+            .write()
+            .expect("session_states lock poisoned")
+            .remove(session_id);
+    }
+
+    /// Get the number of sessions currently being tracked.
+    ///
+    /// This is primarily useful for testing and debugging. Sessions are tracked
+    /// from `new_session()` until their first `prompt()` or `abandon_session()`.
+    pub fn tracked_session_count(&self) -> usize {
+        self.session_states
+            .read()
+            .expect("session_states lock poisoned")
+            .len()
     }
 }
 

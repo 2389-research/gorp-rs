@@ -7,3 +7,4 @@ pub mod mock;
 pub mod acp;
 
 pub mod direct_cli;
+pub mod direct_codex;

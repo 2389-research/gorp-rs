@@ -36,6 +36,7 @@ mod acp_tests {
             binary: "codex-acp".to_string(),
             timeout_secs: 300,
             working_dir: PathBuf::from("/tmp"),
+            extra_args: vec![],
         };
 
         let backend = AcpBackend::new(config).unwrap();

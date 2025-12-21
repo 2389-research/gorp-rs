@@ -95,17 +95,29 @@ impl MockBackend {
                         text,
                         event_tx,
                         reply,
-                        ..
+                        .. // session_id and is_new_session not used by mock backend
                     } => {
                         let _ = reply.send(Ok(()));
 
-                        // Find matching expectation
+                        // Match expectations with FIFO preference: check the front first,
+                        // fall back to searching the queue if front doesn't match.
+                        // This allows deterministic ordering when prompts arrive in order,
+                        // while still finding matches for out-of-order prompts.
                         let events = {
-                            let mut exp = expectations.lock().unwrap();
-                            exp.iter()
-                                .position(|e| text.contains(&e.pattern))
-                                .and_then(|i| exp.remove(i))
-                                .map(|e| e.events)
+                            let mut exp = expectations.lock().expect("expectations lock poisoned");
+                            if let Some(front) = exp.front() {
+                                if text.contains(&front.pattern) {
+                                    exp.pop_front().map(|e| e.events)
+                                } else {
+                                    // If front doesn't match, search for first matching one
+                                    exp.iter()
+                                        .position(|e| text.contains(&e.pattern))
+                                        .and_then(|i| exp.remove(i))
+                                        .map(|e| e.events)
+                                }
+                            } else {
+                                None
+                            }
                         };
 
                         if let Some(events) = events {
@@ -161,7 +173,7 @@ impl ExpectationBuilder {
         self.backend
             .expectations
             .lock()
-            .unwrap()
+            .expect("expectations lock poisoned")
             .push_back(Expectation {
                 pattern: self.pattern,
                 events,

@@ -54,9 +54,10 @@ impl DirectCliBackend {
                         text,
                         event_tx,
                         reply,
+                        is_new_session,
                     } => {
                         let _ = reply.send(Ok(()));
-                        if let Err(e) = run_prompt(&config, &session_id, &text, event_tx).await {
+                        if let Err(e) = run_prompt(&config, &session_id, &text, event_tx, is_new_session).await {
                             tracing::error!(error = %e, "Direct CLI prompt failed");
                         }
                     }
@@ -86,6 +87,7 @@ async fn run_prompt(
     session_id: &str,
     text: &str,
     event_tx: mpsc::Sender<AgentEvent>,
+    is_new_session: bool,
 ) -> Result<()> {
     let mut args = vec![
         "--print".to_string(),
@@ -93,9 +95,13 @@ async fn run_prompt(
         "stream-json".to_string(),
         "--verbose".to_string(),
         "--dangerously-skip-permissions".to_string(),
-        "--resume".to_string(),
-        session_id.to_string(),
     ];
+
+    // Only use --resume for existing sessions, not new ones
+    if !is_new_session {
+        args.push("--resume".to_string());
+        args.push(session_id.to_string());
+    }
 
     if let Some(ref url) = config.sdk_url {
         args.push("--sdk-url".to_string());
@@ -119,8 +125,8 @@ async fn run_prompt(
 
     let stderr_tx = event_tx.clone();
 
-    // Spawn task to read stderr and detect errors
-    tokio::spawn(async move {
+    // Spawn task to read stderr and detect errors - we'll join this later
+    let stderr_handle = tokio::spawn(async move {
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
 
@@ -173,6 +179,11 @@ async fn run_prompt(
             .await;
     }
 
+    // Wait for stderr reader to complete - ensures we don't leak the task
+    if let Err(e) = stderr_handle.await {
+        tracing::warn!(error = %e, "stderr reader task failed to complete");
+    }
+
     Ok(())
 }
 
@@ -180,6 +191,18 @@ fn parse_cli_event(json: &Value, accumulated_text: &mut String) -> Option<Vec<Ag
     let event_type = json.get("type")?.as_str()?;
 
     match event_type {
+        "system" => {
+            // Capture session_id from init event
+            let subtype = json.get("subtype").and_then(|s| s.as_str());
+            if subtype == Some("init") {
+                if let Some(session_id) = json.get("session_id").and_then(|s| s.as_str()) {
+                    return Some(vec![AgentEvent::SessionChanged {
+                        new_session_id: session_id.to_string(),
+                    }]);
+                }
+            }
+            None
+        }
         "assistant" => {
             let mut events = Vec::new();
 
@@ -209,13 +232,18 @@ fn parse_cli_event(json: &Value, accumulated_text: &mut String) -> Option<Vec<Ag
                     } else if item_type == Some("text") {
                         if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                             if !text.is_empty() {
-                                // Add newline separator between text chunks to avoid
-                                // concatenation without whitespace
-                                if !accumulated_text.is_empty()
-                                    && !accumulated_text.ends_with('\n')
-                                    && !accumulated_text.ends_with(' ')
-                                {
-                                    accumulated_text.push('\n');
+                                // Only add a space between chunks if:
+                                // 1. There's accumulated text
+                                // 2. The accumulated text doesn't end with whitespace
+                                // 3. The new text doesn't start with whitespace or punctuation
+                                if !accumulated_text.is_empty() {
+                                    let ends_with_ws = accumulated_text.ends_with(|c: char| c.is_whitespace());
+                                    let starts_with_ws_or_punct = text.starts_with(|c: char| {
+                                        c.is_whitespace() || c.is_ascii_punctuation()
+                                    });
+                                    if !ends_with_ws && !starts_with_ws_or_punct {
+                                        accumulated_text.push(' ');
+                                    }
                                 }
                                 accumulated_text.push_str(text);
 
