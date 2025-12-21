@@ -71,7 +71,7 @@ pub struct AcpConfig {
 impl Default for AcpConfig {
     fn default() -> Self {
         Self {
-            agent_binary: Some("codex-acp".to_string()),
+            agent_binary: None,
             timeout_secs: default_timeout_secs(),
             keep_alive_secs: default_keep_alive_secs(),
             pre_warm_secs: default_pre_warm_secs(),
