@@ -533,11 +533,12 @@ fn run_config(action: ConfigAction) -> Result<()> {
             println!("allowed_users = {:?}", config.matrix.allowed_users);
             println!("\n[workspace]");
             println!("path = \"{}\"", config.workspace.path);
-            println!("\n[claude]");
-            if let Some(ref binary) = config.acp.agent_binary {
-                println!("agent_binary = \"{}\"", binary);
+            println!("\n[backend]");
+            println!("type = \"{}\"", config.backend.backend_type);
+            if let Some(ref binary) = config.backend.binary {
+                println!("binary = \"{}\"", binary);
             } else {
-                println!("agent_binary = \"claude\" # Not configured, using default");
+                println!("binary = \"claude-code-acp\" # Not configured, using default");
             }
             println!("\n[webhook]");
             println!("port = {}", config.webhook.port);
@@ -784,11 +785,11 @@ async fn run_start() -> Result<()> {
 
     // Create warm session manager
     let warm_config = WarmConfig {
-        keep_alive_duration: std::time::Duration::from_secs(config.acp.keep_alive_secs),
-        pre_warm_lead_time: std::time::Duration::from_secs(config.acp.pre_warm_secs),
+        keep_alive_duration: std::time::Duration::from_secs(config.backend.keep_alive_secs),
+        pre_warm_lead_time: std::time::Duration::from_secs(config.backend.pre_warm_secs),
         agent_binary: config
-            .acp
-            .agent_binary
+            .backend
+            .binary
             .clone()
             .unwrap_or_else(|| "claude-code-acp".to_string()),
     };
@@ -796,7 +797,7 @@ async fn run_start() -> Result<()> {
 
     // Spawn cleanup task
     let cleanup_manager = warm_manager.clone();
-    let cleanup_interval = config.acp.keep_alive_secs / 4; // Check 4x per keep-alive period
+    let cleanup_interval = config.backend.keep_alive_secs / 4; // Check 4x per keep-alive period
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(cleanup_interval));
         loop {
@@ -810,7 +811,7 @@ async fn run_start() -> Result<()> {
     let _ = &warm_manager;
     tracing::info!(
         "Warm session manager initialized with {}s keep-alive",
-        config.acp.keep_alive_secs
+        config.backend.keep_alive_secs
     );
 
     // Initialize session store

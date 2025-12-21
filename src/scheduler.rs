@@ -836,7 +836,7 @@ pub async fn start_scheduler(
 
         // Check for schedules that should be pre-warmed
         // Pre-warm if within pre_warm_secs of execution
-        let pre_warm_duration = chrono::Duration::seconds(config.acp.pre_warm_secs as i64);
+        let pre_warm_duration = chrono::Duration::seconds(config.backend.pre_warm_secs as i64);
         let pre_warm_cutoff = now + pre_warm_duration;
 
         if let Ok(all_schedules) = scheduler_store.list_all() {

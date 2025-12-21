@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub matrix: MatrixConfig,
     #[serde(default)]
-    pub acp: AcpConfig,
+    pub backend: BackendConfig,
     pub webhook: WebhookConfig,
     pub workspace: WorkspaceConfig,
     #[serde(default)]
@@ -58,8 +58,12 @@ impl std::fmt::Debug for MatrixConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AcpConfig {
-    pub agent_binary: Option<String>,
+pub struct BackendConfig {
+    /// Backend type: "acp", "direct", "mock"
+    #[serde(rename = "type", default = "default_backend_type")]
+    pub backend_type: String,
+    /// Path to the agent binary
+    pub binary: Option<String>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
     #[serde(default = "default_keep_alive_secs")]
@@ -68,10 +72,15 @@ pub struct AcpConfig {
     pub pre_warm_secs: u64,
 }
 
-impl Default for AcpConfig {
+fn default_backend_type() -> String {
+    "acp".to_string()
+}
+
+impl Default for BackendConfig {
     fn default() -> Self {
         Self {
-            agent_binary: None,
+            backend_type: default_backend_type(),
+            binary: None,
             timeout_secs: default_timeout_secs(),
             keep_alive_secs: default_keep_alive_secs(),
             pre_warm_secs: default_pre_warm_secs(),
@@ -249,7 +258,7 @@ impl Config {
                     room_prefix: default_room_prefix(),
                     recovery_key: None,
                 },
-                acp: AcpConfig::default(),
+                backend: BackendConfig::default(),
                 webhook: WebhookConfig {
                     port: default_webhook_port(),
                     api_key: None,
@@ -293,11 +302,18 @@ impl Config {
             // Clear from environment to prevent exposure via /proc or ps
             std::env::remove_var("MATRIX_RECOVERY_KEY");
         }
+        if let Ok(val) = std::env::var("BACKEND_TYPE") {
+            config.backend.backend_type = val;
+        }
+        if let Ok(val) = std::env::var("BACKEND_BINARY") {
+            config.backend.binary = Some(val);
+        }
+        // Legacy env var support
         if let Ok(val) = std::env::var("ACP_AGENT_BINARY") {
-            config.acp.agent_binary = Some(val);
+            config.backend.binary = Some(val);
         }
         if let Ok(val) = std::env::var("ACP_TIMEOUT_SECS") {
-            config.acp.timeout_secs = val.parse().with_context(|| {
+            config.backend.timeout_secs = val.parse().with_context(|| {
                 format!("ACP_TIMEOUT_SECS must be a valid number, got: {}", val)
             })?;
         }
