@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use crate::metrics;
-use crate::warm_session::SharedWarmSessionManager;
+use crate::warm_session::{prepare_session_async, SharedWarmSessionManager};
 
 /// Represents a scheduled prompt in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -993,10 +993,9 @@ async fn execute_schedule(
     let (event_tx, mut rx) = tokio::sync::mpsc::channel(2048);
 
     // Prepare session (sets up event channel, creates session if needed)
-    // Get the session handle so we can release the manager lock before sending the prompt
-    let (session_handle, session_id, is_new_session) = {
-        let mut manager = warm_manager.write().await;
-        match manager.prepare_session(&channel, event_tx).await {
+    // Uses prepare_session_async which minimizes lock holding for concurrent access
+    let (session_handle, session_id, is_new_session) =
+        match prepare_session_async(&warm_manager, &channel, event_tx).await {
             Ok((handle, sid, is_new)) => (handle, sid, is_new),
             Err(e) => {
                 tracing::error!(error = %e, "Failed to prepare session for scheduled task");
@@ -1007,8 +1006,7 @@ async fn execute_schedule(
                 let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
                 return;
             }
-        }
-    }; // Manager lock is released here - other channels can now prepare sessions
+        };
 
     // Update session store if a new session was created
     if is_new_session {

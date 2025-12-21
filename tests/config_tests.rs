@@ -149,8 +149,8 @@ path = "./test-workspace"
     let config = gorp::config::Config::load().unwrap();
 
     // Defaults: 1 hour keep-alive, 5 min pre-warm
-    assert_eq!(config.acp.keep_alive_secs, 3600);
-    assert_eq!(config.acp.pre_warm_secs, 300);
+    assert_eq!(config.backend.keep_alive_secs, 3600);
+    assert_eq!(config.backend.pre_warm_secs, 300);
 
     clear_config_env_vars();
     let _ = std::fs::remove_dir_all(&temp_dir);

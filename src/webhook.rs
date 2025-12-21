@@ -30,7 +30,7 @@ use crate::{
     scheduler::SchedulerStore,
     session::{Channel, SessionStore},
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
-    warm_session::{send_prompt_with_handle, SharedWarmSessionManager},
+    warm_session::{prepare_session_async, send_prompt_with_handle, SharedWarmSessionManager},
 };
 use gorp_agent::AgentEvent;
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -488,10 +488,8 @@ async fn process_webhook_job(
 ) -> Result<WebhookWorkerResponse> {
     let (event_tx, mut event_rx) = mpsc::channel(2048);
 
-    let (session_handle, session_id, is_new_session) = {
-        let mut manager = warm_manager.write().await;
-        manager.prepare_session(&channel, event_tx).await?
-    };
+    let (session_handle, session_id, is_new_session) =
+        prepare_session_async(&warm_manager, &channel, event_tx).await?;
 
     if is_new_session {
         if let Err(e) = session_store.update_session_id(&channel.room_id, &session_id) {

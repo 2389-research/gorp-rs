@@ -17,7 +17,7 @@ use crate::{
     },
     session::SessionStore,
     utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
-    warm_session::SharedWarmSessionManager,
+    warm_session::{prepare_session_async, SharedWarmSessionManager},
 };
 use chrono::Utc;
 use gorp_agent::AgentEvent;
@@ -326,10 +326,9 @@ pub async fn handle_message(
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(2048);
 
     // Prepare session (sets up event channel, creates session if needed)
-    // Get the session handle so we can release the manager lock before sending the prompt
-    let (session_handle, session_id, is_new_session) = {
-        let mut manager = warm_manager.write().await;
-        match manager.prepare_session(&channel, event_tx).await {
+    // Uses prepare_session_async which minimizes lock holding for concurrent access
+    let (session_handle, session_id, is_new_session) =
+        match prepare_session_async(&warm_manager, &channel, event_tx).await {
             Ok((handle, sid, is_new)) => (handle, sid, is_new),
             Err(e) => {
                 let _ = typing_tx.send(());
@@ -342,8 +341,7 @@ pub async fn handle_message(
                     .await?;
                 return Ok(());
             }
-        }
-    }; // Manager lock is released here - other channels can now prepare sessions
+        };
 
     // Update session store if a new session was created
     if is_new_session {
