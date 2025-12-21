@@ -29,7 +29,7 @@ regex = "1.12.2"
 chrono-tz = "0.10.4"
 clap = { version = "4.5.53", features = ["derive"] }
 askama = "0.14"
-tower-sessions = { version = "0.13", features = ["memory-store"] }
+tower-sessions = { version = "0.14", features = ["memory-store"] }
 mime_guess = "2.0"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
