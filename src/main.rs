@@ -1055,8 +1055,7 @@ async fn run_start() -> Result<()> {
             }
             _ = handler_task => {
                 tracing::error!("Message handler task exited unexpectedly");
-                Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::other(
                     "Message handler exited"
                 ))))
             }
