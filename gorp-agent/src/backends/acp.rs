@@ -538,19 +538,17 @@ impl PersistentAcpClient {
     }
 
     async fn load_session(&mut self, session_id: &str) -> Result<()> {
-        // Use resume_session (session/resume) instead of load_session (session/load)
-        // as claude-code-acp implements the former but not the latter.
         self.conn
-            .resume_session(acp::ResumeSessionRequest::new(
+            .load_session(acp::LoadSessionRequest::new(
                 acp::SessionId::new(session_id.to_string()),
                 self.working_dir.clone(),
             ))
             .await
-            .context("Failed to resume ACP session")?;
+            .context("Failed to load ACP session")?;
 
-        // Session ID remains the same after resume
+        // Session ID remains the same after load
         self.current_session = Some(session_id.to_string());
-        tracing::info!(session_id = %session_id, "Resumed ACP session");
+        tracing::info!(session_id = %session_id, "Loaded ACP session");
         Ok(())
     }
 

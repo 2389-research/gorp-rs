@@ -38,7 +38,7 @@ tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
 
 # Internal crates
-gorp-agent = { path = "gorp-agent" }
+gorp-agent = { path = "gorp-agent", features = ["acp"] }
 
 [dev-dependencies]
 serial_test = "3.0"
