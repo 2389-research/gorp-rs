@@ -105,7 +105,7 @@ impl WarmSessionManager {
         // Use ACP backend by default (matches previous behavior)
         let config = serde_json::json!({
             "working_dir": working_dir,
-            "agent_binary": self.config.agent_binary,
+            "binary": self.config.agent_binary,
         });
 
         self.registry.create("acp", &config)
