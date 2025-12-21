@@ -30,7 +30,6 @@ acp = ["dep:agent-client-protocol", "dep:tokio-util"]
 [dependencies.agent-client-protocol]
 version = "0.9"
 optional = true
-features = ["unstable_session_resume"]
 
 [[bin]]
 name = "agent-repl"
