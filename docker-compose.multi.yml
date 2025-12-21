@@ -32,6 +32,8 @@ services:
       - ./app-data-1/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-1/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-1/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-1/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-1/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-2:
     <<: *gorp-common
@@ -50,6 +52,8 @@ services:
       - ./app-data-2/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-2/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-2/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-2/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-2/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-3:
     <<: *gorp-common
@@ -68,6 +72,8 @@ services:
       - ./app-data-3/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-3/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-3/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-3/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-3/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-4:
     <<: *gorp-common
@@ -86,6 +92,8 @@ services:
       - ./app-data-4/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-4/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-4/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-4/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-4/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-5:
     <<: *gorp-common
@@ -104,6 +112,8 @@ services:
       - ./app-data-5/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-5/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-5/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-5/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-5/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-6:
     <<: *gorp-common
@@ -122,6 +132,8 @@ services:
       - ./app-data-6/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-6/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-6/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-6/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-6/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-7:
     <<: *gorp-common
@@ -140,6 +152,8 @@ services:
       - ./app-data-7/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-7/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-7/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-7/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-7/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-8:
     <<: *gorp-common
@@ -158,6 +172,8 @@ services:
       - ./app-data-8/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-8/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-8/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-8/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-8/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-9:
     <<: *gorp-common
@@ -176,6 +192,8 @@ services:
       - ./app-data-9/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-9/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-9/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-9/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-9/mcp-data/charm:/home/gorp/.local/share/charm
 
   gorp-10:
     <<: *gorp-common
@@ -194,3 +212,5 @@ services:
       - ./app-data-10/mcp-data/toki:/home/gorp/.local/share/toki
       - ./app-data-10/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data-10/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
+      - ./app-data-10/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data-10/mcp-data/charm:/home/gorp/.local/share/charm

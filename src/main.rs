@@ -1027,21 +1027,25 @@ async fn run_start() -> Result<()> {
         let handler_task = tokio::task::spawn_local(async move {
             tracing::info!("Message handler LocalSet task started");
             while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
-                tracing::info!(room_id = %room.room_id(), "Processing message in LocalSet task");
-                // Now we're definitely inside the LocalSet!
-                if let Err(e) = message_handler::handle_message(
-                    room,
-                    event,
-                    client,
-                    (*config).clone(),
-                    (*session_store).clone(),
-                    scheduler,
-                    warm_mgr,
-                )
-                .await
-                {
-                    tracing::error!(error = %e, "Error handling message");
-                }
+                let room_id = room.room_id().to_owned();
+                tracing::info!(room_id = %room_id, "Spawning concurrent message handler");
+                // Spawn each message handler concurrently instead of awaiting sequentially
+                tokio::task::spawn_local(async move {
+                    tracing::info!(room_id = %room_id, "Processing message concurrently");
+                    if let Err(e) = message_handler::handle_message(
+                        room,
+                        event,
+                        client,
+                        (*config).clone(),
+                        (*session_store).clone(),
+                        scheduler,
+                        warm_mgr,
+                    )
+                    .await
+                    {
+                        tracing::error!(room_id = %room_id, error = %e, "Error handling message");
+                    }
+                });
             }
             tracing::warn!("Message handler channel closed");
         });

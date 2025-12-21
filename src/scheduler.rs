@@ -989,13 +989,10 @@ async fn execute_schedule(
     // Start typing indicator
     let _ = room.typing_notice(true).await;
 
-    // Create event channel for this scheduled prompt
-    let (event_tx, mut rx) = tokio::sync::mpsc::channel(2048);
-
-    // Prepare session (sets up event channel, creates session if needed)
+    // Prepare session (creates session if needed)
     // Uses prepare_session_async which minimizes lock holding for concurrent access
     let (session_handle, session_id, is_new_session) =
-        match prepare_session_async(&warm_manager, &channel, event_tx).await {
+        match prepare_session_async(&warm_manager, &channel).await {
             Ok((handle, sid, is_new)) => (handle, sid, is_new),
             Err(e) => {
                 tracing::error!(error = %e, "Failed to prepare session for scheduled task");
@@ -1015,19 +1012,25 @@ async fn execute_schedule(
         }
     }
 
-    // Spawn the prompt to run concurrently with event processing
-    // Uses the session handle - doesn't need the manager lock
-    let prompt_for_send = prompt.clone();
-    let session_id_for_prompt = session_id.clone();
-
-    let prompt_handle = tokio::task::spawn_local(async move {
-        crate::warm_session::send_prompt_with_handle(
-            &session_handle,
-            &session_id_for_prompt,
-            &prompt_for_send,
-        )
-        .await
-    });
+    // Send prompt and get event receiver directly
+    let mut rx = match crate::warm_session::send_prompt_with_handle(
+        &session_handle,
+        &session_id,
+        &prompt,
+    )
+    .await
+    {
+        Ok(receiver) => receiver,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to send prompt for scheduled task");
+            let error_msg = format!("⚠️ Failed to send prompt: {}", e);
+            let _ = room
+                .send(RoomMessageEventContent::text_plain(&error_msg))
+                .await;
+            let _ = scheduler_store.mark_failed(&schedule.id, &e.to_string());
+            return;
+        }
+    };
 
     // Collect response from stream
     let mut response = String::new();
@@ -1109,11 +1112,6 @@ async fn execute_schedule(
                 tracing::debug!(kind = %kind, "Received custom event");
             }
         }
-    }
-
-    // Wait for prompt to complete (it may have already finished before event loop ended)
-    if let Err(e) = prompt_handle.await {
-        tracing::warn!(error = %e, "Prompt task failed to join");
     }
 
     // Stop typing

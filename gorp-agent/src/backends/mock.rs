@@ -104,7 +104,7 @@ impl MockBackend {
                         // This allows deterministic ordering when prompts arrive in order,
                         // while still finding matches for out-of-order prompts.
                         let events = {
-                            let mut exp = expectations.lock().expect("expectations lock poisoned");
+                            let mut exp = expectations.lock().unwrap_or_else(|e| e.into_inner());
                             if let Some(front) = exp.front() {
                                 if text.contains(&front.pattern) {
                                     exp.pop_front().map(|e| e.events)
@@ -173,7 +173,7 @@ impl ExpectationBuilder {
         self.backend
             .expectations
             .lock()
-            .expect("expectations lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .push_back(Expectation {
                 pattern: self.pattern,
                 events,

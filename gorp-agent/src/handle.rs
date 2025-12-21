@@ -91,7 +91,7 @@ impl AgentHandle {
         // Track that this session is new and needs initialization on first prompt.
         self.session_states
             .write()
-            .expect("session_states lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(session_id.clone(), SessionState::New);
         Ok(session_id)
     }
@@ -126,7 +126,7 @@ impl AgentHandle {
             let mut states = self
                 .session_states
                 .write()
-                .expect("session_states lock poisoned");
+                .unwrap_or_else(|e| e.into_inner());
             match states.get(session_id) {
                 Some(SessionState::New) => {
                     // First prompt for this new session - we'll initialize it
@@ -166,7 +166,7 @@ impl AgentHandle {
             let mut states = self
                 .session_states
                 .write()
-                .expect("session_states lock poisoned");
+                .unwrap_or_else(|e| e.into_inner());
             // Transition to Active, then remove to prevent memory leaks.
             // We don't need to track active sessions - they're the default.
             states.remove(session_id);
@@ -199,7 +199,7 @@ impl AgentHandle {
     pub fn abandon_session(&self, session_id: &str) {
         self.session_states
             .write()
-            .expect("session_states lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(session_id);
     }
 
@@ -210,7 +210,7 @@ impl AgentHandle {
     pub fn tracked_session_count(&self) -> usize {
         self.session_states
             .read()
-            .expect("session_states lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .len()
     }
 }

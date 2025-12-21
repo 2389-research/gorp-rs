@@ -76,7 +76,7 @@ impl AcpClientHandler {
     }
 
     fn update_event_tx(&self, new_tx: mpsc::Sender<AgentEvent>) {
-        let mut tx = self.event_tx.write().expect("event_tx lock poisoned");
+        let mut tx = self.event_tx.write().unwrap_or_else(|e| e.into_inner());
         *tx = new_tx;
     }
 
@@ -84,13 +84,13 @@ impl AcpClientHandler {
     /// This signals to the receiver that no more events are coming.
     fn close_event_channel(&self) {
         let (dummy_tx, _dummy_rx) = mpsc::channel(1);
-        let mut tx = self.event_tx.write().expect("event_tx lock poisoned");
+        let mut tx = self.event_tx.write().unwrap_or_else(|e| e.into_inner());
         *tx = dummy_tx;
         // Old tx is dropped here, closing the channel for the receiver
     }
 
     fn send_event(&self, event: AgentEvent) {
-        let tx = self.event_tx.read().expect("event_tx lock poisoned");
+        let tx = self.event_tx.read().unwrap_or_else(|e| e.into_inner());
         if let Err(e) = tx.try_send(event) {
             match e {
                 mpsc::error::TrySendError::Full(dropped_event) => {
@@ -109,7 +109,7 @@ impl AcpClientHandler {
     /// Buffer text and parse **status** patterns (used by codex).
     /// Emits complete patterns immediately, buffers incomplete ones.
     fn buffer_and_parse_text(&self, text: &str) {
-        let mut buffer = self.text_buffer.lock().expect("text_buffer lock poisoned");
+        let mut buffer = self.text_buffer.lock().unwrap_or_else(|e| e.into_inner());
         buffer.push_str(text);
 
         // Process complete **...** patterns from the buffer
@@ -168,7 +168,7 @@ impl AcpClientHandler {
 
     /// Flush any remaining buffered text (call when message is complete)
     fn flush_text_buffer(&self) {
-        let mut buffer = self.text_buffer.lock().expect("text_buffer lock poisoned");
+        let mut buffer = self.text_buffer.lock().unwrap_or_else(|e| e.into_inner());
         if !buffer.is_empty() {
             let remaining = std::mem::take(&mut *buffer);
             // Try one more parse in case we have a complete pattern

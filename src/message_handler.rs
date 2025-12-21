@@ -322,13 +322,10 @@ pub async fn handle_message(
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("matrix");
 
-    // Create event channel for this prompt
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AgentEvent>(2048);
-
-    // Prepare session (sets up event channel, creates session if needed)
+    // Prepare session (creates session if needed)
     // Uses prepare_session_async which minimizes lock holding for concurrent access
     let (session_handle, session_id, is_new_session) =
-        match prepare_session_async(&warm_manager, &channel, event_tx).await {
+        match prepare_session_async(&warm_manager, &channel).await {
             Ok((handle, sid, is_new)) => (handle, sid, is_new),
             Err(e) => {
                 let _ = typing_tx.send(());
@@ -350,25 +347,30 @@ pub async fn handle_message(
         }
     }
 
-    // Spawn the prompt to run concurrently with event processing
-    // Uses the session handle - doesn't need the manager lock
-    let prompt_for_send = prompt.clone();
-    let session_id_for_prompt = session_id.clone();
-    let channel_name_for_log = channel.channel_name.clone();
+    // Send prompt and get event receiver directly - no intermediate channel needed
+    // The backend streams events through the returned EventReceiver
+    tracing::info!(channel = %channel.channel_name, session_id = %session_id, "Sending prompt to agent");
 
-    tracing::info!(channel = %channel_name_for_log, session_id = %session_id, "About to spawn_local for prompt");
+    let mut event_rx = match crate::warm_session::send_prompt_with_handle(
+        &session_handle,
+        &session_id,
+        &prompt,
+    )
+    .await
+    {
+        Ok(receiver) => receiver,
+        Err(e) => {
+            let _ = typing_tx.send(());
+            typing_handle.abort();
+            room.typing_notice(false).await?;
 
-    let prompt_handle = tokio::task::spawn_local(async move {
-        tracing::info!(channel = %channel_name_for_log, session_id = %session_id_for_prompt, "spawn_local task started - calling send_prompt_with_handle");
-        let result = crate::warm_session::send_prompt_with_handle(
-            &session_handle,
-            &session_id_for_prompt,
-            &prompt_for_send,
-        )
-        .await;
-        tracing::info!(channel = %channel_name_for_log, success = result.is_ok(), "spawn_local task completed");
-        result
-    });
+            metrics::record_error("prompt_send");
+            let error_msg = format!("⚠️ Failed to send prompt: {}", e);
+            room.send(RoomMessageEventContent::text_plain(&error_msg))
+                .await?;
+            return Ok(());
+        }
+    };
 
     // Check if debug mode is enabled for this channel
     // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)
@@ -517,13 +519,6 @@ pub async fn handle_message(
     }
 
     tracing::info!(channel = %channel.channel_name, event_count, "Event loop finished");
-
-    // Wait for prompt to complete (it may have already finished before event loop ended)
-    tracing::info!(channel = %channel.channel_name, "Waiting for prompt_handle to complete");
-    if let Err(e) = prompt_handle.await {
-        tracing::warn!(error = %e, "Prompt task failed to join");
-    }
-    tracing::info!(channel = %channel.channel_name, "prompt_handle completed");
 
     // Check if we got a response
     if final_response.is_empty() {

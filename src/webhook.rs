@@ -486,10 +486,8 @@ async fn process_webhook_job(
     session_store: SessionStore,
     warm_manager: SharedWarmSessionManager,
 ) -> Result<WebhookWorkerResponse> {
-    let (event_tx, mut event_rx) = mpsc::channel(2048);
-
     let (session_handle, session_id, is_new_session) =
-        prepare_session_async(&warm_manager, &channel, event_tx).await?;
+        prepare_session_async(&warm_manager, &channel).await?;
 
     if is_new_session {
         if let Err(e) = session_store.update_session_id(&channel.room_id, &session_id) {
@@ -501,29 +499,20 @@ async fn process_webhook_job(
         }
     }
 
-    let prompt_for_send = prompt.clone();
-    let session_id_for_prompt = session_id.clone();
-    let session_handle_for_prompt = session_handle.clone();
-    let channel_for_log = channel.channel_name.clone();
-    let prompt_handle = tokio::task::spawn_local(async move {
-        tracing::info!(
-            channel = %channel_for_log,
-            session_id = %session_id_for_prompt,
-            "Webhook worker prompt started"
-        );
-        let result = send_prompt_with_handle(
-            &session_handle_for_prompt,
-            &session_id_for_prompt,
-            &prompt_for_send,
-        )
-        .await;
-        tracing::info!(
-            channel = %channel_for_log,
-            success = result.is_ok(),
-            "Webhook worker prompt completed"
-        );
-        result
-    });
+    tracing::info!(
+        channel = %channel.channel_name,
+        session_id = %session_id,
+        "Webhook worker sending prompt"
+    );
+
+    // Send prompt and get event receiver directly
+    let mut event_rx = send_prompt_with_handle(&session_handle, &session_id, &prompt).await?;
+
+    tracing::info!(
+        channel = %channel.channel_name,
+        session_id = %session_id,
+        "Webhook worker prompt started, processing events"
+    );
 
     let mut response = String::new();
     let mut session_id_from_event: Option<String> = None;
@@ -600,14 +589,6 @@ async fn process_webhook_job(
                 tracing::debug!(kind = %kind, "Received custom event");
             }
         }
-    }
-
-    if let Err(e) = prompt_handle.await {
-        tracing::warn!(
-            error = %e,
-            channel = %channel.channel_name,
-            "Prompt task failed to join for webhook worker"
-        );
     }
 
     if response.trim().is_empty() {

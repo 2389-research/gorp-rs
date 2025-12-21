@@ -3,11 +3,11 @@
 
 use crate::session::Channel;
 use anyhow::Result;
-use gorp_agent::{AgentEvent, AgentHandle, AgentRegistry};
+use gorp_agent::{AgentHandle, AgentRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock};
 
 /// Configuration for warm session behavior
 #[derive(Debug, Clone)]
@@ -26,8 +26,6 @@ pub struct WarmSession {
     handle: AgentHandle,
     session_id: String,
     last_used: Instant,
-    /// Channel to send events to - updated before each prompt
-    event_tx: Option<mpsc::Sender<AgentEvent>>,
 }
 
 /// Handle to a warm session, allowing concurrent access across channels
@@ -224,7 +222,6 @@ impl WarmSessionManager {
             handle: agent_handle,
             session_id: session_id.clone(),
             last_used: Instant::now(),
-            event_tx: None,
         };
 
         let handle = Arc::new(Mutex::new(warm_session));
@@ -234,14 +231,13 @@ impl WarmSessionManager {
         Ok((handle, session_id, is_new))
     }
 
-    /// Prepare a session for prompting - sets up event channel and returns handle + session_id
+    /// Prepare a session for prompting - returns handle + session_id
     /// WARNING: This method holds the lock during async operations - prefer prepare_session_async
     /// The returned handle should be used for send_prompt WITHOUT holding the manager lock
     /// Returns (session_handle, session_id, is_new_session)
     pub async fn prepare_session(
         &mut self,
         channel: &Channel,
-        event_tx: mpsc::Sender<AgentEvent>,
     ) -> Result<(WarmSessionHandle, String, bool)> {
         let channel_name = &channel.channel_name;
 
@@ -249,7 +245,6 @@ impl WarmSessionManager {
         if let Some(handle) = self.sessions.get(channel_name) {
             let mut session = handle.lock().await;
             session.last_used = Instant::now();
-            session.event_tx = Some(event_tx);
             let session_id = session.session_id.clone();
             tracing::info!(channel = %channel_name, session_id = %session_id, "Prepared warm session for prompt");
             return Ok((Arc::clone(handle), session_id, false));
@@ -257,12 +252,6 @@ impl WarmSessionManager {
 
         // Create new session (may resume existing or create fresh)
         let (handle, session_id, is_new) = self.get_or_create_session(channel).await?;
-
-        // Set up event channel
-        {
-            let mut session = handle.lock().await;
-            session.event_tx = Some(event_tx);
-        }
 
         tracing::info!(channel = %channel_name, session_id = %session_id, is_new = is_new, "Prepared session for prompt");
         Ok((handle, session_id, is_new))
@@ -305,7 +294,6 @@ impl WarmSessionManager {
             handle,
             session_id,
             last_used,
-            event_tx: None,
         };
 
         self.sessions
@@ -315,33 +303,29 @@ impl WarmSessionManager {
 
 /// Send a prompt using a session handle - does NOT require manager lock
 /// This allows concurrent prompts across different channels
+/// Returns the EventReceiver directly - caller is responsible for consuming events
 pub async fn send_prompt_with_handle(
     handle: &WarmSessionHandle,
     session_id: &str,
     text: &str,
-) -> Result<()> {
+) -> Result<gorp_agent::EventReceiver> {
     tracing::info!(session_id = %session_id, prompt_len = text.len(), "send_prompt_with_handle: acquiring session lock");
-    let session = handle.lock().await;
-    tracing::info!(session_id = %session_id, "send_prompt_with_handle: lock acquired, calling prompt");
 
-    // Send prompt and get event receiver
-    let mut receiver = session.handle.prompt(session_id, text).await?;
+    // Hold lock briefly just to clone the AgentHandle and update last_used
+    let agent_handle = {
+        let mut session = handle.lock().await;
+        session.last_used = Instant::now();
+        session.handle.clone()
+    };
+    // Lock released here - allows concurrent prompts to same channel to proceed
 
-    // Forward events to the session's event channel if set
-    if let Some(ref event_tx) = session.event_tx {
-        // Spawn a task to forward events
-        let event_tx = event_tx.clone();
-        tokio::spawn(async move {
-            while let Some(event) = receiver.recv().await {
-                if event_tx.send(event).await.is_err() {
-                    break;
-                }
-            }
-        });
-    }
+    tracing::info!(session_id = %session_id, "send_prompt_with_handle: lock released, calling prompt");
 
-    tracing::info!(session_id = %session_id, "send_prompt_with_handle: prompt started");
-    Ok(())
+    // Send prompt and get event receiver - this happens outside the lock
+    let receiver = agent_handle.prompt(session_id, text).await?;
+
+    tracing::info!(session_id = %session_id, "send_prompt_with_handle: prompt started, returning receiver");
+    Ok(receiver)
 }
 
 /// Thread-safe wrapper for WarmSessionManager
@@ -357,7 +341,6 @@ pub fn create_shared_manager(config: WarmConfig) -> SharedWarmSessionManager {
 pub async fn prepare_session_async(
     manager: &SharedWarmSessionManager,
     channel: &Channel,
-    event_tx: mpsc::Sender<AgentEvent>,
 ) -> Result<(WarmSessionHandle, String, bool)> {
     let channel_name = &channel.channel_name;
 
@@ -370,7 +353,6 @@ pub async fn prepare_session_async(
             let handle_clone = Arc::clone(&handle);
             let mut session = handle.lock().await;
             session.last_used = Instant::now();
-            session.event_tx = Some(event_tx);
             let session_id = session.session_id.clone();
             tracing::info!(channel = %channel_name, session_id = %session_id, "Prepared existing warm session (async)");
             return Ok((handle_clone, session_id, false));
@@ -427,7 +409,6 @@ pub async fn prepare_session_async(
         handle: agent_handle,
         session_id: session_id.clone(),
         last_used: Instant::now(),
-        event_tx: Some(event_tx),
     };
 
     let handle = Arc::new(Mutex::new(warm_session));

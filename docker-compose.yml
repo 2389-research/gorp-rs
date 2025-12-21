@@ -43,6 +43,7 @@ services:
       - ./app-data/mcp-data/pagen:/home/gorp/.local/share/pagen
       - ./app-data/mcp-data/gsuite-mcp:/home/gorp/.config/gsuite-mcp
       - ./app-data/mcp-data/digest:/home/gorp/.local/share/digest
+      - ./app-data/mcp-data/charm:/home/gorp/.local/share/charm
 
     # Webhook port
     ports:
