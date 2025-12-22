@@ -297,16 +297,22 @@ pub async fn handle_message(
 
     // Spawn a task to keep the typing indicator refreshed every 25 seconds
     let typing_room = room.clone();
+    let typing_room_id = room.room_id().to_string();
     let (typing_tx, mut typing_rx) = tokio::sync::oneshot::channel();
     let typing_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(25));
+        let max_duration = tokio::time::Instant::now() + tokio::time::Duration::from_secs(600); // 10 min max
         interval.tick().await; // Skip first immediate tick
 
         loop {
+            if tokio::time::Instant::now() > max_duration {
+                tracing::warn!(room_id = %typing_room_id, "Typing indicator timed out after 10 minutes");
+                break;
+            }
             tokio::select! {
                 _ = interval.tick() => {
                     if let Err(e) = typing_room.typing_notice(true).await {
-                        tracing::warn!(error = %e, "Failed to refresh typing indicator");
+                        tracing::warn!(room_id = %typing_room_id, error = %e, "Failed to refresh typing indicator");
                         break;
                     }
                 }
@@ -388,7 +394,7 @@ pub async fn handle_message(
 
     while let Some(event) = event_rx.recv().await {
         event_count += 1;
-        tracing::debug!(channel = %channel.channel_name, event_count, event = ?event, "Received agent event");
+        tracing::trace!(channel = %channel.channel_name, event_count, event = ?event, "Received agent event");
         match event {
             AgentEvent::ToolStart { name, input, .. } => {
                 tools_used.push(name.clone());
@@ -502,7 +508,7 @@ pub async fn handle_message(
                 return Ok(());
             }
             AgentEvent::SessionChanged { new_session_id } => {
-                tracing::debug!(
+                tracing::info!(
                     old_session = %channel.session_id,
                     new_session = %new_session_id,
                     "Session ID changed during execution"

@@ -125,7 +125,7 @@ impl WarmSessionManager {
     ) -> WarmSessionHandle {
         // Check if another task already created a session
         if let Some(existing) = self.sessions.get(&channel_name) {
-            tracing::debug!(channel = %channel_name, "Session already exists (race), using existing");
+            tracing::info!(channel = %channel_name, "Session already exists (race), using existing");
             return Arc::clone(existing);
         }
         self.sessions.insert(channel_name, Arc::clone(&handle));
@@ -173,6 +173,15 @@ impl WarmSessionManager {
     ) -> Result<(WarmSessionHandle, String, bool)> {
         let channel_name = &channel.channel_name;
 
+        // Check if we need to cleanup before creating new session
+        if self.sessions.len() > 1000 {
+            tracing::warn!(
+                session_count = self.sessions.len(),
+                "Session count exceeds limit (1000), running cleanup"
+            );
+            self.cleanup_stale();
+        }
+
         // Check if we have a warm session in memory
         if let Some(handle) = self.sessions.get(channel_name) {
             let mut session = handle.lock().await;
@@ -198,24 +207,69 @@ impl WarmSessionManager {
         // Try to resume existing session if channel has one
         let (session_id, is_new) = if channel.started && !channel.session_id.is_empty() {
             tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Attempting to resume existing session");
-            match agent_handle.load_session(&channel.session_id).await {
-                Ok(()) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                agent_handle.load_session(&channel.session_id)
+            ).await {
+                Ok(Ok(())) => {
                     tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Successfully resumed session");
                     (channel.session_id.clone(), false)
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(channel = %channel_name, session_id = %channel.session_id, error = %e, "Failed to resume session, creating new one");
-                    let new_id = agent_handle.new_session().await?;
-                    tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after resume failure");
-                    (new_id, true)
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        agent_handle.new_session()
+                    ).await {
+                        Ok(Ok(new_id)) => {
+                            tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after resume failure");
+                            (new_id, true)
+                        }
+                        Ok(Err(e)) => {
+                            return Err(anyhow::anyhow!("Failed to create new session: {}", e));
+                        }
+                        Err(_) => {
+                            return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                        }
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(channel = %channel_name, session_id = %channel.session_id, "Timeout loading session after 60 seconds, creating new one");
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        agent_handle.new_session()
+                    ).await {
+                        Ok(Ok(new_id)) => {
+                            tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after timeout");
+                            (new_id, true)
+                        }
+                        Ok(Err(e)) => {
+                            return Err(anyhow::anyhow!("Failed to create new session: {}", e));
+                        }
+                        Err(_) => {
+                            return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                        }
+                    }
                 }
             }
         } else {
             // No existing session, create new one
             tracing::info!(channel = %channel_name, "Creating new session");
-            let new_id = agent_handle.new_session().await?;
-            tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session");
-            (new_id, true)
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                agent_handle.new_session()
+            ).await {
+                Ok(Ok(new_id)) => {
+                    tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session");
+                    (new_id, true)
+                }
+                Ok(Err(e)) => {
+                    return Err(anyhow::anyhow!("Failed to create new session: {}", e));
+                }
+                Err(_) => {
+                    return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                }
+            }
         };
 
         let warm_session = WarmSession {
@@ -264,7 +318,7 @@ impl WarmSessionManager {
         let channel_name = &channel.channel_name;
 
         if self.sessions.contains_key(channel_name) {
-            tracing::debug!(channel = %channel_name, "Channel already warm");
+            tracing::info!(channel = %channel_name, "Channel already warm");
             return Ok(None);
         }
 
@@ -309,7 +363,7 @@ pub async fn send_prompt_with_handle(
     session_id: &str,
     text: &str,
 ) -> Result<gorp_agent::EventReceiver> {
-    tracing::info!(session_id = %session_id, prompt_len = text.len(), "send_prompt_with_handle: acquiring session lock");
+    tracing::debug!(session_id = %session_id, prompt_len = text.len(), "Sending prompt");
 
     // Hold lock briefly just to clone the AgentHandle and update last_used
     let agent_handle = {
@@ -319,12 +373,9 @@ pub async fn send_prompt_with_handle(
     };
     // Lock released here - allows concurrent prompts to same channel to proceed
 
-    tracing::info!(session_id = %session_id, "send_prompt_with_handle: lock released, calling prompt");
-
     // Send prompt and get event receiver - this happens outside the lock
     let receiver = agent_handle.prompt(session_id, text).await?;
 
-    tracing::info!(session_id = %session_id, "send_prompt_with_handle: prompt started, returning receiver");
     Ok(receiver)
 }
 
@@ -385,23 +436,68 @@ pub async fn prepare_session_async(
     // Step 3: Do slow async session creation OUTSIDE the lock
     let (session_id, is_new) = if channel.started && !channel.session_id.is_empty() {
         tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Attempting to resume existing session (async)");
-        match agent_handle.load_session(&channel.session_id).await {
-            Ok(()) => {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            agent_handle.load_session(&channel.session_id)
+        ).await {
+            Ok(Ok(())) => {
                 tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Successfully resumed session (async)");
                 (channel.session_id.clone(), false)
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(channel = %channel_name, session_id = %channel.session_id, error = %e, "Failed to resume session, creating new one (async)");
-                let new_id = agent_handle.new_session().await?;
-                tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after resume failure (async)");
-                (new_id, true)
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    agent_handle.new_session()
+                ).await {
+                    Ok(Ok(new_id)) => {
+                        tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after resume failure (async)");
+                        (new_id, true)
+                    }
+                    Ok(Err(e)) => {
+                        return Err(anyhow::anyhow!("Failed to create new session: {}", e));
+                    }
+                    Err(_) => {
+                        return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                    }
+                }
+            }
+            Err(_) => {
+                tracing::warn!(channel = %channel_name, session_id = %channel.session_id, "Timeout loading session after 60 seconds, creating new one (async)");
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    agent_handle.new_session()
+                ).await {
+                    Ok(Ok(new_id)) => {
+                        tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after timeout (async)");
+                        (new_id, true)
+                    }
+                    Ok(Err(e)) => {
+                        return Err(anyhow::anyhow!("Failed to create new session: {}", e));
+                    }
+                    Err(_) => {
+                        return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                    }
+                }
             }
         }
     } else {
         tracing::info!(channel = %channel_name, "Creating new session (async)");
-        let new_id = agent_handle.new_session().await?;
-        tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session (async)");
-        (new_id, true)
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            agent_handle.new_session()
+        ).await {
+            Ok(Ok(new_id)) => {
+                tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session (async)");
+                (new_id, true)
+            }
+            Ok(Err(e)) => {
+                return Err(anyhow::anyhow!("Failed to create new session: {}", e));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+            }
+        }
     };
 
     // Step 4: Create the session object

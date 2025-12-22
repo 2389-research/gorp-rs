@@ -1024,7 +1024,7 @@ async fn run_start() -> Result<()> {
     local.run_until(async move {
         // Spawn the message handler task inside the LocalSet
         // This ensures spawn_local works correctly
-        let handler_task = tokio::task::spawn_local(async move {
+        let mut handler_task = tokio::task::spawn_local(async move {
             tracing::info!("Message handler LocalSet task started");
             while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
                 let room_id = room.room_id().to_owned();
@@ -1054,16 +1054,40 @@ async fn run_start() -> Result<()> {
         tokio::task::yield_now().await;
         tracing::info!("Handler task spawned, starting sync");
 
-        // Run sync and handler concurrently
-        tokio::select! {
-            sync_result = client.sync(settings) => {
-                sync_result
-            }
-            _ = handler_task => {
-                tracing::error!("Message handler task exited unexpectedly");
-                Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::other(
-                    "Message handler exited"
-                ))))
+        // Run sync loop with timeout protection
+        // If the handler task exits, we'll exit too
+        loop {
+            tokio::select! {
+                sync_result = tokio::time::timeout(
+                    std::time::Duration::from_secs(90),
+                    client.sync(settings.clone())
+                ) => {
+                    match sync_result {
+                        Ok(Ok(_)) => {
+                            // Sync completed normally (shouldn't happen, sync is infinite)
+                            tracing::warn!("Matrix sync returned unexpectedly");
+                            break Ok(());
+                        }
+                        Ok(Err(e)) => {
+                            // Sync error - log and retry
+                            tracing::error!(error = %e, "Matrix sync error, retrying...");
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            continue;
+                        }
+                        Err(_) => {
+                            // Timeout - log and retry
+                            tracing::warn!("Matrix sync timed out after 90 seconds, retrying...");
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            continue;
+                        }
+                    }
+                }
+                _ = &mut handler_task => {
+                    tracing::error!("Message handler task exited unexpectedly");
+                    break Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::other(
+                        "Message handler exited"
+                    ))));
+                }
             }
         }
     }).await?;

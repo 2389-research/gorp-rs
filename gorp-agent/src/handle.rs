@@ -235,6 +235,13 @@ impl EventReceiver {
 
     /// Try to receive an event without blocking
     pub fn try_recv(&mut self) -> Option<AgentEvent> {
-        self.rx.try_recv().ok()
+        match self.rx.try_recv() {
+            Ok(event) => Some(event),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                tracing::debug!("Event channel disconnected");
+                None
+            }
+        }
     }
 }

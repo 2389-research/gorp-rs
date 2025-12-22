@@ -230,6 +230,25 @@ async fn webhook_handler(
         );
     }
 
+    // Validate prompt size
+    const MAX_WEBHOOK_PROMPT_LENGTH: usize = 64 * 1024; // 64KB
+    if prompt_text.len() > MAX_WEBHOOK_PROMPT_LENGTH {
+        tracing::warn!(
+            session_id = %session_id,
+            prompt_len = prompt_text.len(),
+            "Webhook prompt exceeds size limit"
+        );
+        metrics::record_webhook_request("bad_request");
+        metrics::record_error("webhook_prompt_too_large");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(WebhookResponse {
+                success: false,
+                message: format!("Prompt too large (max {} bytes)", MAX_WEBHOOK_PROMPT_LENGTH),
+            }),
+        );
+    }
+
     // Look up channel by session ID
     let channel = match state.session_store.get_by_session_id(&session_id) {
         Ok(Some(c)) => c,
@@ -341,7 +360,12 @@ async fn webhook_handler(
     let worker_result = match responder_rx.await {
         Ok(result) => result,
         Err(_) => {
-            tracing::error!("Warm session worker dropped response channel");
+            tracing::error!(
+                session_id = %session_id,
+                room_id = %channel.room_id,
+                channel = %channel.channel_name,
+                "Warm session worker dropped response channel"
+            );
             metrics::record_webhook_request("error");
             metrics::record_error("webhook_worker_dropped");
             return (
@@ -517,7 +541,22 @@ async fn process_webhook_job(
     let mut response = String::new();
     let mut session_id_from_event: Option<String> = None;
 
+    // Add timeout to prevent indefinite waiting
+    let timeout_duration = std::time::Duration::from_secs(300); // 5 minutes
+    let start = std::time::Instant::now();
+
     while let Some(event) = event_rx.recv().await {
+        // Check for timeout
+        if start.elapsed() > timeout_duration {
+            tracing::warn!(
+                channel = %channel.channel_name,
+                session_id = %session_id,
+                "Webhook event processing timed out after 5 minutes"
+            );
+            metrics::record_error("webhook_timeout");
+            return Err(anyhow::anyhow!("Request timed out after 5 minutes"));
+        }
+
         match event {
             AgentEvent::ToolStart { name, input, .. } => {
                 // Extract input preview from JSON input

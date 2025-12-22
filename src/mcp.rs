@@ -604,14 +604,46 @@ async fn handle_send_attachment(state: &McpState, args: &Value) -> Result<String
         .get_room(&room_id)
         .ok_or_else(|| format!("Room not found: {}", room_id_str))?;
 
-    // Validate file exists
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err(format!("File not found: {}", file_path));
+    // Validate path and prevent directory traversal
+    let workspace_root = Path::new(&state.workspace_path);
+    let requested_path = Path::new(file_path);
+
+    // Reject paths with ".." to prevent traversal
+    if file_path.contains("..") {
+        tracing::warn!(
+            path = file_path,
+            "Path traversal attempt blocked: contains '..'"
+        );
+        return Err("Invalid path: contains path traversal".to_string());
     }
 
+    // Build the full path relative to workspace
+    let full_path = workspace_root.join(requested_path);
+
+    // Canonicalize both paths to resolve symlinks and validate
+    let canonical_workspace = workspace_root
+        .canonicalize()
+        .map_err(|e| format!("Workspace path error: {}", e))?;
+
+    let canonical_full = full_path
+        .canonicalize()
+        .map_err(|e| format!("File not found: {}", e))?;
+
+    // Verify the resolved path is within workspace
+    if !canonical_full.starts_with(&canonical_workspace) {
+        tracing::warn!(
+            requested_path = file_path,
+            resolved_path = %canonical_full.display(),
+            workspace_root = %canonical_workspace.display(),
+            "Path traversal attempt blocked: resolved path outside workspace"
+        );
+        return Err("Access denied: path outside workspace".to_string());
+    }
+
+    let path = canonical_full;
+
     // Read file contents
-    let file_data = tokio::fs::read(path)
+    let file_data = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
@@ -622,7 +654,7 @@ async fn handle_send_attachment(state: &McpState, args: &Value) -> Result<String
         .to_string();
 
     // Detect MIME type from extension
-    let mime_type = mime_guess::from_path(path)
+    let mime_type = mime_guess::from_path(&path)
         .first()
         .unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM);
 
@@ -1092,19 +1124,51 @@ async fn handle_set_room_avatar(state: &McpState, args: &Value) -> Result<String
         .get_room(&room_id)
         .ok_or_else(|| format!("Room not found: {}", channel.room_id))?;
 
-    // Validate image file exists
-    let path = Path::new(image_path);
-    if !path.exists() {
-        return Err(format!("Image file not found: {}", image_path));
+    // Validate path and prevent directory traversal
+    let workspace_root = Path::new(&state.workspace_path);
+    let requested_path = Path::new(image_path);
+
+    // Reject paths with ".." to prevent traversal
+    if image_path.contains("..") {
+        tracing::warn!(
+            path = image_path,
+            "Path traversal attempt blocked: contains '..'"
+        );
+        return Err("Invalid path: contains path traversal".to_string());
     }
 
+    // Build the full path relative to workspace
+    let full_path = workspace_root.join(requested_path);
+
+    // Canonicalize both paths to resolve symlinks and validate
+    let canonical_workspace = workspace_root
+        .canonicalize()
+        .map_err(|e| format!("Workspace path error: {}", e))?;
+
+    let canonical_full = full_path
+        .canonicalize()
+        .map_err(|e| format!("Image file not found: {}", e))?;
+
+    // Verify the resolved path is within workspace
+    if !canonical_full.starts_with(&canonical_workspace) {
+        tracing::warn!(
+            requested_path = image_path,
+            resolved_path = %canonical_full.display(),
+            workspace_root = %canonical_workspace.display(),
+            "Path traversal attempt blocked: resolved path outside workspace"
+        );
+        return Err("Access denied: path outside workspace".to_string());
+    }
+
+    let path = canonical_full;
+
     // Read image data
-    let image_data = tokio::fs::read(path)
+    let image_data = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("Failed to read image file: {}", e))?;
 
     // Detect MIME type
-    let mime_type = mime_guess::from_path(path)
+    let mime_type = mime_guess::from_path(&path)
         .first()
         .unwrap_or(mime_guess::mime::IMAGE_PNG);
 
