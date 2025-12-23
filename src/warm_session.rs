@@ -26,6 +26,22 @@ pub struct WarmSession {
     handle: AgentHandle,
     session_id: String,
     last_used: Instant,
+    /// Set to true when session is invalidated (orphaned/lost)
+    /// Concurrent users should check this before using
+    invalidated: bool,
+}
+
+impl WarmSession {
+    /// Mark this session as invalidated
+    /// Concurrent users will see this and skip the session
+    pub fn set_invalidated(&mut self, invalidated: bool) {
+        self.invalidated = invalidated;
+    }
+
+    /// Check if session is invalidated
+    pub fn is_invalidated(&self) -> bool {
+        self.invalidated
+    }
 }
 
 /// Handle to a warm session, allowing concurrent access across channels
@@ -170,6 +186,23 @@ impl WarmSessionManager {
         self.sessions.remove(channel_name).is_some()
     }
 
+    /// Invalidate a session - marks it as invalid for concurrent users, then removes from cache
+    /// This should be used instead of evict() when recovering from orphaned sessions,
+    /// as it ensures concurrent users see the session as invalid before it's removed.
+    /// Returns the session handle if one existed (so caller can await the lock if needed)
+    pub fn invalidate_session(&mut self, channel_name: &str) -> Option<WarmSessionHandle> {
+        if let Some(handle) = self.sessions.remove(channel_name) {
+            // Try to mark as invalidated - if lock is held, the concurrent user
+            // will see it when they try to use the session
+            if let Ok(mut session) = handle.try_lock() {
+                session.invalidated = true;
+            }
+            Some(handle)
+        } else {
+            None
+        }
+    }
+
     /// Get an existing session handle or create a new one
     /// WARNING: This method holds the lock during async operations - prefer prepare_session_async
     /// Returns (session_handle, session_id, is_new_session)
@@ -296,6 +329,7 @@ impl WarmSessionManager {
             handle: agent_handle,
             session_id: session_id.clone(),
             last_used: Instant::now(),
+            invalidated: false,
         };
 
         let handle = Arc::new(Mutex::new(warm_session));
@@ -368,6 +402,7 @@ impl WarmSessionManager {
             handle,
             session_id,
             last_used,
+            invalidated: false,
         };
 
         self.sessions
@@ -385,9 +420,15 @@ pub async fn send_prompt_with_handle(
 ) -> Result<gorp_agent::EventReceiver> {
     tracing::debug!(session_id = %session_id, prompt_len = text.len(), "Sending prompt");
 
-    // Hold lock briefly just to clone the AgentHandle and update last_used
+    // Hold lock briefly just to clone the AgentHandle, check validity, and update last_used
     let agent_handle = {
         let mut session = handle.lock().await;
+        // Check if session was invalidated by another task (orphan recovery)
+        if session.invalidated {
+            return Err(anyhow::anyhow!(
+                "Session was invalidated (orphaned). Please retry."
+            ));
+        }
         session.last_used = Instant::now();
         session.handle.clone()
     };
@@ -419,14 +460,21 @@ pub async fn prepare_session_async(
     {
         let mgr = manager.read().await;
         if let Some(handle) = mgr.get_existing_session(channel_name) {
-            // Found existing session - just need to update it
-            // Clone the handle before locking so we can return it
+            // Found existing session - check if it's still valid
             let handle_clone = Arc::clone(&handle);
             let mut session = handle.lock().await;
-            session.last_used = Instant::now();
-            let session_id = session.session_id.clone();
-            tracing::info!(channel = %channel_name, session_id = %session_id, "Prepared existing warm session (async)");
-            return Ok((handle_clone, session_id, false));
+            // Skip invalidated sessions - treat as cache miss
+            if session.invalidated {
+                tracing::info!(channel = %channel_name, "Skipping invalidated warm session, will create new");
+                drop(session);
+                drop(mgr);
+                // Fall through to create new session
+            } else {
+                session.last_used = Instant::now();
+                let session_id = session.session_id.clone();
+                tracing::info!(channel = %channel_name, session_id = %session_id, "Prepared existing warm session (async)");
+                return Ok((handle_clone, session_id, false));
+            }
         }
         // Lock released here
     }
@@ -543,6 +591,7 @@ pub async fn prepare_session_async(
         handle: agent_handle,
         session_id: session_id.clone(),
         last_used: Instant::now(),
+        invalidated: false,
     };
 
     let handle = Arc::new(Mutex::new(warm_session));

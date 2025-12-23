@@ -596,6 +596,11 @@ async fn process_webhook_job(
                             "Failed to reset invalid session from webhook"
                         );
                     }
+                    // Mark session as invalidated FIRST so concurrent users see it
+                    {
+                        let mut session = session_handle.lock().await;
+                        session.set_invalidated(true);
+                    }
                     // Evict from warm cache so next request creates fresh session
                     let evicted = {
                         let mut mgr = warm_manager.write().await;
@@ -622,6 +627,11 @@ async fn process_webhook_job(
                         room_id = %channel.room_id,
                         "Failed to reset invalid session from webhook"
                     );
+                }
+                // Mark session as invalidated FIRST so concurrent users see it
+                {
+                    let mut session = session_handle.lock().await;
+                    session.set_invalidated(true);
                 }
                 // Evict from warm cache so next request creates fresh session
                 let evicted = {

@@ -475,7 +475,12 @@ pub async fn handle_message(
                     if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
                         tracing::error!(error = %e, "Failed to reset invalid session");
                     }
-                    // Evict from warm cache so next message creates fresh session
+                    // Mark session as invalidated FIRST so concurrent users see it
+                    {
+                        let mut session = session_handle.lock().await;
+                        session.set_invalidated(true);
+                    }
+                    // Then evict from warm cache
                     let evicted = {
                         let mut mgr = warm_manager.write().await;
                         mgr.evict(&channel.channel_name)
@@ -508,7 +513,12 @@ pub async fn handle_message(
                 if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
                     tracing::error!(error = %e, "Failed to reset invalid session");
                 }
-                // Evict from warm cache so next message creates fresh session
+                // Mark session as invalidated FIRST so concurrent users see it
+                {
+                    let mut session = session_handle.lock().await;
+                    session.set_invalidated(true);
+                }
+                // Then evict from warm cache
                 let evicted = {
                     let mut mgr = warm_manager.write().await;
                     mgr.evict(&channel.channel_name)

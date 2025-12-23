@@ -1112,7 +1112,12 @@ async fn execute_schedule(
                     if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
                         tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
                     }
-                    // Evict from warm cache so next execution creates fresh session
+                    // Mark session as invalidated FIRST so concurrent users see it
+                    {
+                        let mut session = session_handle.lock().await;
+                        session.set_invalidated(true);
+                    }
+                    // Then evict from warm cache
                     let evicted = {
                         let mut mgr = warm_manager.write().await;
                         mgr.evict(&channel.channel_name)
@@ -1146,7 +1151,12 @@ async fn execute_schedule(
                 if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
                     tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
                 }
-                // Evict from warm cache so next execution creates fresh session
+                // Mark session as invalidated FIRST so concurrent users see it
+                {
+                    let mut session = session_handle.lock().await;
+                    session.set_invalidated(true);
+                }
+                // Then evict from warm cache
                 let evicted = {
                     let mut mgr = warm_manager.write().await;
                     mgr.evict(&channel.channel_name)
