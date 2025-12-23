@@ -28,6 +28,72 @@ use std::time::Duration;
 /// Startup timestamp - used to filter out historical messages on initial sync
 /// Messages older than this are skipped to prevent processing old backlog
 static STARTUP_TIME: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
+
+/// Check if a message timestamp (in seconds since epoch) is before the startup time
+/// Returns true if the message should be skipped (is historical)
+fn is_message_before_startup(
+    msg_timestamp_secs: i64,
+    startup_time: &chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if let Some(msg_time) = chrono::DateTime::from_timestamp(msg_timestamp_secs, 0) {
+        msg_time < *startup_time
+    } else {
+        false // If we can't parse, don't skip
+    }
+}
+
+#[cfg(test)]
+mod startup_filter_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn test_message_before_startup_is_skipped() {
+        let startup = Utc.with_ymd_and_hms(2025, 12, 23, 12, 0, 0).unwrap();
+        let old_msg_secs = Utc
+            .with_ymd_and_hms(2025, 12, 23, 11, 0, 0)
+            .unwrap()
+            .timestamp();
+
+        assert!(is_message_before_startup(old_msg_secs, &startup));
+    }
+
+    #[test]
+    fn test_message_after_startup_is_not_skipped() {
+        let startup = Utc.with_ymd_and_hms(2025, 12, 23, 12, 0, 0).unwrap();
+        let new_msg_secs = Utc
+            .with_ymd_and_hms(2025, 12, 23, 13, 0, 0)
+            .unwrap()
+            .timestamp();
+
+        assert!(!is_message_before_startup(new_msg_secs, &startup));
+    }
+
+    #[test]
+    fn test_message_at_startup_is_not_skipped() {
+        let startup = Utc.with_ymd_and_hms(2025, 12, 23, 12, 0, 0).unwrap();
+        let same_msg_secs = startup.timestamp();
+
+        assert!(!is_message_before_startup(same_msg_secs, &startup));
+    }
+
+    #[test]
+    fn test_realistic_timestamp_conversion() {
+        // Simulate what happens with Matrix timestamps
+        // Matrix gives us MilliSecondsSinceUnixEpoch, we call as_secs() which divides by 1000
+        let now = Utc::now();
+        let startup = now - chrono::Duration::seconds(10); // Started 10 seconds ago
+
+        // A message from 1 hour ago (should be skipped)
+        let old_msg = now - chrono::Duration::hours(1);
+        assert!(is_message_before_startup(old_msg.timestamp(), &startup));
+
+        // A message from 5 seconds ago (should NOT be skipped - after startup)
+        let recent_msg = now - chrono::Duration::seconds(5);
+        assert!(!is_message_before_startup(recent_msg.timestamp(), &startup));
+    }
+}
+
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -1202,21 +1268,15 @@ fn register_event_handlers(
             // Skip historical messages from before bot startup
             // This prevents processing old backlog when container restarts
             if let Some(startup_time) = STARTUP_TIME.get() {
-                // Convert origin_server_ts to DateTime (as_secs returns seconds from millis)
-                let msg_time = chrono::DateTime::from_timestamp(
-                    original_event.origin_server_ts.as_secs().into(),
-                    0, // nanoseconds
-                );
-                if let Some(msg_time) = msg_time {
-                    if msg_time < *startup_time {
-                        tracing::debug!(
-                            room_id = %room.room_id(),
-                            msg_time = %msg_time,
-                            startup_time = %startup_time,
-                            "Skipping historical message from before startup"
-                        );
-                        return;
-                    }
+                let msg_secs: i64 = original_event.origin_server_ts.as_secs().into();
+                if is_message_before_startup(msg_secs, startup_time) {
+                    tracing::debug!(
+                        room_id = %room.room_id(),
+                        msg_timestamp_secs = msg_secs,
+                        startup_time = %startup_time,
+                        "Skipping historical message from before startup"
+                    );
+                    return;
                 }
             }
 
