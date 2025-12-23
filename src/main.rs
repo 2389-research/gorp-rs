@@ -1256,40 +1256,31 @@ async fn run_start() -> Result<()> {
         tokio::task::yield_now().await;
         tracing::info!("Handler task spawned, starting sync");
 
-        // Run sync loop with timeout protection
-        // If the handler task exits, we'll exit too
-        loop {
-            tokio::select! {
-                sync_result = tokio::time::timeout(
-                    std::time::Duration::from_secs(90),
-                    client.sync(settings.clone())
-                ) => {
-                    match sync_result {
-                        Ok(Ok(_)) => {
-                            // Sync completed normally (shouldn't happen, sync is infinite)
-                            tracing::warn!("Matrix sync returned unexpectedly");
-                            break Ok(());
-                        }
-                        Ok(Err(e)) => {
-                            // Sync error - log and retry
-                            tracing::error!(error = %e, "Matrix sync error, retrying...");
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                            continue;
-                        }
-                        Err(_) => {
-                            // Timeout - log and retry
-                            tracing::warn!("Matrix sync timed out after 90 seconds, retrying...");
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                            continue;
-                        }
+        // Run sync - let the SDK handle reconnection internally
+        // The SDK's sync() is designed to run forever with built-in retry logic.
+        // Previously we wrapped this in a 90-second timeout, but that can cause
+        // state corruption when cancelled mid-operation, leading to duplicate events.
+        // If the handler task exits, we'll exit too.
+        tokio::select! {
+            sync_result = client.sync(settings.clone()) => {
+                match sync_result {
+                    Ok(_) => {
+                        // Sync completed normally (shouldn't happen, sync is infinite)
+                        tracing::warn!("Matrix sync returned unexpectedly");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        // Sync error - this is fatal, let it propagate
+                        tracing::error!(error = %e, "Matrix sync failed");
+                        Err(e)
                     }
                 }
-                _ = &mut handler_task => {
-                    tracing::error!("Message handler task exited unexpectedly");
-                    break Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::other(
-                        "Message handler exited"
-                    ))));
-                }
+            }
+            _ = &mut handler_task => {
+                tracing::error!("Message handler task exited unexpectedly");
+                Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::other(
+                    "Message handler exited"
+                ))))
             }
         }
     }).await?;
