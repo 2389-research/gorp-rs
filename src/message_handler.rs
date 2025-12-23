@@ -1052,8 +1052,18 @@ async fn handle_command(
                 "Channel deleted by user"
             );
         }
-        "reset" if is_dm && command_parts.len() >= 2 => {
+        "reset" if is_dm => {
             // DM command: !reset <channel_name>
+            if command_parts.len() < 2 {
+                room.send(RoomMessageEventContent::text_plain(
+                    "Usage: !reset <channel-name>\n\n\
+                    Resets the session for the specified channel.\n\
+                    Use !list to see available channels.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
             let channel_name = command_parts[1].to_lowercase();
 
             // Look up channel by name

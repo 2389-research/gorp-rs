@@ -620,4 +620,44 @@ mod tests {
         manager.cleanup_stale();
         assert_eq!(manager.sessions.len(), 3);
     }
+
+    #[tokio::test]
+    async fn test_evict_removes_existing_session() {
+        let config = WarmConfig {
+            keep_alive_duration: Duration::from_secs(3600),
+            pre_warm_lead_time: Duration::from_secs(300),
+            agent_binary: "claude".to_string(),
+            backend_type: "acp".to_string(),
+        };
+        let mut manager = WarmSessionManager::new(config);
+
+        // Insert a session
+        manager.inject_test_session(
+            "test_channel".to_string(),
+            "session_123".to_string(),
+            Instant::now(),
+        );
+
+        assert!(manager.has_session("test_channel"));
+
+        // Evict should return true and remove the session
+        let result = manager.evict("test_channel");
+        assert!(result, "evict() should return true when session exists");
+        assert!(!manager.has_session("test_channel"));
+    }
+
+    #[test]
+    fn test_evict_returns_false_for_nonexistent_session() {
+        let config = WarmConfig {
+            keep_alive_duration: Duration::from_secs(3600),
+            pre_warm_lead_time: Duration::from_secs(300),
+            agent_binary: "claude".to_string(),
+            backend_type: "acp".to_string(),
+        };
+        let mut manager = WarmSessionManager::new(config);
+
+        // Evict a session that doesn't exist
+        let result = manager.evict("nonexistent_channel");
+        assert!(!result, "evict() should return false when session doesn't exist");
+    }
 }
