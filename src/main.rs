@@ -1202,9 +1202,10 @@ fn register_event_handlers(
             // Skip historical messages from before bot startup
             // This prevents processing old backlog when container restarts
             if let Some(startup_time) = STARTUP_TIME.get() {
-                // Convert origin_server_ts (milliseconds since epoch) to DateTime
-                let msg_time = chrono::DateTime::from_timestamp_millis(
+                // Convert origin_server_ts to DateTime (as_secs returns seconds from millis)
+                let msg_time = chrono::DateTime::from_timestamp(
                     original_event.origin_server_ts.as_secs().into(),
+                    0, // nanoseconds
                 );
                 if let Some(msg_time) = msg_time {
                     if msg_time < *startup_time {
