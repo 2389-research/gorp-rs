@@ -22,6 +22,7 @@ use matrix_sdk::{
     },
     Client,
 };
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -1104,9 +1105,36 @@ async fn run_start() -> Result<()> {
         // This ensures spawn_local works correctly
         let mut handler_task = tokio::task::spawn_local(async move {
             tracing::info!("Message handler LocalSet task started");
+
+            // Event deduplication: track recently seen event IDs to prevent
+            // processing the same Matrix event multiple times (can happen during
+            // sync reconnections or SDK event delivery quirks)
+            let mut seen_events: HashSet<String> = HashSet::new();
+            const MAX_SEEN_EVENTS: usize = 10000;
+
             while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
+                // Deduplicate by event_id - skip if we've already processed this event
+                let event_id = event.event_id.to_string();
+                if seen_events.contains(&event_id) {
+                    tracing::debug!(
+                        event_id = %event_id,
+                        room_id = %room.room_id(),
+                        "Skipping duplicate event - already processed"
+                    );
+                    continue;
+                }
+
+                // Track this event ID
+                seen_events.insert(event_id.clone());
+
+                // Prune cache if it gets too large (simple strategy: clear and start fresh)
+                if seen_events.len() > MAX_SEEN_EVENTS {
+                    seen_events.clear();
+                    tracing::debug!("Cleared event dedup cache after reaching {} entries", MAX_SEEN_EVENTS);
+                }
+
                 let room_id = room.room_id().to_owned();
-                tracing::info!(room_id = %room_id, "Spawning concurrent message handler");
+                tracing::info!(room_id = %room_id, event_id = %event_id, "Spawning concurrent message handler");
                 // Spawn each message handler concurrently instead of awaiting sequentially
                 tokio::task::spawn_local(async move {
                     tracing::info!(room_id = %room_id, "Processing message concurrently");
