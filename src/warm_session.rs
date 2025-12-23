@@ -164,6 +164,12 @@ impl WarmSessionManager {
         AgentRegistry::default()
     }
 
+    /// Evict a session from the warm cache
+    /// Returns true if a session was removed, false if no session existed
+    pub fn evict(&mut self, channel_name: &str) -> bool {
+        self.sessions.remove(channel_name).is_some()
+    }
+
     /// Get an existing session handle or create a new one
     /// WARNING: This method holds the lock during async operations - prefer prepare_session_async
     /// Returns (session_handle, session_id, is_new_session)

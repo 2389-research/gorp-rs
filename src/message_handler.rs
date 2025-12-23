@@ -170,6 +170,7 @@ pub async fn handle_message(
             sender,
             is_dm,
             &config,
+            &warm_manager,
         )
         .await;
         let duration = start_time.elapsed().as_secs_f64();
@@ -644,6 +645,7 @@ async fn handle_command(
     sender: &str,
     is_dm: bool,
     config: &Config,
+    warm_manager: &SharedWarmSessionManager,
 ) -> Result<()> {
     let parts: Vec<&str> = body.split_whitespace().collect();
 
@@ -666,6 +668,7 @@ async fn handle_command(
             !create <name> - Create new channel\n\
             !join <name> - Get invited to a channel\n\
             !delete <name> - Remove channel (keeps workspace)\n\
+            !reset <name> - Reset channel session remotely\n\
             !cleanup - Leave orphaned rooms\n\
             !restore-rooms - Restore channels from workspace directories\n\
             !list - Show all channels\n\
@@ -1047,6 +1050,49 @@ async fn handle_command(
                 channel_name = %channel_name,
                 room_id = %room_id,
                 "Channel deleted by user"
+            );
+        }
+        "reset" if is_dm && command_parts.len() >= 2 => {
+            // DM command: !reset <channel_name>
+            let channel_name = command_parts[1].to_lowercase();
+
+            // Look up channel by name
+            let Some(channel) = session_store.get_by_name(&channel_name)? else {
+                room.send(RoomMessageEventContent::text_plain(format!(
+                    "❌ Channel '{}' not found.\n\nUse !list to see all channels.",
+                    channel_name
+                )))
+                .await?;
+                return Ok(());
+            };
+
+            // Generate new session ID and reset started flag
+            let new_session_id = uuid::Uuid::new_v4().to_string();
+            session_store.reset_session(&channel.channel_name, &new_session_id)?;
+
+            // Evict from warm session cache
+            let evicted = {
+                let mut mgr = warm_manager.write().await;
+                mgr.evict(&channel.channel_name)
+            };
+
+            room.send(RoomMessageEventContent::text_plain(format!(
+                "🔄 Session Reset\n\n\
+                Channel: {}\n\
+                New Session ID: {}\n\n\
+                Claude will start fresh on next message.\n\
+                MCP tools and settings will be reloaded.",
+                channel.channel_name,
+                &new_session_id[..8]
+            )))
+            .await?;
+
+            tracing::info!(
+                channel = %channel.channel_name,
+                old_session = %channel.session_id,
+                new_session = %new_session_id,
+                evicted = evicted,
+                "Session reset by user from DM"
             );
         }
         "leave" => {
@@ -1940,6 +1986,12 @@ async fn handle_command(
             let new_session_id = uuid::Uuid::new_v4().to_string();
             session_store.reset_session(&channel.channel_name, &new_session_id)?;
 
+            // Evict from warm session cache
+            let evicted = {
+                let mut mgr = warm_manager.write().await;
+                mgr.evict(&channel.channel_name)
+            };
+
             room.send(RoomMessageEventContent::text_plain(format!(
                 "🔄 Session Reset\n\n\
                 Channel: {}\n\
@@ -1955,6 +2007,7 @@ async fn handle_command(
                 channel = %channel.channel_name,
                 old_session = %channel.session_id,
                 new_session = %new_session_id,
+                evicted = evicted,
                 "Session reset by user"
             );
         }
@@ -1964,6 +2017,7 @@ async fn handle_command(
                 !create <name> - Create new channel\n\
                 !join <name> - Get invited to channel\n\
                 !delete <name> - Remove channel\n\
+                !reset <name> - Reset channel session remotely\n\
                 !cleanup - Leave orphaned rooms\n\
                 !restore-rooms - Restore channels from workspace\n\
                 !list - Show all channels\n\
