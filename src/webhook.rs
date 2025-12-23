@@ -596,6 +596,16 @@ async fn process_webhook_job(
                             "Failed to reset invalid session from webhook"
                         );
                     }
+                    // Evict from warm cache so next request creates fresh session
+                    let evicted = {
+                        let mut mgr = warm_manager.write().await;
+                        mgr.evict(&channel.channel_name)
+                    };
+                    tracing::info!(
+                        channel = %channel.channel_name,
+                        evicted = evicted,
+                        "Evicted warm session after orphaned session in webhook"
+                    );
                     metrics::record_error("invalid_session");
                     return Err(anyhow::anyhow!(
                         "Session was reset (conversation data was lost). Please trigger the webhook again."
@@ -613,6 +623,16 @@ async fn process_webhook_job(
                         "Failed to reset invalid session from webhook"
                     );
                 }
+                // Evict from warm cache so next request creates fresh session
+                let evicted = {
+                    let mut mgr = warm_manager.write().await;
+                    mgr.evict(&channel.channel_name)
+                };
+                tracing::info!(
+                    channel = %channel.channel_name,
+                    evicted = evicted,
+                    "Evicted warm session after invalid session in webhook"
+                );
                 metrics::record_error("invalid_session");
                 return Err(anyhow::anyhow!(
                     "Session was reset (conversation data was lost). Please trigger the webhook again."

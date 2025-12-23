@@ -1112,6 +1112,16 @@ async fn execute_schedule(
                     if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
                         tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
                     }
+                    // Evict from warm cache so next execution creates fresh session
+                    let evicted = {
+                        let mut mgr = warm_manager.write().await;
+                        mgr.evict(&channel.channel_name)
+                    };
+                    tracing::info!(
+                        channel = %channel.channel_name,
+                        evicted = evicted,
+                        "Evicted warm session after orphaned session in scheduler"
+                    );
                     if let Err(e) = room
                         .send(RoomMessageEventContent::text_plain(
                             "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
@@ -1136,6 +1146,16 @@ async fn execute_schedule(
                 if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
                     tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
                 }
+                // Evict from warm cache so next execution creates fresh session
+                let evicted = {
+                    let mut mgr = warm_manager.write().await;
+                    mgr.evict(&channel.channel_name)
+                };
+                tracing::info!(
+                    channel = %channel.channel_name,
+                    evicted = evicted,
+                    "Evicted warm session after invalid session in scheduler"
+                );
                 if let Err(e) = room
                     .send(RoomMessageEventContent::text_plain(
                         "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",

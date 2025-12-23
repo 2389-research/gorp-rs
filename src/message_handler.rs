@@ -475,6 +475,16 @@ pub async fn handle_message(
                     if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
                         tracing::error!(error = %e, "Failed to reset invalid session");
                     }
+                    // Evict from warm cache so next message creates fresh session
+                    let evicted = {
+                        let mut mgr = warm_manager.write().await;
+                        mgr.evict(&channel.channel_name)
+                    };
+                    tracing::info!(
+                        channel = %channel.channel_name,
+                        evicted = evicted,
+                        "Evicted warm session after orphaned session"
+                    );
                     metrics::record_error("invalid_session");
                     room.send(RoomMessageEventContent::text_plain(
                         "🔄 Session was reset (conversation data was lost). Please send your message again.",
@@ -498,6 +508,16 @@ pub async fn handle_message(
                 if let Err(e) = session_store.reset_orphaned_session(room.room_id().as_str()) {
                     tracing::error!(error = %e, "Failed to reset invalid session");
                 }
+                // Evict from warm cache so next message creates fresh session
+                let evicted = {
+                    let mut mgr = warm_manager.write().await;
+                    mgr.evict(&channel.channel_name)
+                };
+                tracing::info!(
+                    channel = %channel.channel_name,
+                    evicted = evicted,
+                    "Evicted warm session after invalid session"
+                );
                 metrics::record_error("invalid_session");
                 room.send(RoomMessageEventContent::text_plain(
                     "🔄 Session was reset (conversation data was lost). Please send your message again.",
