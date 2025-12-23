@@ -753,8 +753,14 @@ fn run_persistent_worker(config: AcpConfig, mut cmd_rx: mpsc::Receiver<WorkerCom
                             client.update_event_tx(event_tx.clone());
 
                             // Send the prompt with timeout
-                            let timeout_duration = std::time::Duration::from_secs(config.timeout_secs);
-                            match tokio::time::timeout(timeout_duration, client.prompt(&session_id, &text)).await {
+                            let timeout_duration =
+                                std::time::Duration::from_secs(config.timeout_secs);
+                            match tokio::time::timeout(
+                                timeout_duration,
+                                client.prompt(&session_id, &text),
+                            )
+                            .await
+                            {
                                 Ok(Ok(())) => {
                                     // Prompt completed successfully
                                     tracing::debug!("Prompt completed successfully");
@@ -762,20 +768,30 @@ fn run_persistent_worker(config: AcpConfig, mut cmd_rx: mpsc::Receiver<WorkerCom
                                 Ok(Err(e)) => {
                                     // ACP error occurred
                                     tracing::error!(error = %e, "Prompt failed");
-                                    let _ = event_tx.send(AgentEvent::Error {
-                                        code: ErrorCode::BackendError,
-                                        message: format!("ACP prompt error: {}", e),
-                                        recoverable: false,
-                                    }).await;
+                                    let _ = event_tx
+                                        .send(AgentEvent::Error {
+                                            code: ErrorCode::BackendError,
+                                            message: format!("ACP prompt error: {}", e),
+                                            recoverable: false,
+                                        })
+                                        .await;
                                 }
                                 Err(_) => {
                                     // Timeout occurred
-                                    tracing::error!(timeout_secs = config.timeout_secs, "Prompt timed out");
-                                    let _ = event_tx.send(AgentEvent::Error {
-                                        code: ErrorCode::Timeout,
-                                        message: format!("ACP prompt timed out after {} seconds", config.timeout_secs),
-                                        recoverable: true,
-                                    }).await;
+                                    tracing::error!(
+                                        timeout_secs = config.timeout_secs,
+                                        "Prompt timed out"
+                                    );
+                                    let _ = event_tx
+                                        .send(AgentEvent::Error {
+                                            code: ErrorCode::Timeout,
+                                            message: format!(
+                                                "ACP prompt timed out after {} seconds",
+                                                config.timeout_secs
+                                            ),
+                                            recoverable: true,
+                                        })
+                                        .await;
                                 }
                             }
 
