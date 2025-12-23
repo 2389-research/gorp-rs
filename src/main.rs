@@ -95,6 +95,112 @@ mod startup_filter_tests {
     }
 }
 
+/// Deduplicates Matrix events by tracking recently seen event IDs.
+/// Prevents processing the same event multiple times when the Matrix SDK
+/// delivers duplicate events during sync reconnections.
+struct EventDeduplicator {
+    seen_events: HashSet<String>,
+    max_size: usize,
+}
+
+impl EventDeduplicator {
+    /// Create a new deduplicator with the specified maximum cache size.
+    fn new(max_size: usize) -> Self {
+        Self {
+            seen_events: HashSet::new(),
+            max_size,
+        }
+    }
+
+    /// Check if an event has been seen before. If not, marks it as seen.
+    /// Returns true if this is a NEW event (should be processed).
+    /// Returns false if this is a DUPLICATE event (should be skipped).
+    fn check_and_mark(&mut self, event_id: &str) -> bool {
+        if self.seen_events.contains(event_id) {
+            return false; // Duplicate
+        }
+
+        // Prune cache if it gets too large
+        if self.seen_events.len() >= self.max_size {
+            self.seen_events.clear();
+        }
+
+        self.seen_events.insert(event_id.to_string());
+        true // New event
+    }
+
+    /// Returns the number of events currently tracked.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.seen_events.len()
+    }
+}
+
+#[cfg(test)]
+mod event_dedup_tests {
+    use super::*;
+
+    #[test]
+    fn test_new_event_returns_true() {
+        let mut dedup = EventDeduplicator::new(100);
+        assert!(dedup.check_and_mark("$event1"));
+    }
+
+    #[test]
+    fn test_duplicate_event_returns_false() {
+        let mut dedup = EventDeduplicator::new(100);
+        assert!(dedup.check_and_mark("$event1"));
+        assert!(!dedup.check_and_mark("$event1")); // Duplicate
+    }
+
+    #[test]
+    fn test_different_events_both_return_true() {
+        let mut dedup = EventDeduplicator::new(100);
+        assert!(dedup.check_and_mark("$event1"));
+        assert!(dedup.check_and_mark("$event2"));
+        assert!(dedup.check_and_mark("$event3"));
+    }
+
+    #[test]
+    fn test_cache_clears_when_max_size_reached() {
+        let mut dedup = EventDeduplicator::new(3);
+        assert!(dedup.check_and_mark("$event1"));
+        assert!(dedup.check_and_mark("$event2"));
+        assert!(dedup.check_and_mark("$event3"));
+        assert_eq!(dedup.len(), 3);
+
+        // Next insert should trigger clear first
+        assert!(dedup.check_and_mark("$event4"));
+        assert_eq!(dedup.len(), 1); // Only event4 in cache now
+
+        // Previous events are no longer tracked (cache was cleared)
+        assert!(dedup.check_and_mark("$event1")); // Returns true again
+    }
+
+    #[test]
+    fn test_multiple_duplicates_all_return_false() {
+        let mut dedup = EventDeduplicator::new(100);
+        assert!(dedup.check_and_mark("$event1"));
+        assert!(!dedup.check_and_mark("$event1"));
+        assert!(!dedup.check_and_mark("$event1"));
+        assert!(!dedup.check_and_mark("$event1"));
+    }
+
+    #[test]
+    fn test_realistic_matrix_event_ids() {
+        let mut dedup = EventDeduplicator::new(1000);
+
+        // Matrix event IDs look like $<base64>:server.org
+        let event1 = "$aGVsbG8gd29ybGQ:matrix.org";
+        let event2 = "$Zm9vYmFy:example.com";
+
+        assert!(dedup.check_and_mark(event1));
+        assert!(dedup.check_and_mark(event2));
+        assert!(!dedup.check_and_mark(event1)); // Duplicate
+        assert!(!dedup.check_and_mark(event2)); // Duplicate
+    }
+}
+
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -1109,28 +1215,18 @@ async fn run_start() -> Result<()> {
             // Event deduplication: track recently seen event IDs to prevent
             // processing the same Matrix event multiple times (can happen during
             // sync reconnections or SDK event delivery quirks)
-            let mut seen_events: HashSet<String> = HashSet::new();
-            const MAX_SEEN_EVENTS: usize = 10000;
+            let mut deduplicator = EventDeduplicator::new(10000);
 
             while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
                 // Deduplicate by event_id - skip if we've already processed this event
                 let event_id = event.event_id.to_string();
-                if seen_events.contains(&event_id) {
+                if !deduplicator.check_and_mark(&event_id) {
                     tracing::debug!(
                         event_id = %event_id,
                         room_id = %room.room_id(),
                         "Skipping duplicate event - already processed"
                     );
                     continue;
-                }
-
-                // Track this event ID
-                seen_events.insert(event_id.clone());
-
-                // Prune cache if it gets too large (simple strategy: clear and start fresh)
-                if seen_events.len() > MAX_SEEN_EVENTS {
-                    seen_events.clear();
-                    tracing::debug!("Cleared event dedup cache after reaching {} entries", MAX_SEEN_EVENTS);
                 }
 
                 let room_id = room.room_id().to_owned();
