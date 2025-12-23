@@ -288,7 +288,9 @@ mod tests {
             total_schedules: 10,
             messages_today: 42,
         };
-        let rendered = template.render().expect("Dashboard template should render successfully");
+        let rendered = template
+            .render()
+            .expect("Dashboard template should render successfully");
         assert!(rendered.contains("Test Dashboard"));
         assert!(rendered.contains("gorp"));
         assert!(rendered.contains("Configuration"));
@@ -316,7 +318,9 @@ mod tests {
             access_token_set: false,
             recovery_key_set: true,
         };
-        let rendered = template.render().expect("Config template should render successfully");
+        let rendered = template
+            .render()
+            .expect("Config template should render successfully");
         assert!(rendered.contains("https://matrix.org"));
         assert!(rendered.contains("@test:matrix.org"));
         assert!(rendered.contains("Configured")); // For password_set = true
@@ -329,7 +333,9 @@ mod tests {
             message: "Config saved!".to_string(),
             is_error: false,
         };
-        let rendered = template.render().expect("Toast template should render successfully");
+        let rendered = template
+            .render()
+            .expect("Toast template should render successfully");
         assert!(rendered.contains("Config saved!"));
         assert!(rendered.contains("bg-green-500"));
     }
@@ -340,7 +346,9 @@ mod tests {
             message: "Save failed".to_string(),
             is_error: true,
         };
-        let rendered = template.render().expect("Toast error template should render successfully");
+        let rendered = template
+            .render()
+            .expect("Toast error template should render successfully");
         assert!(rendered.contains("Save failed"));
         assert!(rendered.contains("bg-red-500"));
     }
@@ -361,7 +369,9 @@ mod tests {
             active_schedules: 7,
             recent_errors: vec![],
         };
-        let rendered = template.render().expect("Health template should render successfully");
+        let rendered = template
+            .render()
+            .expect("Health template should render successfully");
         assert!(rendered.contains("Health Test"));
         assert!(rendered.contains("No Recent Errors"));
         assert!(rendered.contains("All systems operating normally"));
@@ -395,7 +405,9 @@ mod tests {
                 },
             ],
         };
-        let rendered = template.render().expect("Health template with errors should render successfully");
+        let rendered = template
+            .render()
+            .expect("Health template with errors should render successfully");
         assert!(rendered.contains("Health Test"));
         assert!(rendered.contains("Schedule: test-channel"));
         assert!(rendered.contains("Failed to execute prompt"));

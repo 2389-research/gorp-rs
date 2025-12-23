@@ -215,8 +215,10 @@ impl WarmSessionManager {
             tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Attempting to resume existing session");
             match tokio::time::timeout(
                 std::time::Duration::from_secs(60),
-                agent_handle.load_session(&channel.session_id)
-            ).await {
+                agent_handle.load_session(&channel.session_id),
+            )
+            .await
+            {
                 Ok(Ok(())) => {
                     tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Successfully resumed session");
                     (channel.session_id.clone(), false)
@@ -225,8 +227,10 @@ impl WarmSessionManager {
                     tracing::warn!(channel = %channel_name, session_id = %channel.session_id, error = %e, "Failed to resume session, creating new one");
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(60),
-                        agent_handle.new_session()
-                    ).await {
+                        agent_handle.new_session(),
+                    )
+                    .await
+                    {
                         Ok(Ok(new_id)) => {
                             tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after resume failure");
                             (new_id, true)
@@ -235,7 +239,9 @@ impl WarmSessionManager {
                             return Err(anyhow::anyhow!("Failed to create new session: {}", e));
                         }
                         Err(_) => {
-                            return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                            return Err(anyhow::anyhow!(
+                                "Timeout creating new session after 60 seconds"
+                            ));
                         }
                     }
                 }
@@ -243,8 +249,10 @@ impl WarmSessionManager {
                     tracing::warn!(channel = %channel_name, session_id = %channel.session_id, "Timeout loading session after 60 seconds, creating new one");
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(60),
-                        agent_handle.new_session()
-                    ).await {
+                        agent_handle.new_session(),
+                    )
+                    .await
+                    {
                         Ok(Ok(new_id)) => {
                             tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after timeout");
                             (new_id, true)
@@ -253,7 +261,9 @@ impl WarmSessionManager {
                             return Err(anyhow::anyhow!("Failed to create new session: {}", e));
                         }
                         Err(_) => {
-                            return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                            return Err(anyhow::anyhow!(
+                                "Timeout creating new session after 60 seconds"
+                            ));
                         }
                     }
                 }
@@ -263,8 +273,10 @@ impl WarmSessionManager {
             tracing::info!(channel = %channel_name, "Creating new session");
             match tokio::time::timeout(
                 std::time::Duration::from_secs(60),
-                agent_handle.new_session()
-            ).await {
+                agent_handle.new_session(),
+            )
+            .await
+            {
                 Ok(Ok(new_id)) => {
                     tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session");
                     (new_id, true)
@@ -273,7 +285,9 @@ impl WarmSessionManager {
                     return Err(anyhow::anyhow!("Failed to create new session: {}", e));
                 }
                 Err(_) => {
-                    return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                    return Err(anyhow::anyhow!(
+                        "Timeout creating new session after 60 seconds"
+                    ));
                 }
             }
         };
@@ -436,16 +450,22 @@ pub async fn prepare_session_async(
     tracing::info!(channel = %channel_name, working_dir = %working_dir_str, "Using working directory (async)");
 
     // Create agent handle (synchronous, fast)
-    let agent_handle =
-        WarmSessionManager::create_agent_handle_with_config(&registry, &working_dir_str, &agent_binary, &backend_type)?;
+    let agent_handle = WarmSessionManager::create_agent_handle_with_config(
+        &registry,
+        &working_dir_str,
+        &agent_binary,
+        &backend_type,
+    )?;
 
     // Step 3: Do slow async session creation OUTSIDE the lock
     let (session_id, is_new) = if channel.started && !channel.session_id.is_empty() {
         tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Attempting to resume existing session (async)");
         match tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            agent_handle.load_session(&channel.session_id)
-        ).await {
+            agent_handle.load_session(&channel.session_id),
+        )
+        .await
+        {
             Ok(Ok(())) => {
                 tracing::info!(channel = %channel_name, session_id = %channel.session_id, "Successfully resumed session (async)");
                 (channel.session_id.clone(), false)
@@ -454,8 +474,10 @@ pub async fn prepare_session_async(
                 tracing::warn!(channel = %channel_name, session_id = %channel.session_id, error = %e, "Failed to resume session, creating new one (async)");
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(60),
-                    agent_handle.new_session()
-                ).await {
+                    agent_handle.new_session(),
+                )
+                .await
+                {
                     Ok(Ok(new_id)) => {
                         tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after resume failure (async)");
                         (new_id, true)
@@ -464,7 +486,9 @@ pub async fn prepare_session_async(
                         return Err(anyhow::anyhow!("Failed to create new session: {}", e));
                     }
                     Err(_) => {
-                        return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                        return Err(anyhow::anyhow!(
+                            "Timeout creating new session after 60 seconds"
+                        ));
                     }
                 }
             }
@@ -472,8 +496,10 @@ pub async fn prepare_session_async(
                 tracing::warn!(channel = %channel_name, session_id = %channel.session_id, "Timeout loading session after 60 seconds, creating new one (async)");
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(60),
-                    agent_handle.new_session()
-                ).await {
+                    agent_handle.new_session(),
+                )
+                .await
+                {
                     Ok(Ok(new_id)) => {
                         tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session after timeout (async)");
                         (new_id, true)
@@ -482,7 +508,9 @@ pub async fn prepare_session_async(
                         return Err(anyhow::anyhow!("Failed to create new session: {}", e));
                     }
                     Err(_) => {
-                        return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                        return Err(anyhow::anyhow!(
+                            "Timeout creating new session after 60 seconds"
+                        ));
                     }
                 }
             }
@@ -491,8 +519,10 @@ pub async fn prepare_session_async(
         tracing::info!(channel = %channel_name, "Creating new session (async)");
         match tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            agent_handle.new_session()
-        ).await {
+            agent_handle.new_session(),
+        )
+        .await
+        {
             Ok(Ok(new_id)) => {
                 tracing::info!(channel = %channel_name, session_id = %new_id, "Created new session (async)");
                 (new_id, true)
@@ -501,7 +531,9 @@ pub async fn prepare_session_async(
                 return Err(anyhow::anyhow!("Failed to create new session: {}", e));
             }
             Err(_) => {
-                return Err(anyhow::anyhow!("Timeout creating new session after 60 seconds"));
+                return Err(anyhow::anyhow!(
+                    "Timeout creating new session after 60 seconds"
+                ));
             }
         }
     };
@@ -658,6 +690,9 @@ mod tests {
 
         // Evict a session that doesn't exist
         let result = manager.evict("nonexistent_channel");
-        assert!(!result, "evict() should return false when session doesn't exist");
+        assert!(
+            !result,
+            "evict() should return false when session doesn't exist"
+        );
     }
 }

@@ -124,7 +124,10 @@ impl SessionStore {
 
     /// Get channel by room ID
     pub fn get_by_room(&self, room_id: &str) -> Result<Option<Channel>> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
             "SELECT channel_name, room_id, session_id, directory, started, created_at
              FROM channels WHERE room_id = ?1",
@@ -156,7 +159,10 @@ impl SessionStore {
         // Normalize to lowercase for case-insensitive lookup
         let channel_name = channel_name.to_lowercase();
 
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
             "SELECT channel_name, room_id, session_id, directory, started, created_at
              FROM channels WHERE channel_name = ?1",
@@ -286,7 +292,10 @@ impl SessionStore {
 
     /// List all channels
     pub fn list_all(&self) -> Result<Vec<Channel>> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
             "SELECT channel_name, room_id, session_id, directory, started, created_at
              FROM channels ORDER BY created_at DESC",
@@ -310,7 +319,10 @@ impl SessionStore {
 
     /// Delete a channel by name
     pub fn delete_channel(&self, channel_name: &str) -> Result<()> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         db.execute(
             "DELETE FROM channels WHERE channel_name = ?1",
             params![channel_name],
@@ -324,14 +336,20 @@ impl SessionStore {
     pub fn delete_by_room(&self, room_id: &str) -> Result<Option<String>> {
         // Get channel name first for logging
         let channel_name = {
-            let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+            let db = self
+                .db
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
             let mut stmt = db.prepare("SELECT channel_name FROM channels WHERE room_id = ?1")?;
             stmt.query_row(params![room_id], |row| row.get::<_, String>(0))
                 .ok()
         };
 
         if let Some(ref name) = channel_name {
-            let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+            let db = self
+                .db
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
             db.execute("DELETE FROM channels WHERE room_id = ?1", params![room_id])?;
             tracing::info!(channel_name = %name, room_id = %room_id, "Channel deleted by room ID");
         }
@@ -341,7 +359,10 @@ impl SessionStore {
 
     /// Mark channel as started
     pub fn mark_started(&self, room_id: &str) -> Result<()> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         db.execute(
             "UPDATE channels SET started = 1 WHERE room_id = ?1",
             params![room_id],
@@ -353,7 +374,10 @@ impl SessionStore {
     /// Use this when a session becomes orphaned (e.g., Claude CLI loses conversation data)
     pub fn reset_orphaned_session(&self, room_id: &str) -> Result<()> {
         let new_session_id = uuid::Uuid::new_v4().to_string();
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         db.execute(
             "UPDATE channels SET session_id = ?1, started = 0 WHERE room_id = ?2",
             params![new_session_id, room_id],
@@ -368,7 +392,10 @@ impl SessionStore {
 
     /// Get channel by session ID (for webhook lookups)
     pub fn get_by_session_id(&self, session_id: &str) -> Result<Option<Channel>> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
             "SELECT channel_name, room_id, session_id, directory, started, created_at
              FROM channels WHERE session_id = ?1",
@@ -397,7 +424,10 @@ impl SessionStore {
 
     /// Get a setting value by key
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare("SELECT value FROM settings WHERE key = ?1")?;
         let value = stmt.query_row(params![key], |row| row.get::<_, String>(0));
 
@@ -410,7 +440,10 @@ impl SessionStore {
 
     /// Set a setting value (upserts)
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         db.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = ?2",
@@ -421,7 +454,10 @@ impl SessionStore {
 
     /// Reset a channel's session (new session ID and started=0)
     pub fn reset_session(&self, channel_name: &str, new_session_id: &str) -> Result<()> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         db.execute(
             "UPDATE channels SET session_id = ?1, started = 0 WHERE channel_name = ?2",
             params![new_session_id, channel_name],
@@ -436,7 +472,10 @@ impl SessionStore {
 
     /// Update session ID for a channel by room ID (used when new session is created)
     pub fn update_session_id(&self, room_id: &str, new_session_id: &str) -> Result<()> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         db.execute(
             "UPDATE channels SET session_id = ?1 WHERE room_id = ?2",
             params![new_session_id, room_id],

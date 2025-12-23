@@ -358,26 +358,23 @@ pub async fn handle_message(
     // The backend streams events through the returned EventReceiver
     tracing::info!(channel = %channel.channel_name, session_id = %session_id, "Sending prompt to agent");
 
-    let mut event_rx = match crate::warm_session::send_prompt_with_handle(
-        &session_handle,
-        &session_id,
-        &prompt,
-    )
-    .await
-    {
-        Ok(receiver) => receiver,
-        Err(e) => {
-            let _ = typing_tx.send(());
-            typing_handle.abort();
-            room.typing_notice(false).await?;
+    let mut event_rx =
+        match crate::warm_session::send_prompt_with_handle(&session_handle, &session_id, &prompt)
+            .await
+        {
+            Ok(receiver) => receiver,
+            Err(e) => {
+                let _ = typing_tx.send(());
+                typing_handle.abort();
+                room.typing_notice(false).await?;
 
-            metrics::record_error("prompt_send");
-            let error_msg = format!("⚠️ Failed to send prompt: {}", e);
-            room.send(RoomMessageEventContent::text_plain(&error_msg))
-                .await?;
-            return Ok(());
-        }
-    };
+                metrics::record_error("prompt_send");
+                let error_msg = format!("⚠️ Failed to send prompt: {}", e);
+                room.send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await?;
+                return Ok(());
+            }
+        };
 
     // Check if debug mode is enabled for this channel
     // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)

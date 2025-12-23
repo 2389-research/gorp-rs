@@ -935,7 +935,9 @@ async fn execute_schedule(
                 error = %e,
                 "Invalid room ID"
             );
-            if let Err(e) = scheduler_store.mark_failed(&schedule.id, &format!("Invalid room ID: {}", e)) {
+            if let Err(e) =
+                scheduler_store.mark_failed(&schedule.id, &format!("Invalid room ID: {}", e))
+            {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
             return;
@@ -1006,24 +1008,28 @@ async fn execute_schedule(
 
     // Prepare session (creates session if needed)
     // Uses prepare_session_async which minimizes lock holding for concurrent access
-    let (session_handle, session_id, is_new_session) =
-        match prepare_session_async(&warm_manager, &channel).await {
-            Ok((handle, sid, is_new)) => (handle, sid, is_new),
-            Err(e) => {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to prepare session for scheduled task");
-                let error_msg = format!("⚠️ Failed to prepare session: {}", e);
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain(&error_msg))
-                    .await
-                {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
-                }
-                if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-                }
-                return;
+    let (session_handle, session_id, is_new_session) = match prepare_session_async(
+        &warm_manager,
+        &channel,
+    )
+    .await
+    {
+        Ok((handle, sid, is_new)) => (handle, sid, is_new),
+        Err(e) => {
+            tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to prepare session for scheduled task");
+            let error_msg = format!("⚠️ Failed to prepare session: {}", e);
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_plain(&error_msg))
+                .await
+            {
+                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
-        };
+            if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
+                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
+            }
+            return;
+        }
+    };
 
     // Update session store if a new session was created
     if is_new_session {
@@ -1114,7 +1120,8 @@ async fn execute_schedule(
                     {
                         tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send session reset message to room");
                     }
-                    if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Session was invalid") {
+                    if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Session was invalid")
+                    {
                         tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
                     }
                     return;
@@ -1176,7 +1183,9 @@ async fn execute_schedule(
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
-            if let Err(e) = scheduler_store.mark_failed(&schedule.id, "ACP error with empty response") {
+            if let Err(e) =
+                scheduler_store.mark_failed(&schedule.id, "ACP error with empty response")
+            {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
         } else {
