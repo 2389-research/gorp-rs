@@ -22,8 +22,12 @@ use matrix_sdk::{
     },
     Client,
 };
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+
+/// Startup timestamp - used to filter out historical messages on initial sync
+/// Messages older than this are skipped to prevent processing old backlog
+static STARTUP_TIME: OnceLock<chrono::DateTime<chrono::Utc>> = OnceLock::new();
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     layer::SubscriberExt,
@@ -909,6 +913,14 @@ async fn run_start() -> Result<()> {
 
     tracing::info!("Initial sync complete - encryption keys exchanged");
 
+    // Record startup time AFTER initial sync completes
+    // This filters out historical messages from the initial sync batch
+    let startup_time = chrono::Utc::now();
+    STARTUP_TIME
+        .set(startup_time)
+        .expect("STARTUP_TIME already set");
+    tracing::info!(startup_time = %startup_time, "Startup time recorded - will ignore messages before this");
+
     // Set up cross-signing for device verification
     // Only recover with valid recovery key - never auto-bootstrap (creates new keys silently)
     let cross_signing_ready = if let Some(recovery_key) = &config_arc.matrix.recovery_key {
@@ -1186,6 +1198,26 @@ fn register_event_handlers(
             let Some(original_event) = event.as_original().cloned() else {
                 return;
             };
+
+            // Skip historical messages from before bot startup
+            // This prevents processing old backlog when container restarts
+            if let Some(startup_time) = STARTUP_TIME.get() {
+                // Convert origin_server_ts (milliseconds since epoch) to DateTime
+                let msg_time = chrono::DateTime::from_timestamp_millis(
+                    original_event.origin_server_ts.as_secs().into(),
+                );
+                if let Some(msg_time) = msg_time {
+                    if msg_time < *startup_time {
+                        tracing::debug!(
+                            room_id = %room.room_id(),
+                            msg_time = %msg_time,
+                            startup_time = %startup_time,
+                            "Skipping historical message from before startup"
+                        );
+                        return;
+                    }
+                }
+            }
 
             // Send to LocalSet task for processing (ensures spawn_local context)
             tracing::debug!(room_id = %room.room_id(), "Sending message event to LocalSet handler");
