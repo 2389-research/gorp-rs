@@ -42,3 +42,4 @@ gorp-agent = { path = "gorp-agent", features = ["acp"] }
 
 [dev-dependencies]
 serial_test = "3.0"
+tempfile = "3.10"
