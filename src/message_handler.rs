@@ -386,6 +386,7 @@ pub async fn handle_message(
     // Process streaming events from ACP
     let mut final_response = String::new();
     let mut tools_used: Vec<String> = Vec::new();
+    let mut session_id_from_event: Option<String> = None;
 
     tracing::info!(channel = %channel.channel_name, "Starting event loop - waiting for ACP events");
     let mut event_count = 0;
@@ -541,6 +542,8 @@ pub async fn handle_message(
                     new_session = %new_session_id,
                     "Session ID changed during execution"
                 );
+                // Track the new session ID so we can update the database after the event loop
+                session_id_from_event = Some(new_session_id);
             }
             AgentEvent::ToolProgress { .. } => {
                 // Tool progress updates - just log for now
@@ -579,8 +582,28 @@ pub async fn handle_message(
 
     let response = final_response;
 
+    // Update session ID if Claude CLI reported a new one via SessionChanged event
+    // This is critical for session continuity - the CLI generates its own session IDs
+    // which differ from the UUIDs we generate when creating new sessions
+    if let Some(ref new_session_id) = session_id_from_event {
+        if let Err(e) = session_store.update_session_id(room.room_id().as_str(), new_session_id) {
+            tracing::error!(
+                error = %e,
+                room_id = %room.room_id(),
+                new_session_id = %new_session_id,
+                "Failed to update session ID after prompt"
+            );
+        } else {
+            tracing::info!(
+                room_id = %room.room_id(),
+                old_session = %channel.session_id,
+                new_session = %new_session_id,
+                "Updated session ID in database"
+            );
+        }
+    }
+
     // Mark session as started BEFORE sending response (to ensure consistency)
-    // Note: session ID was already updated in prepare_session if a new one was created
     session_store.mark_started(room.room_id().as_str())?;
 
     // Send response with markdown formatting, chunked if too long
