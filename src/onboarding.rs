@@ -48,13 +48,10 @@ impl Default for OnboardingState {
 
 /// Check if a user should go through onboarding
 /// Returns true if:
-/// - User has no channels AND no completed onboarding state
+/// - User has no onboarding state (never started)
 /// - User has active (non-completed) onboarding state
 pub fn should_onboard(session_store: &SessionStore, user_id: &str) -> Result<bool> {
-    // Check if user has any channels
-    let channels = session_store.list_all().unwrap_or_default();
-
-    // Check onboarding state
+    // Check onboarding state for this specific user
     if let Some(state_json) = session_store.get_onboarding_state(user_id)? {
         if let Ok(state) = serde_json::from_str::<OnboardingState>(&state_json) {
             // If onboarding is completed, don't show it again
@@ -66,8 +63,8 @@ pub fn should_onboard(session_store: &SessionStore, user_id: &str) -> Result<boo
         }
     }
 
-    // If no channels and no completed onboarding, start onboarding
-    Ok(channels.is_empty())
+    // No onboarding state for this user - they need to go through it
+    Ok(true)
 }
 
 /// Get the current onboarding state for a user
@@ -119,7 +116,9 @@ pub async fn handle_message(
             handle_api_key_response(room, session_store, user_id, message).await
         }
         OnboardingStep::CreateChannel => {
-            handle_channel_name_response(room, session_store, user_id, message).await
+            // Channel name validation is handled by message_handler.rs
+            // which has access to Matrix client for room creation
+            Ok(false)
         }
         OnboardingStep::Completed => Ok(false),
     }
@@ -162,12 +161,7 @@ async fn handle_welcome_response(
     }
 
     if msg_lower == "yes" || msg_lower == "y" || msg_lower == "setup" || msg_lower == "start" {
-        // Move to API key check
-        let mut state = get_state(session_store, user_id)?.unwrap_or_default();
-        state.step = OnboardingStep::ApiKeyCheck;
-        save_state(session_store, user_id, &state)?;
-
-        // For now, skip API validation and go straight to channel creation
+        // Skip API validation for now and go straight to channel creation
         // TODO: Add actual API key validation when we have a test channel
         let msg = "✅ API connection looks good!\n\n\
             Now let's create your first channel.\n\n\
@@ -179,7 +173,7 @@ async fn handle_welcome_response(
             Suggestions: `pa`, `research`, `dev`\n\n\
             _(Just type a name - letters, numbers, dashes only)_";
 
-        // Move directly to CreateChannel step
+        // Move to CreateChannel step
         let mut state = get_state(session_store, user_id)?.unwrap_or_default();
         state.step = OnboardingStep::CreateChannel;
         save_state(session_store, user_id, &state)?;
@@ -245,58 +239,6 @@ async fn send_channel_prompt(room: &Room) -> Result<()> {
     let html = markdown_to_html(msg);
     room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
     Ok(())
-}
-
-/// Handle response with channel name
-/// Note: Actual channel creation is handled by the caller (message_handler)
-/// This just validates the name and returns it
-async fn handle_channel_name_response(
-    room: &Room,
-    session_store: &SessionStore,
-    _user_id: &str,
-    message: &str,
-) -> Result<bool> {
-    let channel_name = message.trim().to_lowercase();
-
-    // Validate channel name format
-    if channel_name.is_empty() {
-        let msg = "Channel name can't be empty. Try something like `pa` or `research`.";
-        room.send(RoomMessageEventContent::text_plain(msg)).await?;
-        return Ok(true);
-    }
-
-    if !channel_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        let msg = "Channel names can only contain letters, numbers, dashes, and underscores.\n\
-            Try something like `pa` or `my-project`.";
-        room.send(RoomMessageEventContent::text_plain(msg)).await?;
-        return Ok(true);
-    }
-
-    if channel_name.len() > 50 {
-        let msg = "That name is too long. Keep it under 50 characters.";
-        room.send(RoomMessageEventContent::text_plain(msg)).await?;
-        return Ok(true);
-    }
-
-    // Check if channel already exists
-    if session_store.get_by_name(&channel_name)?.is_some() {
-        let msg = format!(
-            "A channel named `{}` already exists!\n\n\
-            Try a different name, or say **done** to finish setup.",
-            channel_name
-        );
-        let html = markdown_to_html(&msg);
-        room.send(RoomMessageEventContent::text_html(&msg, &html)).await?;
-        return Ok(true);
-    }
-
-    // Valid name - mark onboarding as needing channel creation
-    // The actual creation will be handled by message_handler since it needs
-    // access to the Matrix client to create rooms
-
-    // For now, we'll return false to let message_handler know this is a channel name
-    // and it should create the channel, then call complete_onboarding()
-    Ok(false)
 }
 
 /// Complete the onboarding flow and show success message
