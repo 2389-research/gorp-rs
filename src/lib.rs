@@ -6,6 +6,7 @@ pub mod matrix_client;
 pub mod mcp;
 pub mod message_handler;
 pub mod metrics;
+pub mod onboarding;
 pub mod paths;
 pub mod scheduler;
 pub mod session;

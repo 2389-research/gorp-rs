@@ -12,6 +12,7 @@ use matrix_sdk::{
 use crate::{
     config::Config,
     matrix_client, metrics,
+    onboarding,
     scheduler::{
         parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
     },
@@ -183,41 +184,123 @@ pub async fn handle_message(
 
     // Check if channel is attached
     let Some(channel) = session_store.get_by_room(room.room_id().as_str())? else {
-        let help_msg = if is_dm {
-            // Check if this is a new user (no channels at all)
-            let all_channels = session_store.list_all().unwrap_or_default();
-            if all_channels.is_empty() {
-                // New user - show welcome with suggested channels
-                "👋 **Welcome to gorp!**\n\n\
-                I'm your AI assistant with persistent sessions and workspace directories.\n\n\
-                **Get started with these recommended channels:**\n\n\
-                ```\n\
-                !create pa        # Personal assistant for email, calendar, tasks\n\
-                !create news      # News aggregation and curation\n\
-                !create research  # Research projects with auditable citations\n\
-                !create weather   # Weather updates and forecasts\n\
-                ```\n\n\
-                Each channel gets its own workspace with pre-configured settings.\n\n\
-                Type `!help` for all commands or `!list` to see your channels."
-                    .to_string()
-            } else {
-                "👋 To get started, create a channel:\n\n\
+        // In DM, check for onboarding flow
+        if is_dm {
+            let user_id = sender;
+
+            // Check if we're in the middle of onboarding and waiting for a channel name
+            if onboarding::is_waiting_for_channel_name(&session_store, user_id)? {
+                // User is providing a channel name - validate and create
+                let channel_name = body.trim().to_lowercase();
+
+                // Handle special responses
+                let msg_lower = channel_name.to_lowercase();
+                if msg_lower == "done" || msg_lower == "skip" {
+                    // Complete onboarding without creating a channel
+                    let mut state = onboarding::get_state(&session_store, user_id)?
+                        .unwrap_or_default();
+                    state.step = onboarding::OnboardingStep::Completed;
+                    onboarding::save_state(&session_store, user_id, &state)?;
+
+                    let msg = "Alright! You can create a channel anytime with `!create <name>`.\n\n\
+                        Type `!help` for all commands.";
+                    let html = markdown_to_html(msg);
+                    room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+                    return Ok(());
+                }
+
+                // Validate channel name
+                if channel_name.is_empty()
+                    || !channel_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    || channel_name.len() > 50
+                {
+                    let msg = "Channel names can only contain letters, numbers, dashes, and underscores.\n\
+                        Try something like `pa` or `my-project`.";
+                    room.send(RoomMessageEventContent::text_plain(msg)).await?;
+                    return Ok(());
+                }
+
+                // Check if channel already exists
+                if session_store.get_by_name(&channel_name)?.is_some() {
+                    let msg = format!(
+                        "A channel named `{}` already exists! Try a different name.",
+                        channel_name
+                    );
+                    room.send(RoomMessageEventContent::text_plain(&msg)).await?;
+                    return Ok(());
+                }
+
+                // Create Matrix room
+                let room_name = format!("{}: {}", config.matrix.room_prefix, channel_name);
+                let new_room_id = match matrix_client::create_room(&client, &room_name).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        let msg = format!("Failed to create Matrix room: {}", e);
+                        room.send(RoomMessageEventContent::text_plain(&msg)).await?;
+                        return Ok(());
+                    }
+                };
+                metrics::record_room_created();
+
+                // Invite user
+                if let Err(e) = matrix_client::invite_user(&client, &new_room_id, sender).await {
+                    tracing::warn!(error = %e, "Failed to invite user to channel");
+                }
+
+                // Create channel in database (this also creates the directory)
+                let channel = match session_store.create_channel(&channel_name, new_room_id.as_str()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let msg = format!("Failed to create channel: {}", e);
+                        room.send(RoomMessageEventContent::text_plain(&msg)).await?;
+                        return Ok(());
+                    }
+                };
+                metrics::increment_active_channels();
+
+                tracing::info!(
+                    channel = %channel_name,
+                    room_id = %new_room_id,
+                    directory = %channel.directory,
+                    "Channel created during onboarding"
+                );
+
+                // Complete onboarding
+                onboarding::complete(&room, &session_store, user_id, &channel_name, &channel.directory)
+                    .await?;
+                return Ok(());
+            }
+
+            // Check if user should go through onboarding
+            if onboarding::should_onboard(&session_store, user_id)? {
+                // Try to handle as onboarding response, or start fresh
+                if onboarding::handle_message(&room, &session_store, user_id, body).await? {
+                    return Ok(()); // Message was handled by onboarding
+                }
+                // No active onboarding state - start fresh
+                onboarding::start(&room, &session_store, user_id).await?;
+                return Ok(());
+            }
+
+            // Not in onboarding - show regular help
+            let help_msg = "👋 To get started, create a channel:\n\n\
                 !create <channel-name>\n\n\
                 Example: !create PA\n\
                 This creates a dedicated Claude session in a workspace directory.\n\n\
-                Type !list to see your existing channels."
-                    .to_string()
-            }
+                Type !list to see your existing channels, or !setup to run guided setup.";
+            let help_html = markdown_to_html(help_msg);
+            room.send(RoomMessageEventContent::text_html(help_msg, &help_html))
+                .await?;
+            return Ok(());
         } else {
-            "No Claude channel attached to this room.\n\n\
-            💡 DM me to create a channel with: !create <name>\n\n\
-            Need help? Send: !help"
-                .to_string()
-        };
-        let help_html = markdown_to_html(&help_msg);
-        room.send(RoomMessageEventContent::text_html(&help_msg, &help_html))
-            .await?;
-        return Ok(());
+            let help_msg = "No Claude channel attached to this room.\n\n\
+                💡 DM me to create a channel with: !create <name>\n\n\
+                Need help? Send: !help";
+            let help_html = markdown_to_html(help_msg);
+            room.send(RoomMessageEventContent::text_html(help_msg, &help_html))
+                .await?;
+            return Ok(());
+        }
     };
 
     // Check for attachments (images, files) and build the prompt
@@ -770,6 +853,19 @@ async fn handle_command(
             let motd_html = markdown_to_html(MOTD_MD);
             room.send(RoomMessageEventContent::text_html(MOTD_MD, &motd_html))
                 .await?;
+        }
+        "setup" => {
+            // Onboarding wizard - only works in DMs
+            if !is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "The !setup command only works in DMs. DM me to run the setup wizard.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            // Reset and start onboarding
+            onboarding::reset_and_start(&room, &session_store, sender).await?;
         }
         "debug" => {
             if is_dm {

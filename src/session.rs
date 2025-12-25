@@ -487,4 +487,27 @@ impl SessionStore {
         );
         Ok(())
     }
+
+    /// Get onboarding state for a user (stored as JSON in settings table)
+    pub fn get_onboarding_state(&self, user_id: &str) -> Result<Option<String>> {
+        let key = format!("onboarding:{}", user_id);
+        self.get_setting(&key)
+    }
+
+    /// Set onboarding state for a user (stored as JSON in settings table)
+    pub fn set_onboarding_state(&self, user_id: &str, state_json: &str) -> Result<()> {
+        let key = format!("onboarding:{}", user_id);
+        self.set_setting(&key, state_json)
+    }
+
+    /// Clear onboarding state for a user
+    pub fn clear_onboarding_state(&self, user_id: &str) -> Result<()> {
+        let key = format!("onboarding:{}", user_id);
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        db.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
+        Ok(())
+    }
 }
