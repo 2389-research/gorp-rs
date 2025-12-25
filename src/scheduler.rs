@@ -1279,6 +1279,17 @@ async fn execute_schedule(
         if let Err(e) = session_store.update_session_id(&channel.room_id, sess_id) {
             tracing::error!(error = %e, "Failed to update session ID in scheduler");
             // Non-fatal - continue
+        } else {
+            // CRITICAL: Also update the warm session cache to match the database
+            {
+                let mut session = session_handle.lock().await;
+                session.set_session_id(sess_id.clone());
+            }
+            tracing::debug!(
+                channel = %channel.channel_name,
+                new_session = %sess_id,
+                "Updated session ID in warm cache (scheduler)"
+            );
         }
     }
 

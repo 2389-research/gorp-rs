@@ -42,6 +42,17 @@ impl WarmSession {
     pub fn is_invalidated(&self) -> bool {
         self.invalidated
     }
+
+    /// Update the session ID when Claude CLI reports a new one
+    /// This is critical for session continuity - must match the database
+    pub fn set_session_id(&mut self, new_session_id: String) {
+        self.session_id = new_session_id;
+    }
+
+    /// Get the current session ID
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
 }
 
 /// Handle to a warm session, allowing concurrent access across channels

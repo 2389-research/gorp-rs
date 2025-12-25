@@ -600,6 +600,17 @@ pub async fn handle_message(
                 new_session = %new_session_id,
                 "Updated session ID in database"
             );
+            // CRITICAL: Also update the warm session cache to match the database
+            // Without this, the cached session will have a stale ID and fail on next use
+            {
+                let mut session = session_handle.lock().await;
+                session.set_session_id(new_session_id.clone());
+            }
+            tracing::debug!(
+                channel = %channel.channel_name,
+                new_session = %new_session_id,
+                "Updated session ID in warm cache"
+            );
         }
     }
 

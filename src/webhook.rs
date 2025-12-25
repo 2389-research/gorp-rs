@@ -665,13 +665,26 @@ async fn process_webhook_job(
         return Err(anyhow::anyhow!("ACP agent finished without a response"));
     }
 
-    let final_session_id = session_id_from_event.unwrap_or(session_id);
-    if let Err(e) = session_store.update_session_id(&channel.room_id, &final_session_id) {
-        tracing::error!(
-            error = %e,
-            room_id = %channel.room_id,
-            "Failed to update session ID after webhook prompt"
-        );
+    // Update session ID if Claude CLI reported a new one
+    if let Some(ref new_sess_id) = session_id_from_event {
+        if let Err(e) = session_store.update_session_id(&channel.room_id, new_sess_id) {
+            tracing::error!(
+                error = %e,
+                room_id = %channel.room_id,
+                "Failed to update session ID after webhook prompt"
+            );
+        } else {
+            // CRITICAL: Also update the warm session cache to match the database
+            {
+                let mut session = session_handle.lock().await;
+                session.set_session_id(new_sess_id.clone());
+            }
+            tracing::debug!(
+                channel = %channel.channel_name,
+                new_session = %new_sess_id,
+                "Updated session ID in warm cache (webhook)"
+            );
+        }
     }
     if let Err(e) = session_store.mark_started(&channel.room_id) {
         tracing::error!(
