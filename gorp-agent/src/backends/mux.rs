@@ -5,12 +5,15 @@ use crate::event::{AgentEvent, ErrorCode, Usage};
 use crate::handle::{AgentHandle, Command};
 use anyhow::{Context, Result};
 use futures::StreamExt;
+use mux::mcp::{McpClient, McpServerConfig, McpTransport};
 use mux::prelude::*;
+use mux::tool::Registry;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 
 /// Configuration for the Mux backend
@@ -28,6 +31,24 @@ pub struct MuxConfig {
     /// Filenames to look for local system prompts
     #[serde(default = "default_local_prompt_files")]
     pub local_prompt_files: Vec<String>,
+    /// MCP servers to connect to
+    #[serde(default)]
+    pub mcp_servers: Vec<MuxMcpServerConfig>,
+}
+
+/// Configuration for an MCP server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MuxMcpServerConfig {
+    /// Server name (used as tool prefix)
+    pub name: String,
+    /// Command to run
+    pub command: String,
+    /// Command arguments
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variables
+    #[serde(default)]
+    pub env: HashMap<String, String>,
 }
 
 fn default_max_tokens() -> u32 {
@@ -263,9 +284,37 @@ impl MuxBackend {
             }
         };
 
+        // Create tool registry
+        let registry = Arc::new(Registry::new());
+
         // In-memory session cache (backed by SQLite)
         let sessions: Arc<RwLock<HashMap<String, MuxSession>>> =
             Arc::new(RwLock::new(HashMap::new()));
+
+        // Store MCP clients for shutdown
+        let mcp_clients: Arc<RwLock<Vec<Arc<McpClient>>>> = Arc::new(RwLock::new(Vec::new()));
+
+        // Connect to MCP servers in background
+        let registry_clone = Arc::clone(&registry);
+        let mcp_clients_clone = Arc::clone(&mcp_clients);
+        let mcp_configs = config.mcp_servers.clone();
+        tokio::spawn(async move {
+            for server_config in mcp_configs {
+                match connect_mcp_server(&server_config, &registry_clone).await {
+                    Ok(client) => {
+                        mcp_clients_clone.write().await.push(client);
+                        tracing::info!(server = %server_config.name, "MCP server connected");
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            server = %server_config.name,
+                            error = %e,
+                            "Failed to connect MCP server"
+                        );
+                    }
+                }
+            }
+        });
 
         tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
@@ -327,6 +376,7 @@ impl MuxBackend {
                         let client = Arc::clone(&client);
                         let sessions = Arc::clone(&sessions);
                         let session_db = Arc::clone(&session_db);
+                        let registry = Arc::clone(&registry);
                         let config = config.clone();
 
                         tokio::spawn(async move {
@@ -334,6 +384,7 @@ impl MuxBackend {
                                 &client,
                                 &sessions,
                                 &session_db,
+                                &registry,
                                 &config,
                                 &session_id,
                                 &text,
@@ -406,17 +457,50 @@ fn build_system_prompt(config: &MuxConfig) -> Option<String> {
     }
 }
 
+/// Connect to an MCP server and register its tools
+async fn connect_mcp_server(
+    config: &MuxMcpServerConfig,
+    registry: &Registry,
+) -> Result<Arc<McpClient>> {
+    let mcp_config = McpServerConfig {
+        name: config.name.clone(),
+        transport: McpTransport::Stdio {
+            command: config.command.clone(),
+            args: config.args.clone(),
+            env: config.env.clone(),
+        },
+    };
+
+    let client = McpClient::connect(mcp_config).await?;
+    client.initialize().await?;
+
+    let client = Arc::new(client);
+    let tool_count = registry.merge_mcp(Arc::clone(&client), Some(&config.name)).await?;
+
+    tracing::info!(
+        server = %config.name,
+        tools = tool_count,
+        "Registered MCP tools"
+    );
+
+    Ok(client)
+}
+
 async fn run_prompt(
     client: &AnthropicClient,
     sessions: &Arc<RwLock<HashMap<String, MuxSession>>>,
     session_db: &Arc<SessionDb>,
+    registry: &Registry,
     config: &MuxConfig,
     session_id: &str,
     text: &str,
     event_tx: mpsc::Sender<AgentEvent>,
 ) -> Result<()> {
+    // Get tool definitions from registry
+    let tools = registry.to_definitions().await;
+
     // Get session and add user message
-    let (messages, system_prompt) = {
+    let system_prompt = {
         let mut sessions_guard = sessions.write().await;
         let session = sessions_guard
             .get_mut(session_id)
@@ -429,111 +513,200 @@ async fn run_prompt(
             }],
         });
 
-        (session.messages.clone(), session.system_prompt.clone())
+        session.system_prompt.clone()
     };
 
-    // Build request
-    let request = Request {
-        model: config.model.clone(),
-        messages,
-        tools: Vec::new(), // Phase 4 will add tools
-        max_tokens: Some(config.max_tokens),
-        system: system_prompt,
-        temperature: None,
-    };
-
-    // Use streaming API
-    let mut stream = client.create_message_stream(&request);
     let mut accumulated_text = String::new();
-    let mut final_usage: Option<mux::llm::Usage> = None;
-
-    while let Some(event_result) = stream.next().await {
-        match event_result {
-            Ok(event) => {
-                if let Some(agent_event) = translate_stream_event(&event, &mut accumulated_text) {
-                    if event_tx.send(agent_event).await.is_err() {
-                        tracing::debug!("Event receiver closed, stopping stream");
-                        break;
-                    }
-                }
-
-                if let StreamEvent::MessageDelta { usage, .. } = &event {
-                    final_usage = Some(usage.clone());
-                }
-            }
-            Err(e) => {
-                let error_event = translate_llm_error(&e);
-                let _ = event_tx.send(error_event).await;
-                return Err(e.into());
-            }
-        }
-    }
-
-    // Update session with assistant response and persist
-    if !accumulated_text.is_empty() {
-        let mut sessions_guard = sessions.write().await;
-        if let Some(session) = sessions_guard.get_mut(session_id) {
-            session.messages.push(Message {
-                role: Role::Assistant,
-                content: vec![ContentBlock::Text {
-                    text: accumulated_text.clone(),
-                }],
-            });
-
-            // Persist to database
-            if let Err(e) = session_db.save_session(session_id, session) {
-                tracing::error!(error = %e, "Failed to persist session after prompt");
-            }
-        }
-    }
-
-    // Send final result
-    let usage = final_usage.map(|u| Usage {
-        input_tokens: u.input_tokens as u64,
-        output_tokens: u.output_tokens as u64,
+    let mut total_usage = Usage {
+        input_tokens: 0,
+        output_tokens: 0,
         cache_read_tokens: None,
         cache_write_tokens: None,
         cost_usd: None,
         extra: None,
-    });
+    };
 
+    // Agentic loop - continues while LLM requests tool use
+    loop {
+        // Get current messages from session
+        let messages = {
+            let sessions_guard = sessions.read().await;
+            let session = sessions_guard.get(session_id).context("Session not found")?;
+            session.messages.clone()
+        };
+
+        // Build request
+        let request = Request {
+            model: config.model.clone(),
+            messages,
+            tools: tools.clone(),
+            max_tokens: Some(config.max_tokens),
+            system: system_prompt.clone(),
+            temperature: None,
+        };
+
+        // Use streaming API for real-time text output
+        let mut stream = client.create_message_stream(&request);
+        let mut response_content: Vec<ContentBlock> = Vec::new();
+        let mut current_text = String::new();
+        let mut tool_uses: Vec<(String, String, serde_json::Value)> = Vec::new();
+        let mut stop_reason: Option<StopReason> = None;
+
+        while let Some(event_result) = stream.next().await {
+            match event_result {
+                Ok(event) => {
+                    match &event {
+                        StreamEvent::ContentBlockDelta { text, .. } => {
+                            current_text.push_str(text);
+                            accumulated_text.push_str(text);
+                            if event_tx.send(AgentEvent::Text(text.clone())).await.is_err() {
+                                tracing::debug!("Event receiver closed, stopping stream");
+                                return Ok(());
+                            }
+                        }
+                        StreamEvent::ContentBlockStart { block, .. } => {
+                            if let ContentBlock::ToolUse { id, name, input } = block {
+                                // Emit ToolStart event
+                                let _ = event_tx
+                                    .send(AgentEvent::ToolStart {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        input: input.clone(),
+                                    })
+                                    .await;
+                                tool_uses.push((id.clone(), name.clone(), input.clone()));
+                            }
+                        }
+                        StreamEvent::ContentBlockStop { index } => {
+                            // Finalize text blocks
+                            if !current_text.is_empty() && response_content.len() == *index as usize {
+                                response_content.push(ContentBlock::Text {
+                                    text: std::mem::take(&mut current_text),
+                                });
+                            }
+                        }
+                        StreamEvent::MessageDelta { usage, stop_reason: sr, .. } => {
+                            total_usage.input_tokens += usage.input_tokens as u64;
+                            total_usage.output_tokens += usage.output_tokens as u64;
+                            stop_reason = sr.clone();
+                        }
+                        StreamEvent::MessageStart { .. } | StreamEvent::MessageStop => {}
+                    }
+                }
+                Err(e) => {
+                    let error_event = translate_llm_error(&e);
+                    let _ = event_tx.send(error_event).await;
+                    return Err(e.into());
+                }
+            }
+        }
+
+        // Add any remaining text
+        if !current_text.is_empty() {
+            response_content.push(ContentBlock::Text { text: current_text });
+        }
+
+        // Add tool uses to content
+        for (id, name, input) in &tool_uses {
+            response_content.push(ContentBlock::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+            });
+        }
+
+        // Update session with assistant response
+        {
+            let mut sessions_guard = sessions.write().await;
+            if let Some(session) = sessions_guard.get_mut(session_id) {
+                if !response_content.is_empty() {
+                    session.messages.push(Message {
+                        role: Role::Assistant,
+                        content: response_content.clone(),
+                    });
+                }
+            }
+        }
+
+        // If no tool use, we're done
+        if stop_reason != Some(StopReason::ToolUse) || tool_uses.is_empty() {
+            // Persist final state
+            {
+                let sessions_guard = sessions.read().await;
+                if let Some(session) = sessions_guard.get(session_id) {
+                    if let Err(e) = session_db.save_session(session_id, session) {
+                        tracing::error!(error = %e, "Failed to persist session after prompt");
+                    }
+                }
+            }
+            break;
+        }
+
+        // Execute tools and collect results
+        let mut tool_results: Vec<ContentBlock> = Vec::new();
+
+        for (tool_id, tool_name, tool_input) in tool_uses {
+            let start_time = Instant::now();
+
+            // Look up and execute the tool
+            let (output, is_error) = if let Some(tool) = registry.get(&tool_name).await {
+                match tool.execute(tool_input.clone()).await {
+                    Ok(result) => (result.content, result.is_error),
+                    Err(e) => (format!("Tool execution error: {}", e), true),
+                }
+            } else {
+                (format!("Tool '{}' not found in registry", tool_name), true)
+            };
+
+            let duration_ms = start_time.elapsed().as_millis() as u64;
+
+            // Emit ToolEnd event
+            let _ = event_tx
+                .send(AgentEvent::ToolEnd {
+                    id: tool_id.clone(),
+                    name: tool_name.clone(),
+                    output: serde_json::Value::String(output.clone()),
+                    success: !is_error,
+                    duration_ms,
+                })
+                .await;
+
+            tool_results.push(ContentBlock::ToolResult {
+                tool_use_id: tool_id,
+                content: output,
+                is_error,
+            });
+        }
+
+        // Add tool results as a user message and persist
+        {
+            let mut sessions_guard = sessions.write().await;
+            if let Some(session) = sessions_guard.get_mut(session_id) {
+                session.messages.push(Message {
+                    role: Role::User,
+                    content: tool_results,
+                });
+
+                // Persist after tool execution
+                if let Err(e) = session_db.save_session(session_id, session) {
+                    tracing::error!(error = %e, "Failed to persist session after tool execution");
+                }
+            }
+        }
+
+        // Continue the loop to let LLM respond to tool results
+    }
+
+    // Send final result
     let _ = event_tx
         .send(AgentEvent::Result {
             text: accumulated_text,
-            usage,
+            usage: Some(total_usage),
             metadata: serde_json::Value::Null,
         })
         .await;
 
     Ok(())
-}
-
-/// Translate mux StreamEvent to gorp AgentEvent
-fn translate_stream_event(
-    event: &StreamEvent,
-    accumulated_text: &mut String,
-) -> Option<AgentEvent> {
-    match event {
-        StreamEvent::ContentBlockDelta { text, .. } => {
-            accumulated_text.push_str(text);
-            Some(AgentEvent::Text(text.clone()))
-        }
-        StreamEvent::ContentBlockStart { block, .. } => {
-            if let ContentBlock::ToolUse { id, name, input } = block {
-                Some(AgentEvent::ToolStart {
-                    id: id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
-                })
-            } else {
-                None
-            }
-        }
-        StreamEvent::MessageStart { .. }
-        | StreamEvent::ContentBlockStop { .. }
-        | StreamEvent::MessageDelta { .. }
-        | StreamEvent::MessageStop => None,
-    }
 }
 
 /// Translate mux LlmError to gorp AgentEvent
