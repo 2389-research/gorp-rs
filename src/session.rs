@@ -105,6 +105,18 @@ impl SessionStore {
             [],
         )?;
 
+        // Create mux_sessions table for mux backend message history persistence
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mux_sessions (
+                session_id TEXT PRIMARY KEY,
+                messages_json TEXT NOT NULL,
+                system_prompt TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         tracing::info!(
             workspace = %workspace_path.display(),
             db = %db_path.display(),
@@ -509,5 +521,91 @@ impl SessionStore {
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         db.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
         Ok(())
+    }
+
+    // =========================================================================
+    // Mux Session Persistence
+    // =========================================================================
+
+    /// Save a mux session's message history to the database
+    pub fn save_mux_session(
+        &self,
+        session_id: &str,
+        messages_json: &str,
+        system_prompt: Option<&str>,
+    ) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        db.execute(
+            "INSERT INTO mux_sessions (session_id, messages_json, system_prompt, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET
+                messages_json = ?2,
+                system_prompt = ?3,
+                updated_at = ?4",
+            params![session_id, messages_json, system_prompt, now],
+        )?;
+
+        tracing::debug!(session_id = %session_id, "Mux session saved");
+        Ok(())
+    }
+
+    /// Load a mux session's message history from the database
+    /// Returns (messages_json, system_prompt) if found
+    pub fn load_mux_session(&self, session_id: &str) -> Result<Option<(String, Option<String>)>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let mut stmt = db.prepare(
+            "SELECT messages_json, system_prompt FROM mux_sessions WHERE session_id = ?1",
+        )?;
+
+        let result = stmt.query_row(params![session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        });
+
+        match result {
+            Ok((messages, prompt)) => {
+                tracing::debug!(session_id = %session_id, "Mux session loaded");
+                Ok(Some((messages, prompt)))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Delete a mux session from the database
+    pub fn delete_mux_session(&self, session_id: &str) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        db.execute(
+            "DELETE FROM mux_sessions WHERE session_id = ?1",
+            params![session_id],
+        )?;
+
+        tracing::debug!(session_id = %session_id, "Mux session deleted");
+        Ok(())
+    }
+
+    /// Check if a mux session exists in the database
+    pub fn mux_session_exists(&self, session_id: &str) -> Result<bool> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let mut stmt = db.prepare("SELECT 1 FROM mux_sessions WHERE session_id = ?1")?;
+        let exists = stmt.exists(params![session_id])?;
+        Ok(exists)
     }
 }

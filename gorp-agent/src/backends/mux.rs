@@ -1,15 +1,16 @@
 // ABOUTME: Mux backend - uses mux-rs for native Rust agent execution.
-// ABOUTME: Provides streaming LLM responses with tool execution support.
+// ABOUTME: Provides streaming LLM responses with SQLite session persistence.
 
 use crate::event::{AgentEvent, ErrorCode, Usage};
 use crate::handle::{AgentHandle, Command};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use mux::prelude::*;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, RwLock};
 
 /// Configuration for the Mux backend
@@ -41,7 +42,8 @@ fn default_local_prompt_files() -> Vec<String> {
     ]
 }
 
-/// In-memory session state
+/// Session state with message history
+#[derive(Clone)]
 struct MuxSession {
     messages: Vec<Message>,
     system_prompt: Option<String>,
@@ -52,6 +54,178 @@ impl MuxSession {
         Self {
             messages: Vec::new(),
             system_prompt,
+        }
+    }
+}
+
+/// Serializable message format for SQLite storage
+#[derive(Serialize, Deserialize)]
+struct StoredMessage {
+    role: String,
+    content: Vec<StoredContentBlock>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum StoredContentBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
+/// SQLite-backed session store for mux backend
+struct SessionDb {
+    conn: Mutex<Connection>,
+}
+
+impl SessionDb {
+    fn new(db_path: &std::path::Path) -> Result<Self> {
+        let conn = Connection::open(db_path).context("Failed to open mux sessions database")?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mux_sessions (
+                session_id TEXT PRIMARY KEY,
+                messages_json TEXT NOT NULL,
+                system_prompt TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    fn save_session(&self, session_id: &str, session: &MuxSession) -> Result<()> {
+        let messages: Vec<StoredMessage> = session
+            .messages
+            .iter()
+            .map(|m| StoredMessage {
+                role: match m.role {
+                    Role::User => "user".to_string(),
+                    Role::Assistant => "assistant".to_string(),
+                },
+                content: m
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        ContentBlock::Text { text } => {
+                            Some(StoredContentBlock::Text { text: text.clone() })
+                        }
+                        ContentBlock::ToolUse { id, name, input } => {
+                            Some(StoredContentBlock::ToolUse {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: input.clone(),
+                            })
+                        }
+                        ContentBlock::ToolResult {
+                            tool_use_id,
+                            content,
+                            is_error,
+                        } => Some(StoredContentBlock::ToolResult {
+                            tool_use_id: tool_use_id.clone(),
+                            content: content.clone(),
+                            is_error: *is_error,
+                        }),
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        let messages_json = serde_json::to_string(&messages)?;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO mux_sessions (session_id, messages_json, system_prompt, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET
+                messages_json = ?2,
+                system_prompt = ?3,
+                updated_at = ?4",
+            params![session_id, messages_json, session.system_prompt, now],
+        )?;
+
+        tracing::debug!(session_id = %session_id, messages = messages.len(), "Session saved to database");
+        Ok(())
+    }
+
+    fn load_session(&self, session_id: &str) -> Result<Option<MuxSession>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT messages_json, system_prompt FROM mux_sessions WHERE session_id = ?1",
+        )?;
+
+        let result = stmt.query_row(params![session_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        });
+
+        match result {
+            Ok((messages_json, system_prompt)) => {
+                let stored: Vec<StoredMessage> = serde_json::from_str(&messages_json)?;
+                let messages: Vec<Message> = stored
+                    .into_iter()
+                    .map(|m| Message {
+                        role: if m.role == "user" {
+                            Role::User
+                        } else {
+                            Role::Assistant
+                        },
+                        content: m
+                            .content
+                            .into_iter()
+                            .map(|c| match c {
+                                StoredContentBlock::Text { text } => ContentBlock::Text { text },
+                                StoredContentBlock::ToolUse { id, name, input } => {
+                                    ContentBlock::ToolUse { id, name, input }
+                                }
+                                StoredContentBlock::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    is_error,
+                                } => ContentBlock::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    is_error,
+                                },
+                            })
+                            .collect(),
+                    })
+                    .collect();
+
+                tracing::debug!(session_id = %session_id, messages = messages.len(), "Session loaded from database");
+                Ok(Some(MuxSession {
+                    messages,
+                    system_prompt,
+                }))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 }
@@ -75,12 +249,21 @@ impl MuxBackend {
             Ok(c) => Arc::new(c),
             Err(e) => {
                 tracing::error!(error = %e, "Failed to create Anthropic client");
-                // Return a handle that will error on all operations
                 return AgentHandle::new(tx, name);
             }
         };
 
-        // Shared session storage
+        // Create session database in working directory
+        let db_path = config.working_dir.join(".mux_sessions.db");
+        let session_db = match SessionDb::new(&db_path) {
+            Ok(db) => Arc::new(db),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to create session database");
+                return AgentHandle::new(tx, name);
+            }
+        };
+
+        // In-memory session cache (backed by SQLite)
         let sessions: Arc<RwLock<HashMap<String, MuxSession>>> =
             Arc::new(RwLock::new(HashMap::new()));
 
@@ -89,30 +272,47 @@ impl MuxBackend {
                 match cmd {
                     Command::NewSession { reply } => {
                         let session_id = uuid::Uuid::new_v4().to_string();
-
-                        // Build system prompt for this session
                         let system_prompt = build_system_prompt(&config);
-
-                        // Create new session
                         let session = MuxSession::new(system_prompt);
-                        sessions.write().await.insert(session_id.clone(), session);
 
+                        // Save to database immediately
+                        if let Err(e) = session_db.save_session(&session_id, &session) {
+                            tracing::error!(error = %e, "Failed to save new session");
+                        }
+
+                        sessions.write().await.insert(session_id.clone(), session);
                         let _ = reply.send(Ok(session_id));
                     }
                     Command::LoadSession {
                         session_id, reply, ..
                     } => {
-                        // For now, just check if session exists
-                        // Phase 2 will load from SQLite
+                        // Check in-memory cache first
                         let exists = sessions.read().await.contains_key(&session_id);
                         if exists {
                             let _ = reply.send(Ok(()));
-                        } else {
-                            // Create empty session if not found (new behavior)
-                            let system_prompt = build_system_prompt(&config);
-                            let session = MuxSession::new(system_prompt);
-                            sessions.write().await.insert(session_id.clone(), session);
-                            let _ = reply.send(Ok(()));
+                            continue;
+                        }
+
+                        // Try to load from database
+                        match session_db.load_session(&session_id) {
+                            Ok(Some(session)) => {
+                                sessions.write().await.insert(session_id.clone(), session);
+                                let _ = reply.send(Ok(()));
+                            }
+                            Ok(None) => {
+                                // Session doesn't exist - create new one
+                                let system_prompt = build_system_prompt(&config);
+                                let session = MuxSession::new(system_prompt);
+                                if let Err(e) = session_db.save_session(&session_id, &session) {
+                                    tracing::error!(error = %e, "Failed to save new session");
+                                }
+                                sessions.write().await.insert(session_id.clone(), session);
+                                let _ = reply.send(Ok(()));
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to load session");
+                                let _ = reply.send(Err(e));
+                            }
                         }
                     }
                     Command::Prompt {
@@ -126,12 +326,14 @@ impl MuxBackend {
 
                         let client = Arc::clone(&client);
                         let sessions = Arc::clone(&sessions);
+                        let session_db = Arc::clone(&session_db);
                         let config = config.clone();
 
                         tokio::spawn(async move {
                             if let Err(e) = run_prompt(
                                 &client,
                                 &sessions,
+                                &session_db,
                                 &config,
                                 &session_id,
                                 &text,
@@ -144,7 +346,6 @@ impl MuxBackend {
                         });
                     }
                     Command::Cancel { reply, .. } => {
-                        // Cancellation happens by dropping the stream
                         let _ = reply.send(Ok(()));
                     }
                 }
@@ -193,7 +394,7 @@ fn build_system_prompt(config: &MuxConfig) -> Option<String> {
         if let Ok(content) = std::fs::read_to_string(&local_path) {
             if !content.trim().is_empty() {
                 parts.push(content);
-                break; // Use first found
+                break;
             }
         }
     }
@@ -208,6 +409,7 @@ fn build_system_prompt(config: &MuxConfig) -> Option<String> {
 async fn run_prompt(
     client: &AnthropicClient,
     sessions: &Arc<RwLock<HashMap<String, MuxSession>>>,
+    session_db: &Arc<SessionDb>,
     config: &MuxConfig,
     session_id: &str,
     text: &str,
@@ -220,7 +422,6 @@ async fn run_prompt(
             .get_mut(session_id)
             .context("Session not found")?;
 
-        // Add user message
         session.messages.push(Message {
             role: Role::User,
             content: vec![ContentBlock::Text {
@@ -256,7 +457,6 @@ async fn run_prompt(
                     }
                 }
 
-                // Capture usage from MessageDelta
                 if let StreamEvent::MessageDelta { usage, .. } = &event {
                     final_usage = Some(usage.clone());
                 }
@@ -269,7 +469,7 @@ async fn run_prompt(
         }
     }
 
-    // Update session with assistant response
+    // Update session with assistant response and persist
     if !accumulated_text.is_empty() {
         let mut sessions_guard = sessions.write().await;
         if let Some(session) = sessions_guard.get_mut(session_id) {
@@ -279,6 +479,11 @@ async fn run_prompt(
                     text: accumulated_text.clone(),
                 }],
             });
+
+            // Persist to database
+            if let Err(e) = session_db.save_session(session_id, session) {
+                tracing::error!(error = %e, "Failed to persist session after prompt");
+            }
         }
     }
 
@@ -286,7 +491,7 @@ async fn run_prompt(
     let usage = final_usage.map(|u| Usage {
         input_tokens: u.input_tokens as u64,
         output_tokens: u.output_tokens as u64,
-        cache_read_tokens: None,  // mux doesn't track cache tokens
+        cache_read_tokens: None,
         cache_write_tokens: None,
         cost_usd: None,
         extra: None,
@@ -324,7 +529,6 @@ fn translate_stream_event(
                 None
             }
         }
-        // Other events don't map directly
         StreamEvent::MessageStart { .. }
         | StreamEvent::ContentBlockStop { .. }
         | StreamEvent::MessageDelta { .. }
@@ -351,7 +555,6 @@ fn translate_llm_error(error: &LlmError) -> AgentEvent {
             "Stream closed unexpectedly".to_string(),
             false,
         ),
-        // Handle any other error variants
         _ => (ErrorCode::BackendError, error.to_string(), false),
     };
 
@@ -362,9 +565,26 @@ fn translate_llm_error(error: &LlmError) -> AgentEvent {
     }
 }
 
-// Need dirs crate for home_dir - add to dependencies
 mod dirs {
     pub fn home_dir() -> Option<std::path::PathBuf> {
         std::env::var_os("HOME").map(std::path::PathBuf::from)
+    }
+}
+
+mod chrono {
+    pub struct Utc;
+    impl Utc {
+        pub fn now() -> DateTime {
+            DateTime
+        }
+    }
+    pub struct DateTime;
+    impl DateTime {
+        pub fn to_rfc3339(&self) -> String {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap();
+            format!("{}", now.as_secs())
+        }
     }
 }

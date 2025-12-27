@@ -26,7 +26,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [features]
 default = []
 acp = ["dep:agent-client-protocol", "dep:tokio-util"]
-mux = ["dep:mux"]
+mux = ["dep:mux", "dep:rusqlite"]
 
 [dependencies.agent-client-protocol]
 version = "0.9"
@@ -34,6 +34,11 @@ optional = true
 
 [dependencies.mux]
 git = "https://github.com/2389-research/mux-rs"
+optional = true
+
+[dependencies.rusqlite]
+version = "0.37"
+features = ["bundled"]
 optional = true
 
 [[bin]]
