@@ -59,10 +59,10 @@ impl std::fmt::Debug for MatrixConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendConfig {
-    /// Backend type: "acp", "direct", "mock"
+    /// Backend type: "acp", "direct", "mock", "mux"
     #[serde(rename = "type", default = "default_backend_type")]
     pub backend_type: String,
-    /// Path to the agent binary
+    /// Path to the agent binary (for acp/direct backends)
     pub binary: Option<String>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
@@ -70,6 +70,30 @@ pub struct BackendConfig {
     pub keep_alive_secs: u64,
     #[serde(default = "default_pre_warm_secs")]
     pub pre_warm_secs: u64,
+    /// Model to use (for mux backend, e.g., "claude-sonnet-4-20250514")
+    pub model: Option<String>,
+    /// Max tokens for response (for mux backend)
+    pub max_tokens: Option<u32>,
+    /// Path to global system prompt (for mux backend, e.g., "~/.mux/system.md")
+    pub global_system_prompt_path: Option<String>,
+    /// MCP servers to connect to (for mux backend)
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// Configuration for an MCP server (used by mux backend)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Server name (used as tool prefix)
+    pub name: String,
+    /// Command to run
+    pub command: String,
+    /// Command arguments
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Environment variables
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
 }
 
 fn default_backend_type() -> String {
@@ -84,6 +108,10 @@ impl Default for BackendConfig {
             timeout_secs: default_timeout_secs(),
             keep_alive_secs: default_keep_alive_secs(),
             pre_warm_secs: default_pre_warm_secs(),
+            model: None,
+            max_tokens: None,
+            global_system_prompt_path: None,
+            mcp_servers: Vec::new(),
         }
     }
 }

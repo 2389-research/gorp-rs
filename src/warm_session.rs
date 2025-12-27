@@ -15,8 +15,16 @@ pub struct WarmConfig {
     pub keep_alive_duration: Duration,
     pub pre_warm_lead_time: Duration,
     pub agent_binary: String,
-    /// Backend type: "acp", "direct", "mock"
+    /// Backend type: "acp", "direct", "mock", "mux"
     pub backend_type: String,
+    /// Model to use (for mux backend)
+    pub model: Option<String>,
+    /// Max tokens (for mux backend)
+    pub max_tokens: Option<u32>,
+    /// Global system prompt path (for mux backend)
+    pub global_system_prompt_path: Option<String>,
+    /// MCP server configs (for mux backend)
+    pub mcp_servers: Vec<crate::config::McpServerConfig>,
 }
 
 /// A warm session holding an active AgentHandle
@@ -162,10 +170,26 @@ impl WarmSessionManager {
     /// Create an AgentHandle using the registry
     /// This is synchronous and fast
     fn create_agent_handle(&self, working_dir: &str) -> Result<AgentHandle> {
-        let config = serde_json::json!({
+        let mut config = serde_json::json!({
             "working_dir": working_dir,
             "binary": self.config.agent_binary,
         });
+
+        // Add mux-specific config if using mux backend
+        if self.config.backend_type == "mux" {
+            if let Some(ref model) = self.config.model {
+                config["model"] = serde_json::json!(model);
+            }
+            if let Some(max_tokens) = self.config.max_tokens {
+                config["max_tokens"] = serde_json::json!(max_tokens);
+            }
+            if let Some(ref path) = self.config.global_system_prompt_path {
+                config["global_system_prompt_path"] = serde_json::json!(path);
+            }
+            if !self.config.mcp_servers.is_empty() {
+                config["mcp_servers"] = serde_json::to_value(&self.config.mcp_servers)?;
+            }
+        }
 
         self.registry.create(&self.config.backend_type, &config)
     }
@@ -628,6 +652,10 @@ mod tests {
             pre_warm_lead_time: Duration::from_secs(300),
             agent_binary: "claude".to_string(),
             backend_type: "acp".to_string(),
+            model: None,
+            max_tokens: None,
+            global_system_prompt_path: None,
+            mcp_servers: Vec::new(),
         };
         let manager = WarmSessionManager::new(config);
         assert_eq!(manager.agent_binary(), "claude");
@@ -641,6 +669,10 @@ mod tests {
             pre_warm_lead_time: Duration::from_secs(300),
             agent_binary: "claude".to_string(),
             backend_type: "acp".to_string(),
+            model: None,
+            max_tokens: None,
+            global_system_prompt_path: None,
+            mcp_servers: Vec::new(),
         };
         let mut manager = WarmSessionManager::new(config);
 
@@ -679,6 +711,10 @@ mod tests {
             pre_warm_lead_time: Duration::from_secs(300),
             agent_binary: "claude".to_string(),
             backend_type: "acp".to_string(),
+            model: None,
+            max_tokens: None,
+            global_system_prompt_path: None,
+            mcp_servers: Vec::new(),
         };
         let mut manager = WarmSessionManager::new(config);
 
@@ -694,6 +730,10 @@ mod tests {
             pre_warm_lead_time: Duration::from_secs(300),
             agent_binary: "claude".to_string(),
             backend_type: "acp".to_string(),
+            model: None,
+            max_tokens: None,
+            global_system_prompt_path: None,
+            mcp_servers: Vec::new(),
         };
         let mut manager = WarmSessionManager::new(config);
 
@@ -720,6 +760,10 @@ mod tests {
             pre_warm_lead_time: Duration::from_secs(300),
             agent_binary: "claude".to_string(),
             backend_type: "acp".to_string(),
+            model: None,
+            max_tokens: None,
+            global_system_prompt_path: None,
+            mcp_servers: Vec::new(),
         };
         let mut manager = WarmSessionManager::new(config);
 
@@ -745,6 +789,10 @@ mod tests {
             pre_warm_lead_time: Duration::from_secs(300),
             agent_binary: "claude".to_string(),
             backend_type: "acp".to_string(),
+            model: None,
+            max_tokens: None,
+            global_system_prompt_path: None,
+            mcp_servers: Vec::new(),
         };
         let mut manager = WarmSessionManager::new(config);
 

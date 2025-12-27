@@ -970,6 +970,10 @@ async fn run_start() -> Result<()> {
             .clone()
             .unwrap_or_else(|| "claude".to_string()),
         backend_type: config.backend.backend_type.clone(),
+        model: config.backend.model.clone(),
+        max_tokens: config.backend.max_tokens,
+        global_system_prompt_path: config.backend.global_system_prompt_path.clone(),
+        mcp_servers: config.backend.mcp_servers.clone(),
     };
     let warm_manager = create_shared_manager(warm_config);
 
