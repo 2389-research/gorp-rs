@@ -67,6 +67,12 @@ impl Default for AgentRegistry {
             registry.register("acp", AcpBackend::factory())
         };
 
+        #[cfg(feature = "mux")]
+        let registry = {
+            use crate::backends::mux::MuxBackend;
+            registry.register("mux", MuxBackend::factory())
+        };
+
         registry
     }
 }
