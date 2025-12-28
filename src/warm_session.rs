@@ -198,14 +198,30 @@ impl WarmSessionManager {
     pub fn create_agent_handle_with_config(
         registry: &AgentRegistry,
         working_dir: &str,
-        agent_binary: &str,
-        backend_type: &str,
+        warm_config: &WarmConfig,
     ) -> Result<AgentHandle> {
-        let config = serde_json::json!({
+        let mut config = serde_json::json!({
             "working_dir": working_dir,
-            "binary": agent_binary,
+            "binary": warm_config.agent_binary,
         });
-        registry.create(backend_type, &config)
+
+        // Add mux-specific config if using mux backend
+        if warm_config.backend_type == "mux" {
+            if let Some(ref model) = warm_config.model {
+                config["model"] = serde_json::json!(model);
+            }
+            if let Some(max_tokens) = warm_config.max_tokens {
+                config["max_tokens"] = serde_json::json!(max_tokens);
+            }
+            if let Some(ref path) = warm_config.global_system_prompt_path {
+                config["global_system_prompt_path"] = serde_json::json!(path);
+            }
+            if !warm_config.mcp_servers.is_empty() {
+                config["mcp_servers"] = serde_json::to_value(&warm_config.mcp_servers)?;
+            }
+        }
+
+        registry.create(&warm_config.backend_type, &config)
     }
 
     /// Get a clone of the registry for use outside the lock
@@ -518,10 +534,9 @@ pub async fn prepare_session_async(
     tracing::info!(channel = %channel_name, "Creating new agent handle (async, outside lock)");
 
     // Get config values we need (quick read lock)
-    let (agent_binary, backend_type, registry) = {
+    let (warm_config, registry) = {
         let mgr = manager.read().await;
-        let cfg = mgr.config();
-        (cfg.agent_binary, cfg.backend_type, mgr.registry())
+        (mgr.config(), mgr.registry())
     };
 
     // Use absolute path for working directory
@@ -536,8 +551,7 @@ pub async fn prepare_session_async(
     let agent_handle = WarmSessionManager::create_agent_handle_with_config(
         &registry,
         &working_dir_str,
-        &agent_binary,
-        &backend_type,
+        &warm_config,
     )?;
 
     // Step 3: Do slow async session creation OUTSIDE the lock
