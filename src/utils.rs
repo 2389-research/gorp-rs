@@ -2,6 +2,7 @@
 // ABOUTME: Includes markdown-to-HTML conversion, long message chunking, and JSONL logging
 
 use pulldown_cmark::{html, Parser};
+use regex::Regex;
 use serde::Serialize;
 use tokio::fs::{create_dir_all, OpenOptions};
 use tokio::io::AsyncWriteExt;
@@ -12,6 +13,30 @@ pub fn markdown_to_html(markdown: &str) -> String {
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
     html_output
+}
+
+/// Strip XML function call blocks from text before sending to Matrix.
+/// The ACP backend (Claude Code CLI) outputs raw XML function call syntax that should
+/// not be shown to end users. This removes those blocks and cleans up extra whitespace.
+pub fn strip_function_calls(text: &str) -> String {
+    // Build regex pattern dynamically to match function_calls XML blocks
+    // Pattern matches: <function_calls>...</[closing tag]>
+    let open_tag = "function_calls";
+    let pattern = format!(r"(?s)<{}>.*?</{}>", open_tag, open_tag);
+    let re = Regex::new(&pattern).unwrap();
+    let result = re.replace_all(text, "");
+
+    // Also handle antml: namespace variant (Anthropic's XML namespace)
+    let antml_tag = format!("antml:{}", open_tag);
+    let antml_pattern = format!(r"(?s)<{}>.*?</{}>", antml_tag, antml_tag);
+    let re2 = Regex::new(&antml_pattern).unwrap();
+    let result = re2.replace_all(&result, "");
+
+    // Clean up excessive whitespace left behind
+    let re3 = Regex::new(r"\n{3,}").unwrap();
+    let result = re3.replace_all(&result, "\n\n");
+
+    result.trim().to_string()
 }
 
 /// Split long text into chunks, trying to break at paragraph boundaries
@@ -192,5 +217,38 @@ pub async fn log_matrix_message(
         Err(e) => {
             tracing::warn!(error = %e, path = %path, "Failed to open Matrix message log file");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_function_calls_removes_xml_blocks() {
+        let input = "Hello!\n<function_calls>\n<invoke name=\"test\">\n<param>value</param>\n</invoke>\n</function_calls>\nGoodbye!";
+        let result = strip_function_calls(input);
+        assert_eq!(result, "Hello!\n\nGoodbye!");
+    }
+
+    #[test]
+    fn test_strip_function_calls_no_xml_unchanged() {
+        let input = "Just regular text\nwith multiple lines";
+        let result = strip_function_calls(input);
+        assert_eq!(result, "Just regular text\nwith multiple lines");
+    }
+
+    #[test]
+    fn test_strip_function_calls_multiple_blocks() {
+        let input = "Start\n<function_calls>block1</function_calls>\nMiddle\n<function_calls>block2</function_calls>\nEnd";
+        let result = strip_function_calls(input);
+        assert_eq!(result, "Start\n\nMiddle\n\nEnd");
+    }
+
+    #[test]
+    fn test_strip_function_calls_cleans_whitespace() {
+        let input = "Hello\n\n\n\n\nWorld";
+        let result = strip_function_calls(input);
+        assert_eq!(result, "Hello\n\nWorld");
     }
 }

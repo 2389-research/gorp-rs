@@ -17,7 +17,7 @@ use crate::{
         parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
     },
     session::SessionStore,
-    utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
+    utils::{chunk_message, log_matrix_message, markdown_to_html, strip_function_calls, MAX_CHUNK_SIZE},
     warm_session::{prepare_session_async, SharedWarmSessionManager},
 };
 use chrono::Utc;
@@ -663,7 +663,9 @@ pub async fn handle_message(
         "ACP agent responded"
     );
 
-    let response = final_response;
+    // Filter out XML function call blocks before sending to Matrix
+    // The ACP backend may output raw XML that shouldn't be shown to users
+    let response = strip_function_calls(&final_response);
 
     // Update session ID if Claude CLI reported a new one via SessionChanged event
     // This is critical for session continuity - the CLI generates its own session IDs
