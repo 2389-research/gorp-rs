@@ -20,9 +20,11 @@ RUN mkdir src && \
 
 # SSH setup for private git dependencies (mux-rs)
 # Configure cargo to use git CLI for SSH-based fetches
+# Rewrite HTTPS URLs to SSH for GitHub to enable SSH agent forwarding
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 RUN mkdir -p ~/.ssh && \
-    ssh-keyscan github.com >> ~/.ssh/known_hosts
+    ssh-keyscan github.com >> ~/.ssh/known_hosts && \
+    git config --global url."git@github.com:".insteadOf "https://github.com/"
 
 # Build dependencies (this layer is cached unless Cargo.toml/lock changes)
 # Uses SSH agent forwarding for private git repos
