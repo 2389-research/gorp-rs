@@ -1104,7 +1104,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2599,8 +2599,8 @@ dependencies = [
 
 [[package]]
 name = "mux"
-version = "0.1.0"
-source = "git+https://github.com/2389-research/mux-rs#15dfd421efa5ae0d21a33d9b1293d1ef0e8fa217"
+version = "0.2.0"
+source = "git+https://github.com/2389-research/mux-rs?tag=v0.2.0#659995a128312a0b325de62f9dbbf81efef13127"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2612,6 +2612,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3517,7 +3518,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4096,7 +4097,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
