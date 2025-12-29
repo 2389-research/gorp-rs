@@ -2,8 +2,8 @@
 # ABOUTME: Uses dependency caching for fast rebuilds, creates minimal runtime image
 
 # Build stage - cache dependencies separately from source
-# Using stable Rust to avoid nightly compiler regressions with async recursion limits
-FROM rust:1.83-bookworm AS builder
+# Using Rust 1.85+ which has edition 2024 stabilized
+FROM rust:bookworm AS builder
 
 WORKDIR /app
 
