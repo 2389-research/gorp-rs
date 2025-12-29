@@ -255,6 +255,87 @@ pub struct MuxBackend {
     config: MuxConfig,
 }
 
+/// Read MCP server configs from .mcp.json in the working directory
+fn read_mcp_json(working_dir: &std::path::Path) -> Vec<MuxMcpServerConfig> {
+    let mcp_path = working_dir.join(".mcp.json");
+    if !mcp_path.exists() {
+        return Vec::new();
+    }
+
+    let content = match std::fs::read_to_string(&mcp_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(path = %mcp_path.display(), error = %e, "Failed to read .mcp.json");
+            return Vec::new();
+        }
+    };
+
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(path = %mcp_path.display(), error = %e, "Failed to parse .mcp.json");
+            return Vec::new();
+        }
+    };
+
+    // Handle Claude Code format: { "mcpServers": { ... } }
+    let servers_obj = if let Some(mcp_servers) = json.get("mcpServers") {
+        mcp_servers.as_object()
+    } else {
+        // Also try direct format: { "server-name": { ... } }
+        json.as_object()
+    };
+
+    let Some(servers) = servers_obj else {
+        tracing::warn!(path = %mcp_path.display(), "Invalid .mcp.json format");
+        return Vec::new();
+    };
+
+    let mut configs = Vec::new();
+    for (name, server) in servers {
+        // Skip non-stdio servers (http type not supported yet)
+        if server.get("type").and_then(|t| t.as_str()) == Some("http") {
+            tracing::debug!(server = %name, "Skipping HTTP MCP server (not supported)");
+            continue;
+        }
+
+        let Some(command) = server.get("command").and_then(|c| c.as_str()) else {
+            continue;
+        };
+
+        let args: Vec<String> = server
+            .get("args")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let env: HashMap<String, String> = server
+            .get("env")
+            .and_then(|e| e.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        configs.push(MuxMcpServerConfig {
+            name: name.clone(),
+            command: command.to_string(),
+            args,
+            env,
+        });
+
+        tracing::info!(server = %name, command = %command, "Found MCP server in .mcp.json");
+    }
+
+    configs
+}
+
 impl MuxBackend {
     pub fn new(config: MuxConfig) -> Result<Self> {
         Ok(Self { config })
@@ -295,9 +376,20 @@ impl MuxBackend {
         let mcp_clients: Arc<RwLock<Vec<Arc<McpClient>>>> = Arc::new(RwLock::new(Vec::new()));
 
         // Connect to MCP servers in background
+        // Merge servers from config with servers from .mcp.json in working directory
         let registry_clone = Arc::clone(&registry);
         let mcp_clients_clone = Arc::clone(&mcp_clients);
-        let mcp_configs = config.mcp_servers.clone();
+        let mut mcp_configs = config.mcp_servers.clone();
+        let json_configs = read_mcp_json(&config.working_dir);
+        mcp_configs.extend(json_configs);
+
+        tracing::info!(
+            config_servers = config.mcp_servers.len(),
+            json_servers = mcp_configs.len() - config.mcp_servers.len(),
+            total = mcp_configs.len(),
+            "Loading MCP servers"
+        );
+
         tokio::spawn(async move {
             for server_config in mcp_configs {
                 match connect_mcp_server(&server_config, &registry_clone).await {
