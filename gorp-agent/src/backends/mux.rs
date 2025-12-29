@@ -524,6 +524,16 @@ impl MuxBackend {
 fn build_system_prompt(config: &MuxConfig) -> Option<String> {
     let mut parts = Vec::new();
 
+    // 0. Working directory context - critical for tools to work correctly
+    let working_dir_str = config.working_dir.to_string_lossy();
+    parts.push(format!(
+        "# Environment\n\n\
+        Your working directory is: {}\n\n\
+        When using file tools (read_file, write_file, list_files, search), paths are relative to this directory.\n\
+        When using the bash tool, pass working_dir: \"{}\" unless you need to run in a different directory.",
+        working_dir_str, working_dir_str
+    ));
+
     // 1. Global system prompt (~/.mux/system.md or configured path)
     if let Some(ref global_path) = config.global_system_prompt_path {
         if let Ok(content) = std::fs::read_to_string(global_path) {
@@ -554,11 +564,8 @@ fn build_system_prompt(config: &MuxConfig) -> Option<String> {
         }
     }
 
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n---\n\n"))
-    }
+    // Always have at least the working directory context
+    Some(parts.join("\n\n---\n\n"))
 }
 
 /// Connect to an MCP server and register its tools
