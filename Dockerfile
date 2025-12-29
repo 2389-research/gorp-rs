@@ -18,8 +18,15 @@ RUN mkdir src && \
     mkdir templates && \
     echo '' > templates/.gitkeep
 
+# SSH setup for private git dependencies (mux-rs)
+# Configure cargo to use git CLI for SSH-based fetches
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+RUN mkdir -p ~/.ssh && \
+    ssh-keyscan github.com >> ~/.ssh/known_hosts
+
 # Build dependencies (this layer is cached unless Cargo.toml/lock changes)
-RUN cargo build --release && \
+# Uses SSH agent forwarding for private git repos
+RUN --mount=type=ssh cargo build --release && \
     rm -rf src templates
 
 # Now copy real source code, templates, and docs
@@ -32,7 +39,8 @@ COPY config.toml.example ./config.toml.example
 RUN touch src/main.rs
 
 # Build the actual binary (deps are already cached)
-RUN cargo build --release
+# Uses SSH agent forwarding for private git repos
+RUN --mount=type=ssh cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim
