@@ -390,7 +390,19 @@ impl MuxBackend {
             "Loading MCP servers"
         );
 
+        // Register built-in tools and connect MCP servers in background
         tokio::spawn(async move {
+            // Register built-in tools first
+            registry_clone.register(ReadFileTool).await;
+            registry_clone.register(WriteFileTool).await;
+            registry_clone.register(BashTool).await;
+            registry_clone.register(ListFilesTool).await;
+            registry_clone.register(SearchTool).await;
+            tracing::info!(
+                "Registered 5 built-in tools: read_file, write_file, bash, list_files, search"
+            );
+
+            // Then connect MCP servers
             for server_config in mcp_configs {
                 match connect_mcp_server(&server_config, &registry_clone).await {
                     Ok(client) => {

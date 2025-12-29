@@ -862,13 +862,14 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.2.0"
-source = "git+https://github.com/2389-research/mux-rs?tag=v0.2.0#659995a128312a0b325de62f9dbbf81efef13127"
+source = "git+https://github.com/2389-research/mux-rs?rev=dbe0fb5#dbe0fb5e0277e3c25409384fd6b9b3a3b89cac3b"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
  "futures",
  "glob",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -1066,6 +1067,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "regex"
+version = "1.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843bc0191f75f3e22651ae5f1e72939ab2f72a4bc30fa80a066bd66edefc24d4"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
