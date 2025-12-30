@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 
+use super::mux_tools::{WdBashTool, WdListFilesTool, WdReadFileTool, WdSearchTool, WdWriteFileTool};
+
 /// Configuration for the Mux backend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MuxConfig {
@@ -391,15 +393,18 @@ impl MuxBackend {
         );
 
         // Register built-in tools and connect MCP servers in background
+        let working_dir_for_tools = config.working_dir.clone();
         tokio::spawn(async move {
-            // Register built-in tools first
-            registry_clone.register(ReadFileTool).await;
-            registry_clone.register(WriteFileTool).await;
-            registry_clone.register(BashTool).await;
-            registry_clone.register(ListFilesTool).await;
-            registry_clone.register(SearchTool).await;
+            // Register working-directory-aware tools
+            let wd = working_dir_for_tools;
+            registry_clone.register(WdReadFileTool::new(wd.clone())).await;
+            registry_clone.register(WdWriteFileTool::new(wd.clone())).await;
+            registry_clone.register(WdBashTool::new(wd.clone())).await;
+            registry_clone.register(WdListFilesTool::new(wd.clone())).await;
+            registry_clone.register(WdSearchTool::new(wd.clone())).await;
             tracing::info!(
-                "Registered 5 built-in tools: read_file, write_file, bash, list_files, search"
+                working_dir = %wd.display(),
+                "Registered 5 working-directory-aware tools: read_file, write_file, bash, list_files, search"
             );
 
             // Then connect MCP servers

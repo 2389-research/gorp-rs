@@ -451,8 +451,10 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "glob",
  "mux",
  "pin-project-lite",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -862,7 +864,7 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.2.0"
-source = "git+https://github.com/2389-research/mux-rs?rev=dbe0fb5#dbe0fb5e0277e3c25409384fd6b9b3a3b89cac3b"
+source = "git+https://github.com/2389-research/mux-rs?branch=main#b4b1ff056da8fb56438b178a2666bb6ad6977835"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -875,6 +877,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "urlencoding",
  "uuid",
 ]
 
@@ -1814,6 +1817,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf8_iter"

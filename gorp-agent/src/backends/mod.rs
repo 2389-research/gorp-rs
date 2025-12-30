@@ -9,5 +9,8 @@ pub mod acp;
 #[cfg(feature = "mux")]
 pub mod mux;
 
+#[cfg(feature = "mux")]
+mod mux_tools;
+
 pub mod direct_cli;
 pub mod direct_codex;
