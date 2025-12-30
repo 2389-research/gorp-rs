@@ -582,7 +582,7 @@ async fn connect_mcp_server(
         },
     };
 
-    let client = McpClient::connect(mcp_config).await?;
+    let mut client = McpClient::connect(mcp_config).await?;
     client.initialize().await?;
 
     let client = Arc::new(client);
@@ -663,6 +663,10 @@ async fn run_prompt(
         let mut tool_uses: Vec<(String, String, serde_json::Value)> = Vec::new();
         let mut stop_reason: Option<StopReason> = None;
 
+        // Track tool input JSON accumulation by block index
+        let mut tool_input_accum: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+        let mut tool_index_map: std::collections::HashMap<usize, usize> = std::collections::HashMap::new(); // block index -> tool_uses index
+
         while let Some(event_result) = stream.next().await {
             match event_result {
                 Ok(event) => {
@@ -675,9 +679,16 @@ async fn run_prompt(
                                 return Ok(());
                             }
                         }
-                        StreamEvent::ContentBlockStart { block, .. } => {
+                        StreamEvent::InputJsonDelta { index, partial_json } => {
+                            // Accumulate tool input JSON fragments
+                            tool_input_accum
+                                .entry(*index)
+                                .or_default()
+                                .push_str(partial_json);
+                        }
+                        StreamEvent::ContentBlockStart { index, block } => {
                             if let ContentBlock::ToolUse { id, name, input } = block {
-                                // Emit ToolStart event
+                                // Emit ToolStart event (input may be empty at this point)
                                 let _ = event_tx
                                     .send(AgentEvent::ToolStart {
                                         id: id.clone(),
@@ -685,6 +696,8 @@ async fn run_prompt(
                                         input: input.clone(),
                                     })
                                     .await;
+                                // Track mapping from block index to tool_uses index
+                                tool_index_map.insert(*index, tool_uses.len());
                                 tool_uses.push((id.clone(), name.clone(), input.clone()));
                             }
                         }
@@ -694,6 +707,17 @@ async fn run_prompt(
                                 response_content.push(ContentBlock::Text {
                                     text: std::mem::take(&mut current_text),
                                 });
+                            }
+                            // Finalize tool input JSON if this was a tool block
+                            if let Some(tool_idx) = tool_index_map.get(index) {
+                                if let Some(json_str) = tool_input_accum.remove(index) {
+                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                                        // Update the tool input with the accumulated JSON
+                                        if let Some(tool) = tool_uses.get_mut(*tool_idx) {
+                                            tool.2 = parsed;
+                                        }
+                                    }
+                                }
                             }
                         }
                         StreamEvent::MessageDelta { usage, stop_reason: sr, .. } => {

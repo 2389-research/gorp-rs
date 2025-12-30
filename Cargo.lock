@@ -2600,7 +2600,7 @@ dependencies = [
 [[package]]
 name = "mux"
 version = "0.2.0"
-source = "git+https://github.com/2389-research/mux-rs?rev=dbe0fb5#dbe0fb5e0277e3c25409384fd6b9b3a3b89cac3b"
+source = "git+https://github.com/2389-research/mux-rs?branch=main#b4b1ff056da8fb56438b178a2666bb6ad6977835"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2613,6 +2613,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.17",
  "tokio",
+ "urlencoding",
  "uuid",
 ]
 

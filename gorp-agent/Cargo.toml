@@ -34,7 +34,7 @@ optional = true
 
 [dependencies.mux]
 git = "https://github.com/2389-research/mux-rs"
-rev = "dbe0fb5"
+branch = "main"
 optional = true
 
 [dependencies.rusqlite]
