@@ -44,6 +44,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Configure git for private repos
+        run: git config --global url."https://${{ secrets.PRIVATE_REPO_PAT }}@github.com/".insteadOf "https://github.com/"
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -62,11 +65,8 @@ jobs:
           restore-keys: |
             rust-cache-${{ runner.os }}-
 
-      # Note: Main gorp crate requires mux feature which needs private repo access
-      # Only lint gorp-agent with acp feature in CI
       - name: Run clippy
-        working-directory: gorp-agent
-        run: cargo clippy --all-targets --features acp -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
     name: Test Suite
@@ -74,6 +74,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
+      - name: Configure git for private repos
+        run: git config --global url."https://${{ secrets.PRIVATE_REPO_PAT }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -91,8 +94,5 @@ jobs:
           restore-keys: |
             rust-cache-${{ runner.os }}-
 
-      # Note: Main gorp crate requires mux feature which needs private repo access
-      # Only test gorp-agent with acp feature in CI
       - name: Run tests
-        working-directory: gorp-agent
-        run: cargo test --features acp
+        run: cargo test --all-features
