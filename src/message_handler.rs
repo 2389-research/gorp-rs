@@ -10,6 +10,7 @@ use matrix_sdk::{
 };
 
 use crate::{
+    commands::{parse_message, Command, ParseResult},
     config::Config,
     matrix_client, metrics, onboarding,
     scheduler::{
@@ -154,18 +155,14 @@ pub async fn handle_message(
     let message_preview: String = body.chars().take(50).collect();
     tracing::info!(sender, room_id = %room.room_id(), message_preview, "Processing message");
 
-    // Handle commands - be specific about what constitutes a command
-    // Accept "!claude <command>" or "!<word>" (but not just "!" or "!!")
-    let is_command = body.starts_with("!claude ")
-        || (body.starts_with("!")
-            && body.len() > 1
-            && body.chars().nth(1).is_some_and(|c| c.is_alphabetic()));
+    // Parse message using gorp-core command parsing
+    let parse_result = parse_message(body, "!claude");
 
-    if is_command {
+    if let ParseResult::Command(cmd) = parse_result {
         metrics::record_message_received("command");
         let result = handle_command(
             room,
-            body,
+            &cmd,
             &session_store,
             &scheduler_store,
             &client,
@@ -178,6 +175,11 @@ pub async fn handle_message(
         let duration = start_time.elapsed().as_secs_f64();
         metrics::record_message_processing_duration(duration);
         return result;
+    }
+
+    // Check for escape sequence (!! prefix) - treat as regular message
+    if let ParseResult::Ignore = parse_result {
+        return Ok(());
     }
 
     // Regular chat message
@@ -796,7 +798,7 @@ pub async fn handle_message(
 #[allow(clippy::too_many_arguments)]
 async fn handle_command(
     room: Room,
-    body: &str,
+    cmd: &Command,
     session_store: &SessionStore,
     scheduler_store: &SchedulerStore,
     client: &Client,
@@ -805,22 +807,13 @@ async fn handle_command(
     config: &Config,
     warm_manager: &SharedWarmSessionManager,
 ) -> Result<()> {
-    let parts: Vec<&str> = body.split_whitespace().collect();
+    // Command name and args are already parsed by gorp-core
+    let command = cmd.name.as_str();
+    let command_parts: Vec<&str> = std::iter::once(command)
+        .chain(cmd.args.iter().map(|s| s.as_str()))
+        .collect();
 
-    // Strip !claude prefix if present, otherwise treat whole thing as command
-    let command_parts: Vec<&str> = if body.starts_with("!claude ") {
-        parts[1..].to_vec()
-    } else if body.starts_with("!") {
-        let mut p = parts.clone();
-        if let Some(first) = p.first_mut() {
-            *first = &first[1..]; // Remove the ! prefix
-        }
-        p
-    } else {
-        parts.clone()
-    };
-
-    if command_parts.is_empty() || command_parts[0].is_empty() {
+    if command.is_empty() {
         let help_msg = if is_dm {
             "💬 Orchestrator Commands:\n\
             !create <name> - Create new channel\n\
@@ -844,7 +837,6 @@ async fn handle_command(
         return Ok(());
     }
 
-    let command = command_parts[0];
     metrics::record_command(command);
 
     match command {
