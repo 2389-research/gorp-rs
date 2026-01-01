@@ -51,11 +51,7 @@ impl FfiAgentHandle {
                     }
                 }
                 Err(e) => {
-                    callback.on_error(
-                        crate::events::FfiErrorCode::Unknown,
-                        e.to_string(),
-                        false,
-                    );
+                    callback.on_error(crate::events::FfiErrorCode::Unknown, e.to_string(), false);
                 }
             }
         });
@@ -106,7 +102,11 @@ impl FfiAgentRegistry {
     }
 
     /// Create a backend by name with JSON configuration
-    pub fn create(&self, name: String, config_json: String) -> Result<Arc<FfiAgentHandle>, FfiError> {
+    pub fn create(
+        &self,
+        name: String,
+        config_json: String,
+    ) -> Result<Arc<FfiAgentHandle>, FfiError> {
         let config: serde_json::Value = serde_json::from_str(&config_json)?;
         // Enter the Tokio runtime context so backends can spawn tasks during initialization
         let _guard = crate::runtime::runtime().enter();

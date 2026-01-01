@@ -1,7 +1,10 @@
 // ABOUTME: Integration tests for gorp-ffi.
 // ABOUTME: Tests the FFI layer without generating actual bindings.
 
-use gorp_ffi::{AgentEventCallback, FfiAgentRegistry, FfiErrorCode, FfiSchedulerStore, FfiSessionStore, FfiUsage};
+use gorp_ffi::{
+    AgentEventCallback, FfiAgentRegistry, FfiErrorCode, FfiSchedulerStore, FfiSessionStore,
+    FfiUsage,
+};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -140,7 +143,9 @@ fn test_scheduler_store_crud() {
     ));
 
     // Resume
-    scheduler_store.resume_schedule(schedule.id.clone()).unwrap();
+    scheduler_store
+        .resume_schedule(schedule.id.clone())
+        .unwrap();
     let resumed = scheduler_store.get_by_id(schedule.id.clone()).unwrap();
     assert!(matches!(
         resumed.unwrap().status,
@@ -148,7 +153,9 @@ fn test_scheduler_store_crud() {
     ));
 
     // Delete
-    let deleted = scheduler_store.delete_schedule(schedule.id.clone()).unwrap();
+    let deleted = scheduler_store
+        .delete_schedule(schedule.id.clone())
+        .unwrap();
     assert!(deleted);
     let gone = scheduler_store.get_by_id(schedule.id).unwrap();
     assert!(gone.is_none());
@@ -164,7 +171,10 @@ fn test_scheduler_create_with_recurring() {
 
     // Create channel first (required by foreign key constraint)
     session_store
-        .create_channel("daily-channel".to_string(), "!daily:example.com".to_string())
+        .create_channel(
+            "daily-channel".to_string(),
+            "!daily:example.com".to_string(),
+        )
         .unwrap();
 
     // Create a recurring schedule with natural language

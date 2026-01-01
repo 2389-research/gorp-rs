@@ -721,13 +721,9 @@ pub async fn handle_message(
 
                 // Check for DISPATCH events
                 if kind.starts_with("dispatch:") {
-                    if let Err(e) = route_to_dispatch(
-                        &session_store,
-                        room.room_id().as_str(),
-                        &kind,
-                        &payload,
-                    )
-                    .await
+                    if let Err(e) =
+                        route_to_dispatch(&session_store, room.room_id().as_str(), &kind, &payload)
+                            .await
                     {
                         tracing::warn!(error = %e, "Failed to route event to DISPATCH");
                     }

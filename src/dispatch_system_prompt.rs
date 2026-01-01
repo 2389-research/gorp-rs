@@ -19,7 +19,10 @@ pub fn generate_dispatch_prompt(session_store: &SessionStore) -> String {
         .map(|c| format!("- {} ({}): {}", c.channel_name, c.room_id, c.directory))
         .collect();
 
-    tracing::debug!(room_count = rooms_list.len(), "Generated DISPATCH system prompt");
+    tracing::debug!(
+        room_count = rooms_list.len(),
+        "Generated DISPATCH system prompt"
+    );
 
     let rooms = rooms_list.join("\n");
 
