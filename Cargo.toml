@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "gorp-agent", "gorp-core", "gorp-ffi"]
+
 [package]
 name = "gorp"
 version = "0.3.1"
