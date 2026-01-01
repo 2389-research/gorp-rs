@@ -26,3 +26,7 @@ uniffi = { version = "0.28", features = ["build"] }
 default = ["mux", "acp"]
 mux = ["gorp-agent/mux"]
 acp = ["gorp-agent/acp"]
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

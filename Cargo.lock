@@ -1625,6 +1625,7 @@ dependencies = [
  "gorp-core",
  "once_cell",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "uniffi",
