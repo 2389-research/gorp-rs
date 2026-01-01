@@ -58,6 +58,38 @@ Schedule prompts to run automatically:
 !schedule every monday 8am weekly standup reminder
 ```
 
+## DISPATCH Control Plane
+
+DISPATCH is your orchestration assistant that runs in your 1:1 DM with the bot.
+It can monitor all your workspace rooms and help coordinate work across them.
+
+### Activating DISPATCH
+
+In your DM with the bot, type:
+```
+!dispatch
+```
+or just
+```
+dispatch
+```
+
+### DISPATCH Capabilities
+
+- **Room monitoring**: See status of all workspace rooms
+- **Task dispatch**: Send tasks to specific rooms
+- **Event notifications**: Get notified of completions, errors, questions
+- **Admin commands**: Create rooms, reset sessions, manage schedules
+
+### Example Interactions
+
+```
+"What's happening across my projects?"
+"Send 'run the tests' to the gorp-rs room"
+"Create a new room called research"
+"What questions are waiting for me?"
+```
+
 ## Features
 
 - **Persistent Sessions**: Conversations continue across restarts
