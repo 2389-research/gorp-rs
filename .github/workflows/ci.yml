@@ -65,7 +65,8 @@ jobs:
       # Note: Main gorp crate requires mux feature which needs private repo access
       # Only lint gorp-agent with acp feature in CI
       - name: Run clippy
-        run: cargo clippy --all-targets -p gorp-agent --features acp -- -D warnings
+        working-directory: gorp-agent
+        run: cargo clippy --all-targets --features acp -- -D warnings
 
   test:
     name: Test Suite
@@ -93,4 +94,5 @@ jobs:
       # Note: Main gorp crate requires mux feature which needs private repo access
       # Only test gorp-agent with acp feature in CI
       - name: Run tests
-        run: cargo test -p gorp-agent --features acp
+        working-directory: gorp-agent
+        run: cargo test --features acp
