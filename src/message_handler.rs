@@ -214,6 +214,41 @@ pub async fn handle_message(
         return Ok(());
     }
 
+    // Check if this is the DISPATCH control plane room (only in DMs)
+    if is_dm {
+        // Check for existing DISPATCH channel
+        if session_store
+            .get_dispatch_channel(room.room_id().as_str())?
+            .is_some()
+        {
+            return crate::dispatch_handler::handle_dispatch_message(
+                room,
+                event,
+                client,
+                config,
+                session_store,
+                warm_manager,
+            )
+            .await;
+        }
+
+        // Check for DISPATCH activation command
+        let body_lower = body.to_lowercase();
+        if body_lower.starts_with("!dispatch") || body_lower == "dispatch" {
+            // Create DISPATCH channel and route to handler
+            session_store.create_dispatch_channel(room.room_id().as_str())?;
+            return crate::dispatch_handler::handle_dispatch_message(
+                room,
+                event,
+                client,
+                config,
+                session_store,
+                warm_manager,
+            )
+            .await;
+        }
+    }
+
     // Regular chat message
     metrics::record_message_received("chat");
 
