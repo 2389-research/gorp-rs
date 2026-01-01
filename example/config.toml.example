@@ -80,8 +80,8 @@ pre_warm_secs = 300
 # Model to use (e.g., "claude-sonnet-4-20250514")
 model = "claude-sonnet-4-5-20250929"
 
-# Max tokens for response (default: 8192)
-max_tokens = 8192
+# Max tokens for response (Claude 4.5 supports up to 64K, default: 16384)
+max_tokens = 16384
 
 # Path to global system prompt (optional, supports ~)
 # global_system_prompt_path = "~/.mux/system.md"
@@ -133,7 +133,7 @@ timezone = "America/Chicago"
 # [backend]
 # type = "mux"
 # model = "claude-sonnet-4-5-20250929"
-# max_tokens = 16384
+# max_tokens = 32768  # Up to 64K supported
 # timeout_secs = 600
 # keep_alive_secs = 7200
 # pre_warm_secs = 300
