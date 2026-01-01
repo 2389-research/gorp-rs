@@ -58,6 +58,53 @@ pub struct DispatchEvent {
     pub acknowledged_at: Option<String>,
 }
 
+/// Status of a dispatched task
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchTaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl std::fmt::Display for DispatchTaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::InProgress => write!(f, "in_progress"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl std::str::FromStr for DispatchTaskStatus {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "in_progress" => Ok(Self::InProgress),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            _ => anyhow::bail!("Unknown task status: {}", s),
+        }
+    }
+}
+
+/// A task dispatched from DISPATCH to a worker room
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchTask {
+    pub id: String,
+    pub target_room_id: String,
+    pub prompt: String,
+    pub status: DispatchTaskStatus,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+    pub result_summary: Option<String>,
+}
+
 impl Channel {
     pub fn cli_args(&self) -> Vec<&str> {
         if self.started {
@@ -152,6 +199,20 @@ impl SessionStore {
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 acknowledged_at TEXT
+            )",
+            [],
+        )?;
+
+        // Create dispatch_tasks table for tracking dispatched work
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dispatch_tasks (
+                id TEXT PRIMARY KEY,
+                target_room_id TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                result_summary TEXT
             )",
             [],
         )?;
@@ -723,15 +784,14 @@ impl SessionStore {
         let events = stmt
             .query_map([], |row| {
                 let payload_str: String = row.get(3)?;
-                let payload: serde_json::Value = serde_json::from_str(&payload_str).map_err(
-                    |e| {
+                let payload: serde_json::Value =
+                    serde_json::from_str(&payload_str).map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
                             3,
                             rusqlite::types::Type::Text,
                             Box::new(e),
                         )
-                    },
-                )?;
+                    })?;
                 Ok(DispatchEvent {
                     id: row.get(0)?,
                     source_room_id: row.get(1)?,
@@ -758,5 +818,178 @@ impl SessionStore {
             params![now, id],
         )?;
         Ok(())
+    }
+
+    // =========================================================================
+    // Dispatch Task Persistence
+    // =========================================================================
+
+    /// Create a new dispatch task
+    pub fn create_dispatch_task(&self, target_room_id: &str, prompt: &str) -> Result<DispatchTask> {
+        let task = DispatchTask {
+            id: uuid::Uuid::new_v4().to_string(),
+            target_room_id: target_room_id.to_string(),
+            prompt: prompt.to_string(),
+            status: DispatchTaskStatus::Pending,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            completed_at: None,
+            result_summary: None,
+        };
+
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        db.execute(
+            "INSERT INTO dispatch_tasks (id, target_room_id, prompt, status, created_at, completed_at, result_summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                &task.id,
+                &task.target_room_id,
+                &task.prompt,
+                task.status.to_string(),
+                &task.created_at,
+                &task.completed_at,
+                &task.result_summary,
+            ],
+        )?;
+
+        Ok(task)
+    }
+
+    /// Get a dispatch task by ID
+    pub fn get_dispatch_task(&self, id: &str) -> Result<Option<DispatchTask>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = db.prepare(
+            "SELECT id, target_room_id, prompt, status, created_at, completed_at, result_summary
+             FROM dispatch_tasks WHERE id = ?1",
+        )?;
+
+        let task = stmt.query_row(params![id], |row| {
+            let status_str: String = row.get(3)?;
+            let status: DispatchTaskStatus = match status_str.as_str() {
+                "pending" => DispatchTaskStatus::Pending,
+                "in_progress" => DispatchTaskStatus::InProgress,
+                "completed" => DispatchTaskStatus::Completed,
+                "failed" => DispatchTaskStatus::Failed,
+                _ => {
+                    return Err(rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        format!("Unknown task status: {}", status_str).into(),
+                    ))
+                }
+            };
+            Ok(DispatchTask {
+                id: row.get(0)?,
+                target_room_id: row.get(1)?,
+                prompt: row.get(2)?,
+                status,
+                created_at: row.get(4)?,
+                completed_at: row.get(5)?,
+                result_summary: row.get(6)?,
+            })
+        });
+
+        match task {
+            Ok(t) => Ok(Some(t)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Update a dispatch task's status
+    pub fn update_dispatch_task_status(
+        &self,
+        id: &str,
+        status: DispatchTaskStatus,
+        result_summary: Option<&str>,
+    ) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let completed_at = if matches!(
+            status,
+            DispatchTaskStatus::Completed | DispatchTaskStatus::Failed
+        ) {
+            Some(chrono::Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+
+        db.execute(
+            "UPDATE dispatch_tasks SET status = ?1, completed_at = ?2, result_summary = ?3 WHERE id = ?4",
+            params![status.to_string(), completed_at, result_summary, id],
+        )?;
+
+        Ok(())
+    }
+
+    /// List dispatch tasks, optionally filtered by status
+    pub fn list_dispatch_tasks(
+        &self,
+        status: Option<DispatchTaskStatus>,
+    ) -> Result<Vec<DispatchTask>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        // Helper to parse a row into DispatchTask
+        fn parse_task_row(row: &rusqlite::Row) -> rusqlite::Result<DispatchTask> {
+            let status_str: String = row.get(3)?;
+            let status = match status_str.as_str() {
+                "pending" => DispatchTaskStatus::Pending,
+                "in_progress" => DispatchTaskStatus::InProgress,
+                "completed" => DispatchTaskStatus::Completed,
+                "failed" => DispatchTaskStatus::Failed,
+                _ => {
+                    return Err(rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        format!("Unknown task status: {}", status_str).into(),
+                    ))
+                }
+            };
+            Ok(DispatchTask {
+                id: row.get(0)?,
+                target_room_id: row.get(1)?,
+                prompt: row.get(2)?,
+                status,
+                created_at: row.get(4)?,
+                completed_at: row.get(5)?,
+                result_summary: row.get(6)?,
+            })
+        }
+
+        let tasks = match status {
+            Some(s) => {
+                let mut stmt = db.prepare(
+                    "SELECT id, target_room_id, prompt, status, created_at, completed_at, result_summary
+                     FROM dispatch_tasks WHERE status = ?1 ORDER BY created_at DESC",
+                )?;
+                let result = stmt
+                    .query_map(params![s.to_string()], parse_task_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                result
+            }
+            None => {
+                let mut stmt = db.prepare(
+                    "SELECT id, target_room_id, prompt, status, created_at, completed_at, result_summary
+                     FROM dispatch_tasks ORDER BY created_at DESC",
+                )?;
+                let result = stmt
+                    .query_map([], parse_task_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                result
+            }
+        };
+
+        Ok(tasks)
     }
 }
