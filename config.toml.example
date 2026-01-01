@@ -1,75 +1,167 @@
 # gorp - Matrix-Claude Bridge Configuration
 #
 # Configuration file locations (searched in order):
-#   1. ./config.toml (current directory - for development)
-#   2. ~/.config/gorp/config.toml (XDG config dir)
+#   1. GORP_CONFIG_PATH env var (if set)
+#   2. ./config.toml (current directory - for development)
+#   3. ~/.config/gorp/config.toml (XDG config dir)
 #
 # Data directories:
 #   - Crypto store: ~/.local/share/gorp/crypto_store/
+#   - Sessions DB: <workspace>/channels.db
 #   - Logs: ~/.local/share/gorp/logs/
-#   - Schedules DB: ~/.local/share/gorp/scheduled_prompts.db
 #
 # Docker paths (when using docker-compose):
 #   - Config: ./config/config.toml -> /home/gorp/.config/gorp/config.toml
 #   - Data: ./data/ -> /home/gorp/.local/share/gorp/
 #   - Workspace: ./workspace/ -> /home/gorp/workspace/
 
+# =============================================================================
+# MATRIX CONFIGURATION
+# =============================================================================
 [matrix]
 # Matrix homeserver URL (required)
 home_server = "https://matrix.org"
 
 # Full Matrix user ID for the bot (required)
-user_id = "@bot:matrix.org"
+user_id = "@your-bot:matrix.org"
 
-# Matrix password (optional if access_token is provided)
+# Matrix password (required if access_token not provided)
 password = "your-password-here"
 
-# Matrix access token (optional if password is provided)
+# Matrix access token (alternative to password)
 # access_token = "syt_..."
 
-# Device name for this bot instance
+# Device name for this bot instance (default: "claude-matrix-bridge")
 device_name = "gorp"
 
-# List of allowed user IDs (required)
-allowed_users = ["@user1:matrix.org", "@user2:matrix.org"]
+# List of allowed user IDs who can interact with the bot (required)
+allowed_users = ["@your-user:matrix.org"]
 
 # Prefix for room names (default: "Claude")
 # Room names will be formatted as "PREFIX: channel-name"
 room_prefix = "Claude"
 
-# Recovery key for cross-signing bootstrap (optional)
-# If provided, the bot uses this key to automatically verify itself
-# without interactive emoji verification. Generate this from Element:
-# Security & Privacy > Secure Backup > Set up > Copy Recovery Key
+# Recovery key for cross-signing bootstrap (optional but recommended)
+# Enables automatic device verification without emoji dance.
+# Get this from Element: Security & Privacy > Secure Backup > Set up
 # recovery_key = "EsTR mwqJ JoXZ 8dKN ..."
 
-[acp]
-# Path to the ACP agent binary (default: "claude-code-acp")
-# agent_binary = "claude-code-acp"
+# =============================================================================
+# BACKEND CONFIGURATION
+# =============================================================================
+# Available backends:
+#   - "mux"    : Native Rust backend using mux-rs (recommended)
+#   - "acp"    : Claude Code CLI via Agent Client Protocol
+#   - "direct" : Direct Claude CLI subprocess
+#   - "mock"   : Testing backend with canned responses
 
-# Timeout for ACP operations in seconds (default: 300)
-# timeout_secs = 300
+[backend]
+# Backend type (default: "acp")
+type = "mux"
 
+# --- Common options (all backends) ---
+
+# Timeout for operations in seconds (default: 300)
+timeout_secs = 300
+
+# Keep-alive duration for warm sessions in seconds (default: 3600)
+keep_alive_secs = 3600
+
+# Pre-warm lead time before scheduled prompts in seconds (default: 300)
+pre_warm_secs = 300
+
+# --- ACP/Direct backend options ---
+
+# Path to the agent binary (default: "claude-code-acp" for acp, "claude" for direct)
+# binary = "claude-code-acp"
+
+# --- Mux backend options ---
+
+# Model to use (e.g., "claude-sonnet-4-20250514")
+model = "claude-sonnet-4-20250514"
+
+# Max tokens for response (default: 8192)
+max_tokens = 8192
+
+# Path to global system prompt (optional, supports ~)
+# global_system_prompt_path = "~/.mux/system.md"
+
+# MCP servers to connect to (optional)
+# [[backend.mcp_servers]]
+# name = "filesystem"
+# command = "mcp-server-filesystem"
+# args = ["/path/to/allowed/dir"]
+# env = { "MCP_DEBUG" = "1" }
+
+# =============================================================================
+# WEBHOOK CONFIGURATION
+# =============================================================================
 [webhook]
 # Port for the webhook HTTP server (default: 13000)
 port = 13000
 
 # Host for webhook URLs (default: "localhost")
-# This is used when displaying webhook URLs to users
+# Used when displaying webhook URLs to users
 host = "localhost"
 
 # Optional: API key for webhook authentication
 # If set, all webhook requests must include this key
 # api_key = "your-secret-key-here"
 
+# =============================================================================
+# WORKSPACE CONFIGURATION
+# =============================================================================
 [workspace]
 # Directory where channel workspaces are stored (default: "./workspace")
 # Supports tilde expansion: ~/projects/gorp-workspace
-# Docker: use absolute path like /home/gorp/workspace
+# Each channel gets a subdirectory: <workspace>/<channel-name>/
 path = "./workspace"
 
+# =============================================================================
+# SCHEDULER CONFIGURATION
+# =============================================================================
 [scheduler]
 # Timezone for interpreting schedule times (default: auto-detect from system)
 # Uses IANA timezone names (e.g., "America/Chicago", "Europe/London", "UTC")
 # See: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 timezone = "America/Chicago"
+
+
+# =============================================================================
+# EXAMPLE: FULL MUX CONFIGURATION
+# =============================================================================
+# [backend]
+# type = "mux"
+# model = "claude-sonnet-4-20250514"
+# max_tokens = 16384
+# timeout_secs = 600
+# keep_alive_secs = 7200
+# pre_warm_secs = 300
+# global_system_prompt_path = "~/.config/gorp/system-prompt.md"
+#
+# [[backend.mcp_servers]]
+# name = "brave-search"
+# command = "mcp-server-brave-search"
+# args = []
+# env = { "BRAVE_API_KEY" = "your-api-key" }
+#
+# [[backend.mcp_servers]]
+# name = "filesystem"
+# command = "mcp-server-filesystem"
+# args = ["/home/user/documents"]
+
+# =============================================================================
+# EXAMPLE: ACP CONFIGURATION (Claude Code CLI)
+# =============================================================================
+# [backend]
+# type = "acp"
+# binary = "claude-code-acp"
+# timeout_secs = 300
+
+# =============================================================================
+# EXAMPLE: DIRECT CONFIGURATION (Claude CLI)
+# =============================================================================
+# [backend]
+# type = "direct"
+# binary = "claude"
+# timeout_secs = 300
