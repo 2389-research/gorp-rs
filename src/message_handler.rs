@@ -11,13 +11,14 @@ use matrix_sdk::{
 
 use crate::{
     config::Config,
-    matrix_client, metrics,
-    onboarding,
+    matrix_client, metrics, onboarding,
     scheduler::{
         parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
     },
     session::SessionStore,
-    utils::{chunk_message, log_matrix_message, markdown_to_html, strip_function_calls, MAX_CHUNK_SIZE},
+    utils::{
+        chunk_message, log_matrix_message, markdown_to_html, strip_function_calls, MAX_CHUNK_SIZE,
+    },
     warm_session::{prepare_session_async, SharedWarmSessionManager},
 };
 use chrono::Utc;
@@ -197,21 +198,25 @@ pub async fn handle_message(
                 let msg_lower = channel_name.to_lowercase();
                 if msg_lower == "done" || msg_lower == "skip" {
                     // Complete onboarding without creating a channel
-                    let mut state = onboarding::get_state(&session_store, user_id)?
-                        .unwrap_or_default();
+                    let mut state =
+                        onboarding::get_state(&session_store, user_id)?.unwrap_or_default();
                     state.step = onboarding::OnboardingStep::Completed;
                     onboarding::save_state(&session_store, user_id, &state)?;
 
-                    let msg = "Alright! You can create a channel anytime with `!create <name>`.\n\n\
+                    let msg =
+                        "Alright! You can create a channel anytime with `!create <name>`.\n\n\
                         Type `!help` for all commands.";
                     let html = markdown_to_html(msg);
-                    room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+                    room.send(RoomMessageEventContent::text_html(msg, &html))
+                        .await?;
                     return Ok(());
                 }
 
                 // Validate channel name
                 if channel_name.is_empty()
-                    || !channel_name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                    || !channel_name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
                     || channel_name.len() > 50
                 {
                     let msg = "Channel names can only contain letters, numbers, dashes, and underscores.\n\
@@ -248,14 +253,15 @@ pub async fn handle_message(
                 }
 
                 // Create channel in database (this also creates the directory)
-                let channel = match session_store.create_channel(&channel_name, new_room_id.as_str()) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        let msg = format!("Failed to create channel: {}", e);
-                        room.send(RoomMessageEventContent::text_plain(&msg)).await?;
-                        return Ok(());
-                    }
-                };
+                let channel =
+                    match session_store.create_channel(&channel_name, new_room_id.as_str()) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            let msg = format!("Failed to create channel: {}", e);
+                            room.send(RoomMessageEventContent::text_plain(&msg)).await?;
+                            return Ok(());
+                        }
+                    };
                 metrics::increment_active_channels();
 
                 tracing::info!(
@@ -266,8 +272,14 @@ pub async fn handle_message(
                 );
 
                 // Complete onboarding
-                onboarding::complete(&room, &session_store, user_id, &channel_name, &channel.directory)
-                    .await?;
+                onboarding::complete(
+                    &room,
+                    &session_store,
+                    user_id,
+                    &channel_name,
+                    &channel.directory,
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -1023,7 +1035,10 @@ async fn handle_command(
                 Some("list") => {
                     // List available backends
                     let available = "acp, mux, direct";
-                    let current = channel.backend_type.as_deref().unwrap_or("(global default)");
+                    let current = channel
+                        .backend_type
+                        .as_deref()
+                        .unwrap_or("(global default)");
                     room.send(RoomMessageEventContent::text_plain(format!(
                         "📋 Available Backends\n\n\
                         Current: {}\n\
@@ -1102,7 +1117,10 @@ async fn handle_command(
                 }
                 _ => {
                     // Show current backend
-                    let current = channel.backend_type.as_deref().unwrap_or("(global default)");
+                    let current = channel
+                        .backend_type
+                        .as_deref()
+                        .unwrap_or("(global default)");
                     let global_default = &config.backend.backend_type;
                     room.send(RoomMessageEventContent::text_plain(format!(
                         "🔌 Backend Status\n\n\

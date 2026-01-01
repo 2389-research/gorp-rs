@@ -40,7 +40,10 @@ fn scenario_user_with_completed_onboarding_skipped() {
 
     // User with completed onboarding should NOT need onboarding
     let needs_onboarding = gorp::onboarding::should_onboard(&store, user_id).unwrap();
-    assert!(!needs_onboarding, "Completed user should not need onboarding");
+    assert!(
+        !needs_onboarding,
+        "Completed user should not need onboarding"
+    );
 }
 
 #[test]
@@ -57,7 +60,10 @@ fn scenario_user_with_in_progress_onboarding_continues() {
 
     // User with in-progress onboarding should continue
     let needs_onboarding = gorp::onboarding::should_onboard(&store, user_id).unwrap();
-    assert!(needs_onboarding, "In-progress user should continue onboarding");
+    assert!(
+        needs_onboarding,
+        "In-progress user should continue onboarding"
+    );
 }
 
 // =============================================================================
@@ -79,7 +85,10 @@ fn scenario_user_isolation_independent_states() {
 
     // Bob is new - should still need onboarding
     let bob_needs = gorp::onboarding::should_onboard(&store, bob).unwrap();
-    assert!(bob_needs, "Bob should need onboarding even though Alice completed");
+    assert!(
+        bob_needs,
+        "Bob should need onboarding even though Alice completed"
+    );
 
     // Alice should not need onboarding
     let alice_needs = gorp::onboarding::should_onboard(&store, alice).unwrap();
@@ -93,7 +102,9 @@ fn scenario_user_isolation_channels_dont_affect_other_users() {
     let bob = "@bob:example.com";
 
     // Alice creates a channel (simulating she completed onboarding)
-    store.create_channel("alice-channel", "!alice:example.com").unwrap();
+    store
+        .create_channel("alice-channel", "!alice:example.com")
+        .unwrap();
 
     // Alice marks onboarding complete
     let alice_state = OnboardingState {
@@ -104,7 +115,10 @@ fn scenario_user_isolation_channels_dont_affect_other_users() {
 
     // Bob should still need onboarding - channels are shared but onboarding is per-user
     let bob_needs = gorp::onboarding::should_onboard(&store, bob).unwrap();
-    assert!(bob_needs, "Bob should need onboarding even with existing channels");
+    assert!(
+        bob_needs,
+        "Bob should need onboarding even with existing channels"
+    );
 }
 
 // =============================================================================
@@ -124,12 +138,17 @@ fn scenario_state_transitions_welcome_to_create_channel() {
     gorp::onboarding::save_state(&store, user_id, &state1).unwrap();
 
     // Verify we're at Welcome
-    let loaded = gorp::onboarding::get_state(&store, user_id).unwrap().unwrap();
+    let loaded = gorp::onboarding::get_state(&store, user_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(loaded.step, OnboardingStep::Welcome);
 
     // Should not be waiting for channel name yet
     let waiting = gorp::onboarding::is_waiting_for_channel_name(&store, user_id).unwrap();
-    assert!(!waiting, "Should not be waiting for channel name at Welcome step");
+    assert!(
+        !waiting,
+        "Should not be waiting for channel name at Welcome step"
+    );
 
     // Transition to CreateChannel (simulating user said "yes")
     let state2 = OnboardingState {
@@ -140,7 +159,10 @@ fn scenario_state_transitions_welcome_to_create_channel() {
 
     // Now should be waiting for channel name
     let waiting = gorp::onboarding::is_waiting_for_channel_name(&store, user_id).unwrap();
-    assert!(waiting, "Should be waiting for channel name at CreateChannel step");
+    assert!(
+        waiting,
+        "Should be waiting for channel name at CreateChannel step"
+    );
 }
 
 #[test]
@@ -164,7 +186,9 @@ fn scenario_state_persists_across_store_instances() {
     // Second store instance - state should persist
     {
         let store2 = SessionStore::new(temp_dir.path()).unwrap();
-        let loaded = gorp::onboarding::get_state(&store2, user_id).unwrap().unwrap();
+        let loaded = gorp::onboarding::get_state(&store2, user_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.step, OnboardingStep::CreateChannel);
         assert!(gorp::onboarding::is_waiting_for_channel_name(&store2, user_id).unwrap());
     }
@@ -214,10 +238,10 @@ fn scenario_all_steps_identified_correctly() {
     let user_id = "@ivan:example.com";
 
     let steps = [
-        (OnboardingStep::Welcome, true, false),      // needs onboarding, not waiting
-        (OnboardingStep::ApiKeyCheck, true, false),  // needs onboarding, not waiting
+        (OnboardingStep::Welcome, true, false), // needs onboarding, not waiting
+        (OnboardingStep::ApiKeyCheck, true, false), // needs onboarding, not waiting
         (OnboardingStep::CreateChannel, true, true), // needs onboarding, waiting
-        (OnboardingStep::Completed, false, false),   // no onboarding, not waiting
+        (OnboardingStep::Completed, false, false), // no onboarding, not waiting
     ];
 
     for (step, expected_needs, expected_waiting) in steps {
@@ -230,7 +254,15 @@ fn scenario_all_steps_identified_correctly() {
         let needs = gorp::onboarding::should_onboard(&store, user_id).unwrap();
         let waiting = gorp::onboarding::is_waiting_for_channel_name(&store, user_id).unwrap();
 
-        assert_eq!(needs, expected_needs, "Step {:?}: should_onboard mismatch", step);
-        assert_eq!(waiting, expected_waiting, "Step {:?}: is_waiting_for_channel_name mismatch", step);
+        assert_eq!(
+            needs, expected_needs,
+            "Step {:?}: should_onboard mismatch",
+            step
+        );
+        assert_eq!(
+            waiting, expected_waiting,
+            "Step {:?}: is_waiting_for_channel_name mismatch",
+            step
+        );
     }
 }

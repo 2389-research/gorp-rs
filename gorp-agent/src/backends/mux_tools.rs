@@ -431,7 +431,10 @@ mod tests {
             .unwrap();
 
         assert!(!result.is_error);
-        assert_eq!(std::fs::read_to_string(dir.path().join("test.txt")).unwrap(), "Hello!");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("test.txt")).unwrap(),
+            "Hello!"
+        );
     }
 
     #[tokio::test]
@@ -446,7 +449,9 @@ mod tests {
 
         assert!(!result.is_error);
         // The output should contain the temp dir path
-        assert!(result.content.contains(dir.path().to_str().unwrap())
-            || result.content.contains("private")); // macOS /tmp -> /private/tmp
+        assert!(
+            result.content.contains(dir.path().to_str().unwrap())
+                || result.content.contains("private")
+        ); // macOS /tmp -> /private/tmp
     }
 }

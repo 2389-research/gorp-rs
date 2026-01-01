@@ -63,11 +63,7 @@ async fn scenario_single_message_processed_once() {
     let mut processed_count = 0;
 
     // Send a single message
-    let event = SimulatedEvent::new(
-        "$abc123:matrix.org",
-        "!room1:matrix.org",
-        "Hello world",
-    );
+    let event = SimulatedEvent::new("$abc123:matrix.org", "!room1:matrix.org", "Hello world");
     tx.send(event.clone()).await.unwrap();
     drop(tx); // Close channel
 
@@ -78,7 +74,10 @@ async fn scenario_single_message_processed_once() {
         }
     }
 
-    assert_eq!(processed_count, 1, "Single message should be processed exactly once");
+    assert_eq!(
+        processed_count, 1,
+        "Single message should be processed exactly once"
+    );
 }
 
 // =============================================================================
@@ -112,7 +111,10 @@ async fn scenario_duplicate_events_rejected() {
         }
     }
 
-    assert_eq!(processed_count, 1, "Duplicate event should be processed only once");
+    assert_eq!(
+        processed_count, 1,
+        "Duplicate event should be processed only once"
+    );
     assert_eq!(skipped_count, 9, "9 duplicates should be skipped");
 }
 
@@ -143,7 +145,11 @@ async fn scenario_different_events_all_processed() {
         }
     }
 
-    assert_eq!(processed_events.len(), 5, "All 5 unique events should be processed");
+    assert_eq!(
+        processed_events.len(),
+        5,
+        "All 5 unique events should be processed"
+    );
 }
 
 // =============================================================================
@@ -153,7 +159,8 @@ async fn scenario_different_events_all_processed() {
 async fn scenario_burst_duplicates_multiple_rooms() {
     let (tx, mut rx) = mpsc::channel::<SimulatedEvent>(256);
     let mut dedup = EventDeduplicator::new(10000);
-    let mut processed_by_room: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut processed_by_room: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     // Simulate the burst pattern observed in production logs:
     // Multiple copies of events from different rooms arriving simultaneously
@@ -161,7 +168,10 @@ async fn scenario_burst_duplicates_multiple_rooms() {
 
     for room in &rooms {
         let event = SimulatedEvent::new(
-            &format!("$event_{}:matrix.org", room.replace("!", "").replace(":", "_")),
+            &format!(
+                "$event_{}:matrix.org",
+                room.replace("!", "").replace(":", "_")
+            ),
             room,
             "Burst message",
         );
@@ -182,9 +192,17 @@ async fn scenario_burst_duplicates_multiple_rooms() {
     // Each room should have exactly 1 processed event
     for room in &rooms {
         let count = processed_by_room.get(*room).unwrap_or(&0);
-        assert_eq!(*count, 1, "Room {} should have exactly 1 processed event, got {}", room, count);
+        assert_eq!(
+            *count, 1,
+            "Room {} should have exactly 1 processed event, got {}",
+            room, count
+        );
     }
-    assert_eq!(processed_by_room.len(), 3, "Should have processed events from 3 rooms");
+    assert_eq!(
+        processed_by_room.len(),
+        3,
+        "Should have processed events from 3 rooms"
+    );
 }
 
 // =============================================================================
@@ -223,7 +241,11 @@ async fn scenario_concurrent_event_delivery() {
     }
 
     let final_processed = processed.lock().unwrap();
-    assert_eq!(final_processed.len(), 1, "Concurrent delivery of same event should result in 1 processed");
+    assert_eq!(
+        final_processed.len(),
+        1,
+        "Concurrent delivery of same event should result in 1 processed"
+    );
 }
 
 // =============================================================================
@@ -239,7 +261,10 @@ async fn scenario_cache_overflow_allows_reprocess() {
     }
 
     // Event 0 is now in cache
-    assert!(!dedup.check_and_mark("$event0:matrix.org"), "Should reject duplicate before overflow");
+    assert!(
+        !dedup.check_and_mark("$event0:matrix.org"),
+        "Should reject duplicate before overflow"
+    );
 
     // Add one more to trigger overflow
     assert!(dedup.check_and_mark("$event5:matrix.org"));
@@ -247,7 +272,10 @@ async fn scenario_cache_overflow_allows_reprocess() {
     // After overflow, old events can be reprocessed (acceptable behavior)
     // This is a trade-off: we accept occasional reprocessing after cache clear
     // rather than unbounded memory growth
-    assert!(dedup.check_and_mark("$event0:matrix.org"), "Should allow reprocess after cache clear");
+    assert!(
+        dedup.check_and_mark("$event0:matrix.org"),
+        "Should allow reprocess after cache clear"
+    );
 }
 
 // =============================================================================
@@ -266,11 +294,17 @@ async fn scenario_realistic_matrix_event_ids() {
     ];
 
     for event_id in &real_event_ids {
-        assert!(dedup.check_and_mark(event_id), "First occurrence should be processed");
+        assert!(
+            dedup.check_and_mark(event_id),
+            "First occurrence should be processed"
+        );
     }
 
     for event_id in &real_event_ids {
-        assert!(!dedup.check_and_mark(event_id), "Second occurrence should be rejected");
+        assert!(
+            !dedup.check_and_mark(event_id),
+            "Second occurrence should be rejected"
+        );
     }
 }
 
@@ -289,7 +323,11 @@ async fn scenario_high_throughput_unique_events() {
         }
     }
 
-    assert_eq!(processed, event_count, "All {} unique events should be processed", event_count);
+    assert_eq!(
+        processed, event_count,
+        "All {} unique events should be processed",
+        event_count
+    );
 }
 
 // =============================================================================
@@ -318,7 +356,11 @@ async fn scenario_interleaved_duplicates_and_unique() {
         } else {
             skipped += 1;
         }
-        assert_eq!(result, should_process, "Event {} processing mismatch", event_id);
+        assert_eq!(
+            result, should_process,
+            "Event {} processing mismatch",
+            event_id
+        );
     }
 
     assert_eq!(processed.len(), 3, "Should process 3 unique events");

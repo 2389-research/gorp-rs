@@ -2,10 +2,7 @@
 // ABOUTME: Guides users through API key validation, first channel creation, and workspace setup.
 
 use anyhow::Result;
-use matrix_sdk::{
-    room::Room,
-    ruma::events::room::message::RoomMessageEventContent,
-};
+use matrix_sdk::{room::Room, ruma::events::room::message::RoomMessageEventContent};
 use serde::{Deserialize, Serialize};
 
 use crate::session::SessionStore;
@@ -77,7 +74,11 @@ pub fn get_state(session_store: &SessionStore, user_id: &str) -> Result<Option<O
 }
 
 /// Save onboarding state for a user
-pub fn save_state(session_store: &SessionStore, user_id: &str, state: &OnboardingState) -> Result<()> {
+pub fn save_state(
+    session_store: &SessionStore,
+    user_id: &str,
+    state: &OnboardingState,
+) -> Result<()> {
     let state_json = serde_json::to_string(state)?;
     session_store.set_onboarding_state(user_id, &state_json)
 }
@@ -134,7 +135,8 @@ async fn send_welcome_message(room: &Room) -> Result<()> {
         Ready? Reply **yes** to begin (or **skip** to do this later)";
 
     let html = markdown_to_html(msg);
-    room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+    room.send(RoomMessageEventContent::text_html(msg, &html))
+        .await?;
     Ok(())
 }
 
@@ -156,7 +158,8 @@ async fn handle_welcome_response(
         let msg = "No problem! You can run **!setup** anytime to go through setup.\n\n\
             Quick start: **!create <name>** to create a channel.";
         let html = markdown_to_html(msg);
-        room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+        room.send(RoomMessageEventContent::text_html(msg, &html))
+            .await?;
         return Ok(true);
     }
 
@@ -179,14 +182,16 @@ async fn handle_welcome_response(
         save_state(session_store, user_id, &state)?;
 
         let html = markdown_to_html(msg);
-        room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+        room.send(RoomMessageEventContent::text_html(msg, &html))
+            .await?;
         return Ok(true);
     }
 
     // Unrecognized response, repeat the question
     let msg = "I didn't catch that. Reply **yes** to begin setup, or **skip** to do it later.";
     let html = markdown_to_html(msg);
-    room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+    room.send(RoomMessageEventContent::text_html(msg, &html))
+        .await?;
     Ok(true)
 }
 
@@ -213,7 +218,8 @@ async fn handle_api_key_response(
         // TODO: Actually retry API validation
         let msg = "Retrying API connection...\n\n✅ Connection successful!\n\n";
         let html = markdown_to_html(msg);
-        room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+        room.send(RoomMessageEventContent::text_html(msg, &html))
+            .await?;
 
         // Move to channel creation
         let mut state = get_state(session_store, user_id)?.unwrap_or_default();
@@ -227,7 +233,8 @@ async fn handle_api_key_response(
     // Unrecognized, remind them
     let msg = "Reply **retry** to try the API connection again, or **skip** to continue anyway.";
     let html = markdown_to_html(msg);
-    room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+    room.send(RoomMessageEventContent::text_html(msg, &html))
+        .await?;
     Ok(true)
 }
 
@@ -237,7 +244,8 @@ async fn send_channel_prompt(room: &Room) -> Result<()> {
         Suggestions: `pa`, `research`, `dev`\n\n\
         _(Just type a name - letters, numbers, dashes only)_";
     let html = markdown_to_html(msg);
-    room.send(RoomMessageEventContent::text_html(msg, &html)).await?;
+    room.send(RoomMessageEventContent::text_html(msg, &html))
+        .await?;
     Ok(())
 }
 
@@ -267,7 +275,8 @@ pub async fn complete(
     );
 
     let html = markdown_to_html(&msg);
-    room.send(RoomMessageEventContent::text_html(&msg, &html)).await?;
+    room.send(RoomMessageEventContent::text_html(&msg, &html))
+        .await?;
     Ok(())
 }
 
@@ -281,7 +290,11 @@ pub fn is_waiting_for_channel_name(session_store: &SessionStore, user_id: &str) 
 }
 
 /// Reset onboarding to start fresh (used by !setup command)
-pub async fn reset_and_start(room: &Room, session_store: &SessionStore, user_id: &str) -> Result<()> {
+pub async fn reset_and_start(
+    room: &Room,
+    session_store: &SessionStore,
+    user_id: &str,
+) -> Result<()> {
     session_store.clear_onboarding_state(user_id)?;
     start(room, session_store, user_id).await
 }

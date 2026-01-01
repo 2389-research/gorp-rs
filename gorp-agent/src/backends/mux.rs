@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 
-use super::mux_tools::{WdBashTool, WdListFilesTool, WdReadFileTool, WdSearchTool, WdWriteFileTool};
+use super::mux_tools::{
+    WdBashTool, WdListFilesTool, WdReadFileTool, WdSearchTool, WdWriteFileTool,
+};
 
 /// Configuration for the Mux backend
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,10 +204,7 @@ impl SessionDb {
         )?;
 
         let result = stmt.query_row(params![session_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
         });
 
         match result {
@@ -397,10 +396,16 @@ impl MuxBackend {
         tokio::spawn(async move {
             // Register working-directory-aware tools
             let wd = working_dir_for_tools;
-            registry_clone.register(WdReadFileTool::new(wd.clone())).await;
-            registry_clone.register(WdWriteFileTool::new(wd.clone())).await;
+            registry_clone
+                .register(WdReadFileTool::new(wd.clone()))
+                .await;
+            registry_clone
+                .register(WdWriteFileTool::new(wd.clone()))
+                .await;
             registry_clone.register(WdBashTool::new(wd.clone())).await;
-            registry_clone.register(WdListFilesTool::new(wd.clone())).await;
+            registry_clone
+                .register(WdListFilesTool::new(wd.clone()))
+                .await;
             registry_clone.register(WdSearchTool::new(wd.clone())).await;
             tracing::info!(
                 working_dir = %wd.display(),
@@ -591,7 +596,9 @@ async fn connect_mcp_server(
     client.initialize().await?;
 
     let client = Arc::new(client);
-    let tool_count = registry.merge_mcp(Arc::clone(&client), Some(&config.name)).await?;
+    let tool_count = registry
+        .merge_mcp(Arc::clone(&client), Some(&config.name))
+        .await?;
 
     tracing::info!(
         server = %config.name,
@@ -647,7 +654,9 @@ async fn run_prompt(
         // Get current messages from session
         let messages = {
             let sessions_guard = sessions.read().await;
-            let session = sessions_guard.get(session_id).context("Session not found")?;
+            let session = sessions_guard
+                .get(session_id)
+                .context("Session not found")?;
             session.messages.clone()
         };
 
@@ -669,8 +678,10 @@ async fn run_prompt(
         let mut stop_reason: Option<StopReason> = None;
 
         // Track tool input JSON accumulation by block index
-        let mut tool_input_accum: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
-        let mut tool_index_map: std::collections::HashMap<usize, usize> = std::collections::HashMap::new(); // block index -> tool_uses index
+        let mut tool_input_accum: std::collections::HashMap<usize, String> =
+            std::collections::HashMap::new();
+        let mut tool_index_map: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new(); // block index -> tool_uses index
 
         while let Some(event_result) = stream.next().await {
             match event_result {
@@ -684,7 +695,10 @@ async fn run_prompt(
                                 return Ok(());
                             }
                         }
-                        StreamEvent::InputJsonDelta { index, partial_json } => {
+                        StreamEvent::InputJsonDelta {
+                            index,
+                            partial_json,
+                        } => {
                             // Accumulate tool input JSON fragments
                             tool_input_accum
                                 .entry(*index)
@@ -708,7 +722,8 @@ async fn run_prompt(
                         }
                         StreamEvent::ContentBlockStop { index } => {
                             // Finalize text blocks
-                            if !current_text.is_empty() && response_content.len() == *index as usize {
+                            if !current_text.is_empty() && response_content.len() == *index as usize
+                            {
                                 response_content.push(ContentBlock::Text {
                                     text: std::mem::take(&mut current_text),
                                 });
@@ -716,7 +731,9 @@ async fn run_prompt(
                             // Finalize tool input JSON if this was a tool block
                             if let Some(tool_idx) = tool_index_map.get(index) {
                                 if let Some(json_str) = tool_input_accum.remove(index) {
-                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                                    if let Ok(parsed) =
+                                        serde_json::from_str::<serde_json::Value>(&json_str)
+                                    {
                                         // Update the tool input with the accumulated JSON
                                         if let Some(tool) = tool_uses.get_mut(*tool_idx) {
                                             tool.2 = parsed;
@@ -725,7 +742,11 @@ async fn run_prompt(
                                 }
                             }
                         }
-                        StreamEvent::MessageDelta { usage, stop_reason: sr, .. } => {
+                        StreamEvent::MessageDelta {
+                            usage,
+                            stop_reason: sr,
+                            ..
+                        } => {
                             total_usage.input_tokens += usage.input_tokens as u64;
                             total_usage.output_tokens += usage.output_tokens as u64;
                             stop_reason = sr.clone();
