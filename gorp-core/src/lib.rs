@@ -3,6 +3,7 @@
 
 pub mod commands;
 pub mod config;
+pub mod dispatch_events;
 pub mod metrics;
 pub mod orchestrator;
 pub mod paths;
@@ -11,6 +12,8 @@ pub mod session;
 pub mod traits;
 pub mod utils;
 pub mod warm_session;
+
+pub use dispatch_events::WorkerEvent;
 
 // Re-export gorp-agent types
 pub use gorp_agent::{AgentEvent, AgentHandle, AgentRegistry};
