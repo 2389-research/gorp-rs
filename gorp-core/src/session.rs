@@ -635,6 +635,96 @@ impl SessionStore {
         Ok(())
     }
 
+    // =========================================================================
+    // DISPATCH Channel Methods
+    // =========================================================================
+
+    /// Get the DISPATCH channel for a room (if it exists)
+    pub fn get_dispatch_channel(&self, room_id: &str) -> Result<Option<Channel>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = db.prepare(
+            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room
+             FROM channels WHERE room_id = ?1 AND is_dispatch_room = 1",
+        )?;
+
+        let channel = stmt.query_row(params![room_id], |row| {
+            Ok(Channel {
+                channel_name: row.get(0)?,
+                room_id: row.get(1)?,
+                session_id: row.get(2)?,
+                directory: row.get(3)?,
+                started: row.get::<_, i32>(4)? != 0,
+                created_at: row.get(5)?,
+                backend_type: row.get(6)?,
+                is_dispatch_room: row.get::<_, i32>(7)? != 0,
+            })
+        });
+
+        match channel {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Create a DISPATCH channel for a room (control plane, no workspace)
+    ///
+    /// Unlike regular channels, DISPATCH channels:
+    /// - Have is_dispatch_room = true
+    /// - Have an empty directory (no filesystem workspace)
+    /// - Use channel_name = "dispatch"
+    pub fn create_dispatch_channel(&self, room_id: &str) -> Result<Channel> {
+        let channel = Channel {
+            channel_name: "dispatch".to_string(),
+            room_id: room_id.to_string(),
+            session_id: uuid::Uuid::new_v4().to_string(),
+            directory: String::new(), // No workspace for DISPATCH
+            started: false,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            backend_type: Some("mux".to_string()), // DISPATCH always uses mux
+            is_dispatch_room: true,
+        };
+
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
+
+        db.execute(
+            "INSERT INTO channels (channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                &channel.channel_name,
+                &channel.room_id,
+                &channel.session_id,
+                &channel.directory,
+                if channel.started { 1 } else { 0 },
+                &channel.created_at,
+                &channel.backend_type,
+                if channel.is_dispatch_room { 1 } else { 0 },
+            ],
+        )?;
+
+        tracing::info!(
+            room_id = %room_id,
+            session_id = %channel.session_id,
+            "DISPATCH channel created"
+        );
+
+        Ok(channel)
+    }
+
+    /// Get existing DISPATCH channel or create one for this room
+    pub fn get_or_create_dispatch_channel(&self, room_id: &str) -> Result<Channel> {
+        if let Some(channel) = self.get_dispatch_channel(room_id)? {
+            return Ok(channel);
+        }
+        self.create_dispatch_channel(room_id)
+    }
+
     /// Get onboarding state for a user (stored as JSON in settings table)
     pub fn get_onboarding_state(&self, user_id: &str) -> Result<Option<String>> {
         let key = format!("onboarding:{}", user_id);
