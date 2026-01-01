@@ -18,7 +18,11 @@ uuid = { version = "1", features = ["v4"] }
 cron = "0.15"
 regex = "1"
 chrono-tz = "0.10"
+directories = "6"
 metrics = "0.24"
+toml = "0.8"
+two_timer = "2.2"
+metrics-exporter-prometheus = "0.16"
 pulldown-cmark = "0.13"
 
 # Internal
