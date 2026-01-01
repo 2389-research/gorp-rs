@@ -108,6 +108,8 @@ impl FfiAgentRegistry {
     /// Create a backend by name with JSON configuration
     pub fn create(&self, name: String, config_json: String) -> Result<Arc<FfiAgentHandle>, FfiError> {
         let config: serde_json::Value = serde_json::from_str(&config_json)?;
+        // Enter the Tokio runtime context so backends can spawn tasks during initialization
+        let _guard = crate::runtime::runtime().enter();
         let handle = self.inner.create(&name, &config)?;
         Ok(Arc::new(FfiAgentHandle { inner: handle }))
     }
