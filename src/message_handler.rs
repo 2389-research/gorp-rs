@@ -221,6 +221,7 @@ pub async fn handle_message(
             .get_dispatch_channel(room.room_id().as_str())?
             .is_some()
         {
+            metrics::record_message_received("dispatch");
             return crate::dispatch_handler::handle_dispatch_message(
                 room,
                 event,
@@ -236,6 +237,8 @@ pub async fn handle_message(
         let body_lower = body.to_lowercase();
         if body_lower.starts_with("!dispatch") || body_lower == "dispatch" {
             // Create DISPATCH channel and route to handler
+            tracing::info!(room_id = %room.room_id(), "DISPATCH channel activated via command");
+            metrics::record_message_received("dispatch");
             session_store.create_dispatch_channel(room.room_id().as_str())?;
             return crate::dispatch_handler::handle_dispatch_message(
                 room,
