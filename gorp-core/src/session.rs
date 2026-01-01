@@ -47,6 +47,17 @@ pub struct Channel {
     pub is_dispatch_room: bool,
 }
 
+/// An event from a worker room routed to DISPATCH
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispatchEvent {
+    pub id: String,
+    pub source_room_id: String,
+    pub event_type: String,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+    pub acknowledged_at: Option<String>,
+}
+
 impl Channel {
     pub fn cli_args(&self) -> Vec<&str> {
         if self.started {
@@ -128,6 +139,19 @@ impl SessionStore {
                 system_prompt TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Create dispatch_events table for tracking events routed to DISPATCH
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dispatch_events (
+                id TEXT PRIMARY KEY,
+                source_room_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                acknowledged_at TEXT
             )",
             [],
         )?;
@@ -657,5 +681,82 @@ impl SessionStore {
         let mut stmt = db.prepare("SELECT 1 FROM mux_sessions WHERE session_id = ?1")?;
         let exists = stmt.exists(params![session_id])?;
         Ok(exists)
+    }
+
+    // =========================================================================
+    // Dispatch Event Persistence
+    // =========================================================================
+
+    /// Insert a dispatch event
+    pub fn insert_dispatch_event(&self, event: &DispatchEvent) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let payload_str = serde_json::to_string(&event.payload)?;
+        db.execute(
+            "INSERT INTO dispatch_events (id, source_room_id, event_type, payload, created_at, acknowledged_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                &event.id,
+                &event.source_room_id,
+                &event.event_type,
+                payload_str,
+                &event.created_at,
+                &event.acknowledged_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get all pending (unacknowledged) dispatch events
+    pub fn get_pending_dispatch_events(&self) -> Result<Vec<DispatchEvent>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = db.prepare(
+            "SELECT id, source_room_id, event_type, payload, created_at, acknowledged_at
+             FROM dispatch_events WHERE acknowledged_at IS NULL ORDER BY created_at ASC",
+        )?;
+
+        let events = stmt
+            .query_map([], |row| {
+                let payload_str: String = row.get(3)?;
+                let payload: serde_json::Value = serde_json::from_str(&payload_str).map_err(
+                    |e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    },
+                )?;
+                Ok(DispatchEvent {
+                    id: row.get(0)?,
+                    source_room_id: row.get(1)?,
+                    event_type: row.get(2)?,
+                    payload,
+                    created_at: row.get(4)?,
+                    acknowledged_at: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(events)
+    }
+
+    /// Acknowledge a dispatch event (marks it as processed)
+    pub fn acknowledge_dispatch_event(&self, id: &str) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        db.execute(
+            "UPDATE dispatch_events SET acknowledged_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        Ok(())
     }
 }
