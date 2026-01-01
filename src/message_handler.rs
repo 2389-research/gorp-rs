@@ -823,6 +823,7 @@ async fn handle_command(
             "Available commands:\n\
             !help - Show detailed help\n\
             !status - Show current channel info\n\
+            !backend - View/change backend for this channel\n\
             !debug - Toggle tool usage display\n\
             !leave - Bot leaves this room"
         };
@@ -959,11 +960,16 @@ async fn handle_command(
                 } else {
                     "🔇 Disabled (tool usage hidden)"
                 };
+                let backend_display = channel
+                    .backend_type
+                    .as_deref()
+                    .unwrap_or(&config.backend.backend_type);
                 let status = format!(
                     "📊 Channel Status\n\n\
                     Channel: {}\n\
                     Session ID: {}\n\
                     Directory: {}\n\
+                    Backend: {}\n\
                     Started: {}\n\
                     Debug Mode: {}\n\n\
                     Webhook URL:\n\
@@ -972,6 +978,7 @@ async fn handle_command(
                     channel.channel_name,
                     channel.session_id,
                     channel.directory,
+                    backend_display,
                     if channel.started {
                         "Yes"
                     } else {
@@ -991,6 +998,124 @@ async fn handle_command(
                     DM me to create one: !create <name>",
                 ))
                 .await?;
+            }
+        }
+        "backend" => {
+            if is_dm {
+                room.send(RoomMessageEventContent::text_plain(
+                    "❌ The !backend command only works in channel rooms.",
+                ))
+                .await?;
+                return Ok(());
+            }
+
+            // Get channel for this room
+            let Some(channel) = session_store.get_by_room(room.room_id().as_str())? else {
+                room.send(RoomMessageEventContent::text_plain(
+                    "No channel attached to this room.",
+                ))
+                .await?;
+                return Ok(());
+            };
+
+            let subcommand = command_parts.get(1).map(|s| s.to_lowercase());
+            match subcommand.as_deref() {
+                Some("list") => {
+                    // List available backends
+                    let available = "acp, mux, direct";
+                    let current = channel.backend_type.as_deref().unwrap_or("(global default)");
+                    room.send(RoomMessageEventContent::text_plain(format!(
+                        "📋 Available Backends\n\n\
+                        Current: {}\n\
+                        Available: {}\n\n\
+                        Use `!backend set <name>` to change.",
+                        current, available
+                    )))
+                    .await?;
+                }
+                Some("set") => {
+                    // Set backend for this channel
+                    let Some(new_backend) = command_parts.get(2) else {
+                        room.send(RoomMessageEventContent::text_plain(
+                            "Usage: !backend set <name>\n\n\
+                            Available: acp, mux, direct\n\n\
+                            Example: !backend set mux",
+                        ))
+                        .await?;
+                        return Ok(());
+                    };
+
+                    let new_backend = new_backend.to_lowercase();
+
+                    // Validate backend type
+                    let valid_backends = ["acp", "mux", "direct"];
+                    if !valid_backends.contains(&new_backend.as_str()) {
+                        room.send(RoomMessageEventContent::text_plain(format!(
+                            "❌ Unknown backend: {}\n\nAvailable: {}",
+                            new_backend,
+                            valid_backends.join(", ")
+                        )))
+                        .await?;
+                        return Ok(());
+                    }
+
+                    // Update database
+                    session_store.update_backend_type(&channel.channel_name, Some(&new_backend))?;
+
+                    // Invalidate cached session so next message uses new backend
+                    {
+                        let mut mgr = warm_manager.write().await;
+                        mgr.invalidate_session(&channel.channel_name);
+                    }
+
+                    room.send(RoomMessageEventContent::text_plain(format!(
+                        "✅ Backend changed to: {}\n\nSession has been reset. Next message will use the new backend.",
+                        new_backend
+                    )))
+                    .await?;
+
+                    tracing::info!(
+                        channel = %channel.channel_name,
+                        backend = %new_backend,
+                        "Backend changed via command"
+                    );
+                }
+                Some("reset") | Some("default") => {
+                    // Reset to global default
+                    session_store.update_backend_type(&channel.channel_name, None)?;
+
+                    // Invalidate cached session
+                    {
+                        let mut mgr = warm_manager.write().await;
+                        mgr.invalidate_session(&channel.channel_name);
+                    }
+
+                    room.send(RoomMessageEventContent::text_plain(
+                        "✅ Backend reset to global default.\n\nSession has been reset. Next message will use the default backend.",
+                    ))
+                    .await?;
+
+                    tracing::info!(
+                        channel = %channel.channel_name,
+                        "Backend reset to default via command"
+                    );
+                }
+                _ => {
+                    // Show current backend
+                    let current = channel.backend_type.as_deref().unwrap_or("(global default)");
+                    let global_default = &config.backend.backend_type;
+                    room.send(RoomMessageEventContent::text_plain(format!(
+                        "🔌 Backend Status\n\n\
+                        Channel backend: {}\n\
+                        Global default: {}\n\n\
+                        Commands:\n  \
+                        !backend list - Show available backends\n  \
+                        !backend set <name> - Change backend\n  \
+                        !backend reset - Use global default",
+                        current, global_default
+                    )))
+                    .await?;
+                }
             }
         }
         "create" => {

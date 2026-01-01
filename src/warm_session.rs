@@ -195,18 +195,23 @@ impl WarmSessionManager {
     }
 
     /// Create agent handle with explicit config (for use outside lock)
+    /// If `backend_override` is Some, uses that backend instead of the one in warm_config
     pub fn create_agent_handle_with_config(
         registry: &AgentRegistry,
         working_dir: &str,
         warm_config: &WarmConfig,
+        backend_override: Option<&str>,
     ) -> Result<AgentHandle> {
+        // Use override if provided, otherwise fall back to config default
+        let backend_type = backend_override.unwrap_or(&warm_config.backend_type);
+
         let mut config = serde_json::json!({
             "working_dir": working_dir,
             "binary": warm_config.agent_binary,
         });
 
         // Add mux-specific config if using mux backend
-        if warm_config.backend_type == "mux" {
+        if backend_type == "mux" {
             if let Some(ref model) = warm_config.model {
                 config["model"] = serde_json::json!(model);
             }
@@ -221,7 +226,8 @@ impl WarmSessionManager {
             }
         }
 
-        registry.create(&warm_config.backend_type, &config)
+        tracing::info!(backend = %backend_type, working_dir = %working_dir, "Creating agent handle");
+        registry.create(backend_type, &config)
     }
 
     /// Get a clone of the registry for use outside the lock
@@ -548,10 +554,12 @@ pub async fn prepare_session_async(
     tracing::info!(channel = %channel_name, working_dir = %working_dir_str, "Using working directory (async)");
 
     // Create agent handle (synchronous, fast)
+    // Use channel's backend_type if set, otherwise fall back to global default
     let agent_handle = WarmSessionManager::create_agent_handle_with_config(
         &registry,
         &working_dir_str,
         &warm_config,
+        channel.backend_type.as_deref(),
     )?;
 
     // Step 3: Do slow async session creation OUTSIDE the lock
