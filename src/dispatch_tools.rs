@@ -1,7 +1,7 @@
 // ABOUTME: MCP tools for DISPATCH control plane - room queries and task dispatch.
 // ABOUTME: These tools give DISPATCH cross-room visibility without filesystem access.
 
-use crate::session::{Channel, SessionStore};
+use crate::session::{Channel, DispatchTask, DispatchTaskStatus, SessionStore};
 use serde::{Deserialize, Serialize};
 
 /// Room information for DISPATCH
@@ -86,6 +86,67 @@ fn channel_to_room_info(channel: Channel) -> RoomInfo {
     }
 }
 
+/// Tool: dispatch_task - Send a task to a worker room
+///
+/// Creates a task record and sends the prompt to the specified room.
+/// Returns the created task for tracking.
+///
+/// Note: This is a sync function that only creates the database record.
+/// The actual message sending happens in the dispatch_handler.
+pub fn dispatch_task(
+    session_store: &SessionStore,
+    room_id: &str,
+    prompt: &str,
+) -> Result<DispatchTask, String> {
+    // Verify the room exists and is not a DISPATCH room
+    let channel = session_store
+        .get_by_room(room_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Room not found: {}", room_id))?;
+
+    if channel.is_dispatch_room {
+        return Err("Cannot dispatch tasks to DISPATCH room".to_string());
+    }
+
+    // Create task record
+    let task = session_store
+        .create_dispatch_task(room_id, prompt)
+        .map_err(|e| e.to_string())?;
+
+    tracing::info!(
+        task_id = %task.id,
+        target_room = %room_id,
+        prompt_preview = %prompt.chars().take(50).collect::<String>(),
+        "Task dispatched"
+    );
+
+    Ok(task)
+}
+
+/// Tool: check_task - Check status of a dispatched task
+///
+/// Returns the current status of a task by its ID.
+pub fn check_task(session_store: &SessionStore, task_id: &str) -> Result<DispatchTask, String> {
+    session_store
+        .get_dispatch_task(task_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Task not found: {}", task_id))
+}
+
+/// Tool: list_pending_tasks - List all pending/in-progress tasks
+///
+/// Returns tasks that are not yet completed or failed.
+pub fn list_pending_tasks(session_store: &SessionStore) -> Result<Vec<DispatchTask>, String> {
+    let pending = session_store
+        .list_dispatch_tasks(Some(DispatchTaskStatus::Pending))
+        .map_err(|e| e.to_string())?;
+    let in_progress = session_store
+        .list_dispatch_tasks(Some(DispatchTaskStatus::InProgress))
+        .map_err(|e| e.to_string())?;
+
+    Ok(pending.into_iter().chain(in_progress).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +209,71 @@ mod tests {
         let info = get_room_by_name(&store, "my-project").unwrap();
 
         assert_eq!(info.channel_name, "my-project");
+    }
+
+    #[test]
+    fn test_dispatch_task() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        // Create a target room
+        store
+            .create_channel("worker", "!worker:example.com")
+            .unwrap();
+
+        // Dispatch a task
+        let task = dispatch_task(&store, "!worker:example.com", "Run the tests").unwrap();
+
+        assert_eq!(task.target_room_id, "!worker:example.com");
+        assert_eq!(task.prompt, "Run the tests");
+        assert_eq!(task.status, DispatchTaskStatus::Pending);
+    }
+
+    #[test]
+    fn test_dispatch_task_to_dispatch_room_fails() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        // Create a DISPATCH room
+        store.create_dispatch_channel("!dm:example.com").unwrap();
+
+        // Try to dispatch to it
+        let result = dispatch_task(&store, "!dm:example.com", "Do something");
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("DISPATCH room"));
+    }
+
+    #[test]
+    fn test_check_task() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        store
+            .create_channel("worker", "!worker:example.com")
+            .unwrap();
+        let task = dispatch_task(&store, "!worker:example.com", "Run the tests").unwrap();
+
+        let checked = check_task(&store, &task.id).unwrap();
+
+        assert_eq!(checked.id, task.id);
+        assert_eq!(checked.status, DispatchTaskStatus::Pending);
+    }
+
+    #[test]
+    fn test_list_pending_tasks() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        store
+            .create_channel("worker", "!worker:example.com")
+            .unwrap();
+
+        dispatch_task(&store, "!worker:example.com", "Task 1").unwrap();
+        dispatch_task(&store, "!worker:example.com", "Task 2").unwrap();
+
+        let pending = list_pending_tasks(&store).unwrap();
+
+        assert_eq!(pending.len(), 2);
     }
 }
