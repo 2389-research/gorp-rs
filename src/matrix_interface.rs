@@ -147,11 +147,22 @@ impl ChatRoom for MatrixRoom {
 /// Matrix-specific implementation of ChatInterface
 pub struct MatrixInterface {
     client: Client,
+    /// Cached user ID - stored at construction to avoid Option handling on every call
+    user_id: String,
 }
 
 impl MatrixInterface {
+    /// Create a new MatrixInterface.
+    ///
+    /// # Panics
+    /// Panics if the client is not logged in (user_id is None).
+    /// Always create this after successful login.
     pub fn new(client: Client) -> Self {
-        Self { client }
+        let user_id = client
+            .user_id()
+            .expect("MatrixInterface requires a logged-in client")
+            .to_string();
+        Self { client, user_id }
     }
 
     /// Get the underlying Matrix client
@@ -173,10 +184,7 @@ impl ChatInterface for MatrixInterface {
     }
 
     fn bot_user_id(&self) -> &str {
-        self.client
-            .user_id()
-            .map(|id| id.as_str())
-            .unwrap_or("")
+        &self.user_id
     }
 }
 

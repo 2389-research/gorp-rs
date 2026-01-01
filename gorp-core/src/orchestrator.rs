@@ -8,7 +8,7 @@ use crate::{
     traits::{ChatInterface, ChatRoom, IncomingMessage, MessageContent},
     utils::{chunk_message, markdown_to_html, strip_function_calls, MAX_CHUNK_SIZE},
     warm_session::{
-        prepare_session_async, send_prompt_with_handle, SharedWarmSessionManager, WarmConfig,
+        prepare_session_async, send_prompt_with_handle, SharedWarmSessionManager,
         WarmSessionHandle,
     },
 };
@@ -112,8 +112,6 @@ pub struct Orchestrator<I: ChatInterface> {
     session_store: SessionStore,
     warm_manager: SharedWarmSessionManager,
     config: OrchestratorConfig,
-    #[allow(dead_code)]
-    warm_config: WarmConfig,
 }
 
 impl<I: ChatInterface> Orchestrator<I> {
@@ -123,14 +121,12 @@ impl<I: ChatInterface> Orchestrator<I> {
         session_store: SessionStore,
         warm_manager: SharedWarmSessionManager,
         config: OrchestratorConfig,
-        warm_config: WarmConfig,
     ) -> Self {
         Self {
             interface,
             session_store,
             warm_manager,
             config,
-            warm_config,
         }
     }
 
