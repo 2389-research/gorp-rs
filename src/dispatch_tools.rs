@@ -81,7 +81,7 @@ fn channel_to_room_info(channel: Channel) -> RoomInfo {
         room_id: channel.room_id,
         channel_name: channel.channel_name,
         workspace_path: channel.directory,
-        last_activity: None, // TODO: Track last activity timestamp
+        last_activity: None,             // TODO: Track last activity timestamp
         agent_status: AgentStatus::Idle, // TODO: Track actual status
     }
 }
@@ -145,6 +145,91 @@ pub fn list_pending_tasks(session_store: &SessionStore) -> Result<Vec<DispatchTa
         .map_err(|e| e.to_string())?;
 
     Ok(pending.into_iter().chain(in_progress).collect())
+}
+
+/// Tool: reset_room - Reset a room's agent session
+///
+/// Generates a new session ID for the room, allowing it to start fresh.
+/// This is useful when a session becomes corrupted or orphaned.
+pub fn reset_room(session_store: &SessionStore, room_id: &str) -> Result<String, String> {
+    // Verify the room exists and is not a DISPATCH room
+    let channel = session_store
+        .get_by_room(room_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Room not found: {}", room_id))?;
+
+    if channel.is_dispatch_room {
+        return Err("Cannot reset DISPATCH room".to_string());
+    }
+
+    session_store
+        .reset_orphaned_session(room_id)
+        .map_err(|e| e.to_string())?;
+
+    // Get the new session ID
+    let updated = session_store
+        .get_by_room(room_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Room disappeared after reset".to_string())?;
+
+    tracing::info!(
+        room_id = %room_id,
+        channel = %channel.channel_name,
+        new_session_id = %updated.session_id,
+        "Room session reset"
+    );
+
+    Ok(updated.session_id)
+}
+
+/// Tool: get_pending_events - Get unacknowledged events from workers
+///
+/// Returns events that DISPATCH hasn't processed yet.
+pub fn get_pending_events(
+    session_store: &SessionStore,
+) -> Result<Vec<crate::session::DispatchEvent>, String> {
+    session_store
+        .get_pending_dispatch_events()
+        .map_err(|e| e.to_string())
+}
+
+/// Tool: acknowledge_event - Mark an event as processed
+///
+/// Once DISPATCH has handled an event, this marks it as acknowledged.
+pub fn acknowledge_event(session_store: &SessionStore, event_id: &str) -> Result<(), String> {
+    session_store
+        .acknowledge_dispatch_event(event_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Tool: list_all_rooms_summary - List all rooms including metadata
+///
+/// Returns a summary of all workspace rooms with their status.
+pub fn list_all_rooms_summary(session_store: &SessionStore) -> Result<String, String> {
+    let rooms = list_rooms(session_store)?;
+
+    if rooms.is_empty() {
+        return Ok("No workspace rooms configured.".to_string());
+    }
+
+    let summary: Vec<String> = rooms
+        .iter()
+        .map(|r| {
+            format!(
+                "* {} ({})\n  Path: {}\n  Status: {:?}",
+                r.channel_name,
+                r.room_id,
+                if r.workspace_path.is_empty() {
+                    "<no workspace>"
+                } else {
+                    &r.workspace_path
+                },
+                r.agent_status
+            )
+        })
+        .collect();
+
+    Ok(summary.join("\n\n"))
 }
 
 #[cfg(test)]
@@ -275,5 +360,61 @@ mod tests {
         let pending = list_pending_tasks(&store).unwrap();
 
         assert_eq!(pending.len(), 2);
+    }
+
+    #[test]
+    fn test_reset_room() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        // Create a channel
+        let channel = store.create_channel("test", "!room:example.com").unwrap();
+        let original_session = channel.session_id.clone();
+
+        // Reset the room
+        let new_session = reset_room(&store, "!room:example.com").unwrap();
+
+        assert_ne!(new_session, original_session);
+    }
+
+    #[test]
+    fn test_reset_dispatch_room_fails() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        store.create_dispatch_channel("!dm:example.com").unwrap();
+
+        let result = reset_room(&store, "!dm:example.com");
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("DISPATCH room"));
+    }
+
+    #[test]
+    fn test_list_all_rooms_summary() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        store
+            .create_channel("project-a", "!room1:example.com")
+            .unwrap();
+        store
+            .create_channel("project-b", "!room2:example.com")
+            .unwrap();
+
+        let summary = list_all_rooms_summary(&store).unwrap();
+
+        assert!(summary.contains("project-a"));
+        assert!(summary.contains("project-b"));
+    }
+
+    #[test]
+    fn test_list_all_rooms_summary_empty() {
+        let tmp = TempDir::new().unwrap();
+        let store = SessionStore::new(tmp.path()).unwrap();
+
+        let summary = list_all_rooms_summary(&store).unwrap();
+
+        assert!(summary.contains("No workspace rooms"));
     }
 }
