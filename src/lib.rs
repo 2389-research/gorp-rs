@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod config;
 pub mod matrix_client;
+pub mod matrix_interface;
 pub mod mcp;
 pub mod message_handler;
 pub mod metrics;

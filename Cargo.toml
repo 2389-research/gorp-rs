@@ -39,6 +39,7 @@ async-trait = "0.1"
 
 # Internal crates
 gorp-agent = { path = "gorp-agent", features = ["acp", "mux"] }
+gorp-core = { path = "gorp-core" }
 
 [dev-dependencies]
 serial_test = "3.0"
