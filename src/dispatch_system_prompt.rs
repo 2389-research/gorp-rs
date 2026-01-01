@@ -7,12 +7,21 @@ use gorp_core::session::SessionStore;
 pub fn generate_dispatch_prompt(session_store: &SessionStore) -> String {
     let rooms = session_store
         .list_all()
-        .unwrap_or_default()
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Failed to list rooms for DISPATCH prompt");
+            e
+        })
+        .unwrap_or_default();
+
+    let rooms_list: Vec<_> = rooms
         .into_iter()
         .filter(|c| !c.is_dispatch_room)
         .map(|c| format!("- {} ({}): {}", c.channel_name, c.room_id, c.directory))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
+
+    tracing::debug!(room_count = rooms_list.len(), "Generated DISPATCH system prompt");
+
+    let rooms = rooms_list.join("\n");
 
     format!(
         r#"You are DISPATCH, the control plane for this workspace grid.
