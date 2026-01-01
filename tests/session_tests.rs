@@ -46,6 +46,7 @@ fn test_channel_cli_args_first_message() {
         directory: "./workspace/test".to_string(),
         started: false,
         created_at: "2024-01-01T00:00:00Z".to_string(),
+        backend_type: None,
     };
 
     let args = channel.cli_args();
@@ -61,6 +62,7 @@ fn test_channel_cli_args_continuation() {
         directory: "./workspace/test".to_string(),
         started: true,
         created_at: "2024-01-01T00:00:00Z".to_string(),
+        backend_type: None,
     };
 
     let args = channel.cli_args();
@@ -76,6 +78,7 @@ fn test_channel_validate_directory_rejects_traversal() {
         directory: "../../../etc/passwd".to_string(),
         started: false,
         created_at: "2024-01-01T00:00:00Z".to_string(),
+        backend_type: None,
     };
 
     assert!(channel.validate_directory().is_err());
@@ -90,6 +93,7 @@ fn test_channel_validate_directory_accepts_valid() {
         directory: "./workspace/good".to_string(),
         started: false,
         created_at: "2024-01-01T00:00:00Z".to_string(),
+        backend_type: None,
     };
 
     assert!(channel.validate_directory().is_ok());
