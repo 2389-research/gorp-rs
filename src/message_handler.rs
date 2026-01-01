@@ -113,6 +113,38 @@ async fn download_attachment(
     Ok(format!("attachments/{}", unique_filename))
 }
 
+/// Route an agent event to the DISPATCH control plane
+///
+/// When an agent emits a custom event with a "dispatch:" prefix,
+/// this function stores it in the dispatch_events table for
+/// later processing by the DISPATCH agent.
+async fn route_to_dispatch(
+    session_store: &SessionStore,
+    source_room_id: &str,
+    event_kind: &str,
+    payload: &serde_json::Value,
+) -> Result<()> {
+    // Create dispatch event for storage
+    let event = crate::session::DispatchEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        source_room_id: source_room_id.to_string(),
+        event_type: event_kind.to_string(),
+        payload: payload.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        acknowledged_at: None,
+    };
+
+    session_store.insert_dispatch_event(&event)?;
+    tracing::info!(
+        event_id = %event.id,
+        event_type = %event_kind,
+        source_room = %source_room_id,
+        "Event queued for DISPATCH"
+    );
+
+    Ok(())
+}
+
 pub async fn handle_message(
     room: Room,
     event: matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
@@ -646,8 +678,22 @@ pub async fn handle_message(
                 // Tool progress updates - just log for now
                 tracing::debug!("Tool progress update");
             }
-            AgentEvent::Custom { kind, .. } => {
+            AgentEvent::Custom { kind, payload } => {
                 tracing::debug!(kind = %kind, "Received custom event");
+
+                // Check for DISPATCH events
+                if kind.starts_with("dispatch:") {
+                    if let Err(e) = route_to_dispatch(
+                        &session_store,
+                        room.room_id().as_str(),
+                        &kind,
+                        &payload,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %e, "Failed to route event to DISPATCH");
+                    }
+                }
             }
         }
     }
