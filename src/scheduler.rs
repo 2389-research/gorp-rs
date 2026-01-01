@@ -330,7 +330,8 @@ async fn execute_schedule(
     // Collect response from stream
     let mut response = String::new();
     let mut had_error = false;
-    let mut session_id_from_event: Option<String> = Some(session_id.clone());
+    // Track session ID changes - only set when SessionChanged event is received
+    let mut session_id_from_event: Option<String> = None;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -370,8 +371,11 @@ async fn execute_schedule(
             }
             AgentEvent::Error { code, message, .. } => {
                 // Check for session orphaned error
+                // NOTE: The session reset logic below is duplicated in SessionInvalid handler
+                // This duplication is intentional to avoid complexity from extracting a helper
+                // function that would need to handle async borrows and early returns
                 if code == gorp_agent::ErrorCode::SessionOrphaned {
-                    tracing::warn!("Scheduled task hit invalid session");
+                    tracing::warn!("Scheduled task hit orphaned session");
                     // Reset the session so future executions start fresh
                     if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
                         tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
