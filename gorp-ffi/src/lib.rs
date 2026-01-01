@@ -5,9 +5,11 @@ mod agent;
 mod error;
 mod events;
 mod runtime;
+mod session;
 
 pub use agent::{FfiAgentHandle, FfiAgentRegistry};
 pub use error::FfiError;
 pub use events::{AgentEventCallback, FfiErrorCode, FfiUsage};
+pub use session::{FfiChannel, FfiSessionStore};
 
 uniffi::setup_scaffolding!();
