@@ -35,11 +35,13 @@
 
 ## Core Principles
 
-1. **DISPATCH orchestrates, workers execute** - DISPATCH never runs code or modifies files in worker workspaces
-2. **Event-driven awareness** - Workers emit events, gorp routes them to DISPATCH
-3. **Cross-room read access** - DISPATCH can query any room's message history
-4. **Pure mux backend** - Same agent architecture as workers, just with special tools
-5. **User's single pane of glass** - Interact with everything through one conversation
+1. **DISPATCH orchestrates, workers execute** - DISPATCH never runs code or modifies files
+2. **No workspace** - Pure coordination, no filesystem access whatsoever
+3. **Event-driven awareness** - Workers emit events, gorp routes them to DISPATCH
+4. **Cross-room read access** - DISPATCH can query any room's message history
+5. **Pure mux backend** - Same agent architecture as workers, just with special tools
+6. **Admin hub** - All meta commands (!create, !reset, !schedule) live here
+7. **User's single pane of glass** - Interact with everything through one conversation
 
 ## DISPATCH Toolset
 
@@ -90,6 +92,29 @@ enum TaskStatus {
 
 /// Interrupt/cancel work in a room
 fn interrupt_room(room_id: String) -> bool;
+```
+
+### Admin Tools
+
+```rust
+/// Create a new workspace room
+fn create_room(name: String, workspace_path: String) -> RoomInfo;
+
+/// Reset a room's agent session
+fn reset_room(room_id: String) -> bool;
+
+/// Schedule a prompt for a room
+fn schedule_prompt(
+    room_id: String,
+    prompt: String,
+    time_expression: String,  // "every day 9am", "in 2 hours"
+) -> ScheduleId;
+
+/// List schedules across all rooms
+fn list_schedules() -> Vec<Schedule>;
+
+/// Cancel a schedule
+fn cancel_schedule(schedule_id: String) -> bool;
 ```
 
 ## Event Routing
@@ -217,22 +242,20 @@ CREATE TABLE dispatch_tasks (
 15. Integration tests
 16. Documentation
 
-## Open Questions
+## Design Decisions
 
-1. **DISPATCH workspace path** - What directory does DISPATCH operate in?
-   - Option A: Special sentinel like `~/.dispatch` or `/dev/null`
-   - Option B: User's home directory (read-only awareness)
-   - Option C: No workspace, pure coordination
+1. **No workspace** - DISPATCH has no filesystem access. Pure coordination.
 
-2. **Event batching** - How long should DISPATCH wait before notifying?
-   - Immediate for errors/questions
-   - Batched for progress/completions?
+2. **Event batching** - Immediate for errors/questions, batched for progress/completions.
 
-3. **Multi-user** - Does each user get their own DISPATCH, or is there one per bot?
-   - Probably per-user (1:1 DM implies this)
+3. **Per-user** - Each user's 1:1 DM is their DISPATCH instance.
 
-4. **Room creation** - Should DISPATCH be able to create new rooms?
-   - Currently !create is in the DM, so maybe yes
+4. **Admin hub** - DISPATCH handles ALL admin commands:
+   - `!create <name> <path>` - create new workspace room
+   - `!reset <room>` - reset a room's agent session
+   - `!schedule` - manage scheduled prompts across rooms
+   - `!status` - overview of all rooms
+   - `!rooms` - list rooms with details
 
 ---
 
