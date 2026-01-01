@@ -872,7 +872,7 @@ async fn handle_command(
             }
 
             // Reset and start onboarding
-            onboarding::reset_and_start(&room, &session_store, sender).await?;
+            onboarding::reset_and_start(&room, session_store, sender).await?;
         }
         "debug" => {
             if is_dm {

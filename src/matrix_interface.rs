@@ -133,7 +133,9 @@ impl ChatRoom for MatrixRoom {
         // Extract filename from the source or use a default
         let filename = match &source {
             MediaSource::Plain(uri) => uri.as_str().rsplit('/').next().unwrap_or("attachment"),
-            MediaSource::Encrypted(file) => file.url.as_str().rsplit('/').next().unwrap_or("attachment"),
+            MediaSource::Encrypted(file) => {
+                file.url.as_str().rsplit('/').next().unwrap_or("attachment")
+            }
         }
         .to_string();
 

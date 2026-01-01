@@ -8,8 +8,7 @@ use crate::{
     traits::{ChatInterface, ChatRoom, IncomingMessage, MessageContent},
     utils::{chunk_message, markdown_to_html, strip_function_calls, MAX_CHUNK_SIZE},
     warm_session::{
-        prepare_session_async, send_prompt_with_handle, SharedWarmSessionManager,
-        WarmSessionHandle,
+        prepare_session_async, send_prompt_with_handle, SharedWarmSessionManager, WarmSessionHandle,
     },
 };
 use anyhow::Result;
@@ -270,13 +269,7 @@ impl<I: ChatInterface> Orchestrator<I> {
 
         // Process agent events
         let result = self
-            .process_agent_events(
-                room,
-                &channel,
-                &session_handle,
-                &session_id,
-                &mut event_rx,
-            )
+            .process_agent_events(room, &channel, &session_handle, &session_id, &mut event_rx)
             .await;
 
         // Stop typing indicator
@@ -314,9 +307,7 @@ impl<I: ChatInterface> Orchestrator<I> {
                         let input_preview: String = input
                             .as_object()
                             .and_then(|o| {
-                                o.get("command")
-                                    .or(o.get("file_path"))
-                                    .or(o.get("pattern"))
+                                o.get("command").or(o.get("file_path")).or(o.get("pattern"))
                             })
                             .and_then(|v| v.as_str())
                             .map(|s| s.chars().take(50).collect())
@@ -435,7 +426,10 @@ impl<I: ChatInterface> Orchestrator<I> {
 
         // Update session ID if it changed
         if let Some(ref new_session_id) = session_id_from_event {
-            if let Err(e) = self.session_store.update_session_id(room.id(), new_session_id) {
+            if let Err(e) = self
+                .session_store
+                .update_session_id(room.id(), new_session_id)
+            {
                 tracing::error!(error = %e, "Failed to update session ID");
             } else {
                 // Also update in warm cache
@@ -569,8 +563,11 @@ impl<I: ChatInterface> Orchestrator<I> {
             BackendSubcommand::Get => {
                 if let Some(channel) = self.session_store.get_by_room(room.id())? {
                     let backend = channel.backend_type.as_deref().unwrap_or("default");
-                    room.send(MessageContent::plain(format!("Current backend: {}", backend)))
-                        .await?;
+                    room.send(MessageContent::plain(format!(
+                        "Current backend: {}",
+                        backend
+                    )))
+                    .await?;
                 } else {
                     room.send(MessageContent::plain("No channel configured."))
                         .await?;
@@ -691,7 +688,11 @@ mod tests {
 
     #[test]
     fn test_command_as_standard_backend_set() {
-        let cmd = Command::new("backend", vec!["set".to_string(), "mux".to_string()], "set mux");
+        let cmd = Command::new(
+            "backend",
+            vec!["set".to_string(), "mux".to_string()],
+            "set mux",
+        );
         assert_eq!(
             cmd.as_standard(),
             StandardCommand::Backend(BackendSubcommand::Set {
