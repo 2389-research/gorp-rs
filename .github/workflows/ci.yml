@@ -62,10 +62,10 @@ jobs:
           restore-keys: |
             rust-cache-${{ runner.os }}-
 
-      # Note: --all-features is not used because 'mux' feature requires private repo
-      # Use --features acp to test the publicly available features
+      # Note: Main gorp crate requires mux feature which needs private repo access
+      # Only lint gorp-agent with acp feature in CI
       - name: Run clippy
-        run: cargo clippy --all-targets --features acp -- -D warnings
+        run: cargo clippy --all-targets -p gorp-agent --features acp -- -D warnings
 
   test:
     name: Test Suite
@@ -90,7 +90,7 @@ jobs:
           restore-keys: |
             rust-cache-${{ runner.os }}-
 
-      # Note: --all-features is not used because 'mux' feature requires private repo
-      # Use --features acp to test the publicly available features
+      # Note: Main gorp crate requires mux feature which needs private repo access
+      # Only test gorp-agent with acp feature in CI
       - name: Run tests
-        run: cargo test --features acp
+        run: cargo test -p gorp-agent --features acp
