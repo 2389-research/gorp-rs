@@ -47,6 +47,7 @@ fn test_channel_cli_args_first_message() {
         started: false,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         backend_type: None,
+        is_dispatch_room: false,
     };
 
     let args = channel.cli_args();
@@ -63,6 +64,7 @@ fn test_channel_cli_args_continuation() {
         started: true,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         backend_type: None,
+        is_dispatch_room: false,
     };
 
     let args = channel.cli_args();
@@ -79,6 +81,7 @@ fn test_channel_validate_directory_rejects_traversal() {
         started: false,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         backend_type: None,
+        is_dispatch_room: false,
     };
 
     assert!(channel.validate_directory().is_err());
@@ -94,6 +97,7 @@ fn test_channel_validate_directory_accepts_valid() {
         started: false,
         created_at: "2024-01-01T00:00:00Z".to_string(),
         backend_type: None,
+        is_dispatch_room: false,
     };
 
     assert!(channel.validate_directory().is_ok());

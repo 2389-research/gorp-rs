@@ -43,6 +43,8 @@ pub struct Channel {
     /// Optional backend type override (e.g., "acp", "mux", "direct")
     /// If None, uses the global default from config
     pub backend_type: Option<String>,
+    /// True if this is the DISPATCH control plane room (1:1 DM)
+    pub is_dispatch_room: bool,
 }
 
 impl Channel {
@@ -103,6 +105,12 @@ impl SessionStore {
         // Migration: Add backend_type column if it doesn't exist (for existing databases)
         let _ = conn.execute("ALTER TABLE channels ADD COLUMN backend_type TEXT", []);
 
+        // Migration: Add is_dispatch_room column for control plane detection
+        let _ = conn.execute(
+            "ALTER TABLE channels ADD COLUMN is_dispatch_room INTEGER DEFAULT 0",
+            [],
+        );
+
         // Create settings table for storing app state like last-used prefix
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (
@@ -148,7 +156,7 @@ impl SessionStore {
             .lock()
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
-            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type
+            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room
              FROM channels WHERE room_id = ?1",
         )?;
 
@@ -161,6 +169,7 @@ impl SessionStore {
                 started: row.get::<_, i32>(4)? != 0,
                 created_at: row.get(5)?,
                 backend_type: row.get(6)?,
+                is_dispatch_room: row.get::<_, i32>(7)? != 0,
             })
         });
 
@@ -184,7 +193,7 @@ impl SessionStore {
             .lock()
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
-            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type
+            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room
              FROM channels WHERE channel_name = ?1",
         )?;
 
@@ -197,6 +206,7 @@ impl SessionStore {
                 started: row.get::<_, i32>(4)? != 0,
                 created_at: row.get(5)?,
                 backend_type: row.get(6)?,
+                is_dispatch_room: row.get::<_, i32>(7)? != 0,
             })
         });
 
@@ -239,6 +249,7 @@ impl SessionStore {
             started: false,
             created_at: chrono::Utc::now().to_rfc3339(),
             backend_type: None, // Use global default
+            is_dispatch_room: false,
         };
 
         // Try database insert first (prevents race condition)
@@ -248,8 +259,8 @@ impl SessionStore {
             .map_err(|e| anyhow::anyhow!("Database lock poisoned: {}", e))?;
 
         match db.execute(
-            "INSERT INTO channels (channel_name, room_id, session_id, directory, started, created_at, backend_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO channels (channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 &channel.channel_name,
                 &channel.room_id,
@@ -258,6 +269,7 @@ impl SessionStore {
                 if channel.started { 1 } else { 0 },
                 &channel.created_at,
                 &channel.backend_type,
+                0, // is_dispatch_room defaults to false
             ],
         ) {
             Ok(_) => {
@@ -320,7 +332,7 @@ impl SessionStore {
             .lock()
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
-            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type
+            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room
              FROM channels ORDER BY created_at DESC",
         )?;
 
@@ -334,6 +346,7 @@ impl SessionStore {
                     started: row.get::<_, i32>(4)? != 0,
                     created_at: row.get(5)?,
                     backend_type: row.get(6)?,
+                    is_dispatch_room: row.get::<_, i32>(7)? != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -421,7 +434,7 @@ impl SessionStore {
             .lock()
             .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = db.prepare(
-            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type
+            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room
              FROM channels WHERE session_id = ?1",
         )?;
 
@@ -434,6 +447,7 @@ impl SessionStore {
                 started: row.get::<_, i32>(4)? != 0,
                 created_at: row.get(5)?,
                 backend_type: row.get(6)?,
+                is_dispatch_room: row.get::<_, i32>(7)? != 0,
             })
         });
 
