@@ -3,7 +3,10 @@
 
 use crate::error::FfiError;
 use crate::session::FfiSessionStore;
-use gorp_core::scheduler::{ScheduleStatus, ScheduledPrompt, SchedulerStore};
+use chrono::Utc;
+use gorp_core::scheduler::{
+    parse_time_expression, ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerStore,
+};
 use std::sync::Arc;
 
 /// FFI-safe schedule status
@@ -152,5 +155,62 @@ impl FfiSchedulerStore {
         self.inner
             .cancel_schedule(&id)
             .map_err(|e| FfiError::DatabaseError(e.to_string()))
+    }
+
+    /// Create a new scheduled prompt
+    ///
+    /// Time expression can be:
+    /// - Cron expression: "0 9 * * *" (daily at 9am)
+    /// - Relative time: "in 5 minutes", "in 2 hours"
+    /// - Absolute time: "at 3pm", "at 14:30"
+    pub fn create_schedule(
+        &self,
+        channel_name: String,
+        room_id: String,
+        prompt: String,
+        created_by: String,
+        time_expression: String,
+        timezone: String,
+    ) -> Result<FfiScheduledPrompt, FfiError> {
+        // Parse the time expression
+        let parsed = parse_time_expression(&time_expression, &timezone)
+            .map_err(|e| FfiError::InvalidInput(format!("Invalid time expression: {}", e)))?;
+
+        let now = Utc::now();
+        let created_at = now.to_rfc3339();
+
+        // Build the scheduled prompt based on parsed result
+        let (execute_at, cron_expression, next_execution_at) = match parsed {
+            ParsedSchedule::OneTime(dt) => {
+                let dt_str = dt.to_rfc3339();
+                (Some(dt_str.clone()), None, dt_str)
+            }
+            ParsedSchedule::Recurring { cron, next } => {
+                let next_str = next.to_rfc3339();
+                (None, Some(cron), next_str)
+            }
+        };
+
+        let schedule = ScheduledPrompt {
+            id: uuid::Uuid::new_v4().to_string(),
+            channel_name,
+            room_id,
+            prompt,
+            created_by,
+            created_at,
+            execute_at,
+            cron_expression,
+            last_executed_at: None,
+            next_execution_at,
+            status: ScheduleStatus::Active,
+            error_message: None,
+            execution_count: 0,
+        };
+
+        self.inner
+            .create_schedule(&schedule)
+            .map_err(|e| FfiError::DatabaseError(e.to_string()))?;
+
+        Ok(schedule.into())
     }
 }

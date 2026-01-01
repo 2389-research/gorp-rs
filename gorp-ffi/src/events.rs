@@ -39,6 +39,8 @@ pub struct FfiUsage {
     pub cache_read_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+    /// Backend-specific usage data as JSON string
+    pub extra_json: Option<String>,
 }
 
 impl From<gorp_agent::Usage> for FfiUsage {
@@ -49,6 +51,7 @@ impl From<gorp_agent::Usage> for FfiUsage {
             cache_read_tokens: u.cache_read_tokens,
             cache_write_tokens: u.cache_write_tokens,
             cost_usd: u.cost_usd,
+            extra_json: u.extra.map(|v| v.to_string()),
         }
     }
 }

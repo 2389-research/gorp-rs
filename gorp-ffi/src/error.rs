@@ -20,6 +20,9 @@ pub enum FfiError {
 
     #[error("Database error: {0}")]
     DatabaseError(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 }
 
 impl From<anyhow::Error> for FfiError {

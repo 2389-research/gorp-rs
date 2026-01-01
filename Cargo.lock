@@ -1621,6 +1621,7 @@ name = "gorp-ffi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "gorp-agent",
  "gorp-core",
  "once_cell",
@@ -1629,6 +1630,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uniffi",
+ "uuid",
 ]
 
 [[package]]
@@ -2753,8 +2755,8 @@ dependencies = [
 
 [[package]]
 name = "mux"
-version = "0.2.0"
-source = "git+https://github.com/2389-research/mux-rs?branch=main#b4b1ff056da8fb56438b178a2666bb6ad6977835"
+version = "0.5.2"
+source = "git+https://github.com/2389-research/mux-rs?branch=main#4268b5f324a7e509b13d4ce68168321e525b27b6"
 dependencies = [
  "anyhow",
  "async-stream",

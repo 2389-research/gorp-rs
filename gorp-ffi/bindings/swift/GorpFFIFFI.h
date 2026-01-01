@@ -409,6 +409,11 @@ uint64_t uniffi_gorp_ffi_fn_constructor_ffischedulerstore_new(uint64_t session_s
 int8_t uniffi_gorp_ffi_fn_method_ffischedulerstore_cancel_schedule(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GORP_FFI_FN_METHOD_FFISCHEDULERSTORE_CREATE_SCHEDULE
+#define UNIFFI_FFIDEF_UNIFFI_GORP_FFI_FN_METHOD_FFISCHEDULERSTORE_CREATE_SCHEDULE
+RustBuffer uniffi_gorp_ffi_fn_method_ffischedulerstore_create_schedule(uint64_t ptr, RustBuffer channel_name, RustBuffer room_id, RustBuffer prompt, RustBuffer created_by, RustBuffer time_expression, RustBuffer timezone, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_GORP_FFI_FN_METHOD_FFISCHEDULERSTORE_DELETE_SCHEDULE
 #define UNIFFI_FFIDEF_UNIFFI_GORP_FFI_FN_METHOD_FFISCHEDULERSTORE_DELETE_SCHEDULE
 int8_t uniffi_gorp_ffi_fn_method_ffischedulerstore_delete_schedule(uint64_t ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
@@ -835,6 +840,12 @@ uint16_t uniffi_gorp_ffi_checksum_method_ffiagentregistry_create(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_GORP_FFI_CHECKSUM_METHOD_FFISCHEDULERSTORE_CANCEL_SCHEDULE
 #define UNIFFI_FFIDEF_UNIFFI_GORP_FFI_CHECKSUM_METHOD_FFISCHEDULERSTORE_CANCEL_SCHEDULE
 uint16_t uniffi_gorp_ffi_checksum_method_ffischedulerstore_cancel_schedule(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_GORP_FFI_CHECKSUM_METHOD_FFISCHEDULERSTORE_CREATE_SCHEDULE
+#define UNIFFI_FFIDEF_UNIFFI_GORP_FFI_CHECKSUM_METHOD_FFISCHEDULERSTORE_CREATE_SCHEDULE
+uint16_t uniffi_gorp_ffi_checksum_method_ffischedulerstore_create_schedule(void
     
 );
 #endif

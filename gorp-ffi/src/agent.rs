@@ -80,6 +80,12 @@ pub struct FfiAgentRegistry {
     inner: AgentRegistry,
 }
 
+impl Default for FfiAgentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[uniffi::export]
 impl FfiAgentRegistry {
     /// Create a new registry with all available backends

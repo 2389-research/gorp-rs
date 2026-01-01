@@ -909,6 +909,16 @@ public protocol FfiSchedulerStoreProtocol: AnyObject, Sendable {
     func cancelSchedule(id: String) throws  -> Bool
     
     /**
+     * Create a new scheduled prompt
+     *
+     * Time expression can be:
+     * - Cron expression: "0 9 * * *" (daily at 9am)
+     * - Relative time: "in 5 minutes", "in 2 hours"
+     * - Absolute time: "at 3pm", "at 14:30"
+     */
+    func createSchedule(channelName: String, roomId: String, prompt: String, createdBy: String, timeExpression: String, timezone: String) throws  -> FfiScheduledPrompt
+    
+    /**
      * Delete a schedule by ID
      */
     func deleteSchedule(id: String) throws  -> Bool
@@ -1014,6 +1024,28 @@ open func cancelSchedule(id: String)throws  -> Bool  {
     uniffi_gorp_ffi_fn_method_ffischedulerstore_cancel_schedule(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(id),$0
+    )
+})
+}
+    
+    /**
+     * Create a new scheduled prompt
+     *
+     * Time expression can be:
+     * - Cron expression: "0 9 * * *" (daily at 9am)
+     * - Relative time: "in 5 minutes", "in 2 hours"
+     * - Absolute time: "at 3pm", "at 14:30"
+     */
+open func createSchedule(channelName: String, roomId: String, prompt: String, createdBy: String, timeExpression: String, timezone: String)throws  -> FfiScheduledPrompt  {
+    return try  FfiConverterTypeFfiScheduledPrompt_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_gorp_ffi_fn_method_ffischedulerstore_create_schedule(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(channelName),
+        FfiConverterString.lower(roomId),
+        FfiConverterString.lower(prompt),
+        FfiConverterString.lower(createdBy),
+        FfiConverterString.lower(timeExpression),
+        FfiConverterString.lower(timezone),$0
     )
 })
 }
@@ -1652,15 +1684,23 @@ public struct FfiUsage: Equatable, Hashable {
     public let cacheReadTokens: UInt64?
     public let cacheWriteTokens: UInt64?
     public let costUsd: Double?
+    /**
+     * Backend-specific usage data as JSON string
+     */
+    public let extraJson: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(inputTokens: UInt64, outputTokens: UInt64, cacheReadTokens: UInt64?, cacheWriteTokens: UInt64?, costUsd: Double?) {
+    public init(inputTokens: UInt64, outputTokens: UInt64, cacheReadTokens: UInt64?, cacheWriteTokens: UInt64?, costUsd: Double?, 
+        /**
+         * Backend-specific usage data as JSON string
+         */extraJson: String?) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.cacheReadTokens = cacheReadTokens
         self.cacheWriteTokens = cacheWriteTokens
         self.costUsd = costUsd
+        self.extraJson = extraJson
     }
 
     
@@ -1681,7 +1721,8 @@ public struct FfiConverterTypeFfiUsage: FfiConverterRustBuffer {
                 outputTokens: FfiConverterUInt64.read(from: &buf), 
                 cacheReadTokens: FfiConverterOptionUInt64.read(from: &buf), 
                 cacheWriteTokens: FfiConverterOptionUInt64.read(from: &buf), 
-                costUsd: FfiConverterOptionDouble.read(from: &buf)
+                costUsd: FfiConverterOptionDouble.read(from: &buf), 
+                extraJson: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1691,6 +1732,7 @@ public struct FfiConverterTypeFfiUsage: FfiConverterRustBuffer {
         FfiConverterOptionUInt64.write(value.cacheReadTokens, into: &buf)
         FfiConverterOptionUInt64.write(value.cacheWriteTokens, into: &buf)
         FfiConverterOptionDouble.write(value.costUsd, into: &buf)
+        FfiConverterOptionString.write(value.extraJson, into: &buf)
     }
 }
 
@@ -1726,6 +1768,8 @@ public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
     case IoError(String
     )
     case DatabaseError(String
+    )
+    case InvalidInput(String
     )
 
     
@@ -1769,6 +1813,9 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
         case 5: return .DatabaseError(
             try FfiConverterString.read(from: &buf)
             )
+        case 6: return .InvalidInput(
+            try FfiConverterString.read(from: &buf)
+            )
 
          default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1803,6 +1850,11 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
         
         case let .DatabaseError(v1):
             writeInt(&buf, Int32(5))
+            FfiConverterString.write(v1, into: &buf)
+            
+        
+        case let .InvalidInput(v1):
+            writeInt(&buf, Int32(6))
             FfiConverterString.write(v1, into: &buf)
             
         }
@@ -2648,6 +2700,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_gorp_ffi_checksum_method_ffischedulerstore_cancel_schedule() != 25195) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_gorp_ffi_checksum_method_ffischedulerstore_create_schedule() != 13656) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_gorp_ffi_checksum_method_ffischedulerstore_delete_schedule() != 16298) {
