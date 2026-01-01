@@ -14,11 +14,36 @@ fn test_dispatch_channel_creation() {
     let store = SessionStore::new(tmp.path()).unwrap();
 
     // Create DISPATCH channel
-    let channel = store.create_dispatch_channel("!test:matrix.org").unwrap();
+    let room_id = "!test:matrix.org";
+    let channel = store.create_dispatch_channel(room_id).unwrap();
 
     assert!(channel.is_dispatch_room);
-    assert_eq!(channel.channel_name, "dispatch");
+    // channel_name is now "dispatch:{room_id}" for uniqueness
+    assert_eq!(channel.channel_name, format!("dispatch:{}", room_id));
     assert!(channel.directory.is_empty());
+}
+
+#[test]
+fn test_dispatch_multiple_users() {
+    let tmp = TempDir::new().unwrap();
+    let template_dir = tmp.path().join("template");
+    std::fs::create_dir_all(&template_dir).unwrap();
+
+    let store = SessionStore::new(tmp.path()).unwrap();
+
+    // Create DISPATCH channels for two different users/DMs
+    let channel1 = store.create_dispatch_channel("!dm1:matrix.org").unwrap();
+    let channel2 = store.create_dispatch_channel("!dm2:matrix.org").unwrap();
+
+    // Both should exist with different channel names
+    assert!(channel1.is_dispatch_room);
+    assert!(channel2.is_dispatch_room);
+    assert_ne!(channel1.channel_name, channel2.channel_name);
+    assert_ne!(channel1.session_id, channel2.session_id);
+
+    // Both should be retrievable
+    assert!(store.get_dispatch_channel("!dm1:matrix.org").unwrap().is_some());
+    assert!(store.get_dispatch_channel("!dm2:matrix.org").unwrap().is_some());
 }
 
 #[test]

@@ -135,7 +135,7 @@ pub fn check_task(session_store: &SessionStore, task_id: &str) -> Result<Dispatc
 
 /// Tool: list_pending_tasks - List all pending/in-progress tasks
 ///
-/// Returns tasks that are not yet completed or failed.
+/// Returns tasks that are not yet completed or failed, sorted by creation time (newest first).
 pub fn list_pending_tasks(session_store: &SessionStore) -> Result<Vec<DispatchTask>, String> {
     let pending = session_store
         .list_dispatch_tasks(Some(DispatchTaskStatus::Pending))
@@ -144,7 +144,10 @@ pub fn list_pending_tasks(session_store: &SessionStore) -> Result<Vec<DispatchTa
         .list_dispatch_tasks(Some(DispatchTaskStatus::InProgress))
         .map_err(|e| e.to_string())?;
 
-    Ok(pending.into_iter().chain(in_progress).collect())
+    // Combine and sort by creation time (newest first)
+    let mut all_tasks: Vec<_> = pending.into_iter().chain(in_progress).collect();
+    all_tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(all_tasks)
 }
 
 /// Tool: reset_room - Reset a room's agent session

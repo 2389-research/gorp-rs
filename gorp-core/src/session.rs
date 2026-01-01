@@ -675,10 +675,10 @@ impl SessionStore {
     /// Unlike regular channels, DISPATCH channels:
     /// - Have is_dispatch_room = true
     /// - Have an empty directory (no filesystem workspace)
-    /// - Use channel_name = "dispatch"
+    /// - Use channel_name = "dispatch:{room_id}" for uniqueness
     pub fn create_dispatch_channel(&self, room_id: &str) -> Result<Channel> {
         let channel = Channel {
-            channel_name: "dispatch".to_string(),
+            channel_name: format!("dispatch:{}", room_id),
             room_id: room_id.to_string(),
             session_id: uuid::Uuid::new_v4().to_string(),
             directory: String::new(), // No workspace for DISPATCH

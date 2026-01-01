@@ -49,9 +49,9 @@ Tools available:
 - get_room_status: Get detailed info about a specific room
 - dispatch_task: Send a prompt to a worker room
 - check_task: Check status of a dispatched task
-- create_room: Create a new workspace room
 - reset_room: Reset a room's agent session
-- read_room_history: Read message history from any room
+- list_pending_tasks: See all pending and in-progress tasks
+- get_pending_events: See events from worker rooms
 
 When dispatching work, match the task to the right room based on:
 - Workspace path and purpose
