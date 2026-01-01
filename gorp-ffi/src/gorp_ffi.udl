@@ -1,0 +1,4 @@
+// ABOUTME: UniFFI Definition Language file for gorp-ffi.
+// ABOUTME: Minimal UDL - proc macros handle most interface definitions.
+
+namespace gorp_ffi {};

@@ -1,0 +1,9 @@
+# ABOUTME: UniFFI configuration for Swift and Kotlin bindings.
+# ABOUTME: Defines module names and binding options for each target platform.
+
+[bindings.swift]
+module_name = "GorpFFI"
+generate_immutable_records = true
+
+[bindings.kotlin]
+package_name = "com.gorp.ffi"
