@@ -4,6 +4,7 @@
 // Matrix-specific modules (stay local)
 pub mod admin;
 pub mod dispatch_handler;
+pub mod dispatch_tools;
 pub mod matrix_client;
 pub mod matrix_interface;
 pub mod mcp;
