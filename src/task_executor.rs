@@ -115,6 +115,17 @@ async fn run_executor_loop(
                         if let Err(e) = session_store.insert_dispatch_event(&event) {
                             tracing::warn!(error = %e, "Failed to create task completion event");
                         }
+
+                        // Notify DISPATCH rooms in real-time
+                        notify_dispatch_rooms(
+                            &client,
+                            &session_store,
+                            &task.target_room_id,
+                            &task.id,
+                            true,
+                            &summary,
+                        )
+                        .await;
                     }
                 }
                 Err(e) => {
@@ -143,9 +154,99 @@ async fn run_executor_loop(
                         if let Err(e) = session_store.insert_dispatch_event(&event) {
                             tracing::warn!(error = %e, "Failed to create task failure event");
                         }
+
+                        // Notify DISPATCH rooms in real-time
+                        notify_dispatch_rooms(
+                            &client,
+                            &session_store,
+                            &task.target_room_id,
+                            &task.id,
+                            false,
+                            &error_msg,
+                        )
+                        .await;
                     }
                 }
             }
+        }
+    }
+}
+
+/// Notify all DISPATCH rooms about task completion/failure
+async fn notify_dispatch_rooms(
+    client: &Client,
+    session_store: &SessionStore,
+    target_room_id: &str,
+    task_id: &str,
+    success: bool,
+    message: &str,
+) {
+    // Get channel name for the target room
+    let channel_name = session_store
+        .get_by_room(target_room_id)
+        .ok()
+        .flatten()
+        .map(|c| c.channel_name)
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Get all DISPATCH channels
+    let dispatch_channels = match session_store.list_dispatch_channels() {
+        Ok(channels) => channels,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list DISPATCH channels for notification");
+            return;
+        }
+    };
+
+    // Build notification message
+    let task_short_id: String = task_id.chars().take(8).collect();
+    let notification = if success {
+        format!(
+            "✅ **Task Completed** in **{}**\n`{}`\n> {}",
+            channel_name,
+            task_short_id,
+            message.chars().take(150).collect::<String>()
+        )
+    } else {
+        format!(
+            "❌ **Task Failed** in **{}**\n`{}`\n> {}",
+            channel_name,
+            task_short_id,
+            message.chars().take(150).collect::<String>()
+        )
+    };
+
+    let notification_html = markdown_to_html(&notification);
+
+    // Send to each DISPATCH room
+    for dispatch in dispatch_channels {
+        let room_id: matrix_sdk::ruma::OwnedRoomId = match dispatch.room_id.parse() {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+
+        let Some(room) = client.get_room(&room_id) else {
+            continue;
+        };
+
+        if let Err(e) = room
+            .send(RoomMessageEventContent::text_html(
+                &notification,
+                &notification_html,
+            ))
+            .await
+        {
+            tracing::warn!(
+                dispatch_room = %dispatch.room_id,
+                error = %e,
+                "Failed to send task notification to DISPATCH"
+            );
+        } else {
+            tracing::debug!(
+                dispatch_room = %dispatch.room_id,
+                task_id = %task_id,
+                "Sent task completion notification to DISPATCH"
+            );
         }
     }
 }
