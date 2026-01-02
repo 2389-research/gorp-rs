@@ -16,6 +16,7 @@ pub mod webhook;
 // Keep local scheduler.rs - it has Matrix-specific execution code
 // The core scheduling logic is in gorp_core::scheduler
 pub mod scheduler;
+pub mod task_executor;
 
 // Re-export platform-agnostic modules from gorp-core
 pub use gorp_core::config;

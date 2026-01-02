@@ -9,6 +9,7 @@ use gorp::{
     matrix_client, message_handler, paths,
     scheduler::{start_scheduler, SchedulerStore},
     session::SessionStore,
+    task_executor::start_task_executor,
     warm_session::{create_shared_manager, SharedWarmSessionManager, WarmConfig},
     webhook,
 };
@@ -1307,6 +1308,14 @@ async fn run_start() -> Result<()> {
 
     // Notify DISPATCH channels with contextual status
     dispatch_startup_notification(&client, &session_store_arc).await;
+
+    // Start task executor for dispatched work
+    start_task_executor(
+        client.clone(),
+        (*session_store_arc).clone(),
+        Arc::clone(&config_arc),
+        warm_manager.clone(),
+    );
 
     // Start continuous sync loop with the sync token from initial sync
     // Use LocalSet because message handlers with ACP client futures are !Send
