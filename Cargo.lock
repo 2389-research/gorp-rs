@@ -1546,6 +1546,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "mime_guess",
+ "mux",
  "pulldown-cmark",
  "regex",
  "rusqlite",

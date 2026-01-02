@@ -44,6 +44,9 @@ async-trait = "0.1"
 gorp-agent = { path = "gorp-agent", features = ["acp", "mux"] }
 gorp-core = { path = "gorp-core" }
 
+# For DISPATCH tools
+mux = { git = "https://github.com/2389-research/mux-rs", branch = "main" }
+
 [dev-dependencies]
 serial_test = "3.0"
 tempfile = "3.10"

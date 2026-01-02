@@ -314,6 +314,107 @@ impl Tool for WdSearchTool {
     }
 }
 
+/// EditTool with working directory support.
+/// Performs precise string replacement in files.
+pub struct WdEditTool {
+    working_dir: PathBuf,
+}
+
+impl WdEditTool {
+    pub fn new(working_dir: PathBuf) -> Self {
+        Self { working_dir }
+    }
+}
+
+#[async_trait]
+impl Tool for WdEditTool {
+    fn name(&self) -> &str {
+        "edit"
+    }
+
+    fn description(&self) -> &str {
+        "Edit a file by replacing an exact string with new content. More precise than rewriting the entire file. Relative paths are resolved from your working directory."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The path to the file to edit (relative to working directory or absolute)"
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "The exact string to find and replace (must match exactly, including whitespace)"
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "The string to replace it with"
+                }
+            },
+            "required": ["path", "old_string", "new_string"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        #[derive(Deserialize)]
+        struct Params {
+            path: String,
+            old_string: String,
+            new_string: String,
+        }
+        let params: Params = serde_json::from_value(params)?;
+        let resolved = resolve_path(&self.working_dir, &params.path);
+
+        // Read the file
+        let content = match std::fs::read_to_string(&resolved) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(ToolResult::error(format!(
+                    "Failed to read file '{}': {}",
+                    resolved.display(),
+                    e
+                )))
+            }
+        };
+
+        // Check if old_string exists
+        if !content.contains(&params.old_string) {
+            return Ok(ToolResult::error(format!(
+                "The string to replace was not found in '{}'. Make sure the old_string matches exactly, including whitespace and indentation.",
+                resolved.display()
+            )));
+        }
+
+        // Check for uniqueness (should only match once for safety)
+        let matches: Vec<_> = content.match_indices(&params.old_string).collect();
+        if matches.len() > 1 {
+            return Ok(ToolResult::error(format!(
+                "The string to replace was found {} times in '{}'. Please provide a more unique string that matches exactly once.",
+                matches.len(),
+                resolved.display()
+            )));
+        }
+
+        // Perform the replacement
+        let new_content = content.replacen(&params.old_string, &params.new_string, 1);
+
+        // Write the file
+        match std::fs::write(&resolved, &new_content) {
+            Ok(()) => Ok(ToolResult::text(format!(
+                "Successfully edited {}",
+                resolved.display()
+            ))),
+            Err(e) => Ok(ToolResult::error(format!(
+                "Failed to write file '{}': {}",
+                resolved.display(),
+                e
+            ))),
+        }
+    }
+}
+
 /// BashTool with working directory default.
 pub struct WdBashTool {
     working_dir: PathBuf,

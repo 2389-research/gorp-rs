@@ -17,8 +17,9 @@ use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 
 use super::mux_tools::{
-    WdBashTool, WdListFilesTool, WdReadFileTool, WdSearchTool, WdWriteFileTool,
+    WdBashTool, WdEditTool, WdListFilesTool, WdReadFileTool, WdSearchTool, WdWriteFileTool,
 };
+use mux::tools::{WebFetchTool, WebSearchTool};
 
 /// Configuration for the Mux backend
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +255,7 @@ impl SessionDb {
 
 pub struct MuxBackend {
     config: MuxConfig,
+    additional_tools: Vec<Box<dyn mux::tool::Tool>>,
 }
 
 /// Read MCP server configs from .mcp.json in the working directory
@@ -339,7 +341,16 @@ fn read_mcp_json(working_dir: &std::path::Path) -> Vec<MuxMcpServerConfig> {
 
 impl MuxBackend {
     pub fn new(config: MuxConfig) -> Result<Self> {
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            additional_tools: Vec::new(),
+        })
+    }
+
+    /// Add custom tools to be registered with this backend
+    pub fn with_tools(mut self, tools: Vec<Box<dyn mux::tool::Tool>>) -> Self {
+        self.additional_tools = tools;
+        self
     }
 
     pub fn into_handle(self) -> AgentHandle {
@@ -391,28 +402,8 @@ impl MuxBackend {
             "Loading MCP servers"
         );
 
-        // Register built-in tools and connect MCP servers in background
-        let working_dir_for_tools = config.working_dir.clone();
+        // Connect MCP servers in background (can be slow, don't block)
         tokio::spawn(async move {
-            // Register working-directory-aware tools
-            let wd = working_dir_for_tools;
-            registry_clone
-                .register(WdReadFileTool::new(wd.clone()))
-                .await;
-            registry_clone
-                .register(WdWriteFileTool::new(wd.clone()))
-                .await;
-            registry_clone.register(WdBashTool::new(wd.clone())).await;
-            registry_clone
-                .register(WdListFilesTool::new(wd.clone()))
-                .await;
-            registry_clone.register(WdSearchTool::new(wd.clone())).await;
-            tracing::info!(
-                working_dir = %wd.display(),
-                "Registered 5 working-directory-aware tools: read_file, write_file, bash, list_files, search"
-            );
-
-            // Then connect MCP servers
             for server_config in mcp_configs {
                 match connect_mcp_server(&server_config, &registry_clone).await {
                     Ok(client) => {
@@ -430,7 +421,67 @@ impl MuxBackend {
             }
         });
 
+        // Clone registry for command loop (tools will be registered here FIRST)
+        let registry_for_loop = Arc::clone(&registry);
+        let working_dir_for_tools = config.working_dir.clone();
+        let additional_tools = self.additional_tools;
+
         tokio::spawn(async move {
+            // CRITICAL: Register all tools BEFORE processing any commands
+            // This fixes the race condition where prompts were sent before tools were ready
+            let wd = working_dir_for_tools;
+
+            // 1. read_file - Read file contents
+            registry_for_loop
+                .register(WdReadFileTool::new(wd.clone()))
+                .await;
+            // 2. write_file - Write/create files
+            registry_for_loop
+                .register(WdWriteFileTool::new(wd.clone()))
+                .await;
+            // 3. edit - Precise string replacement
+            registry_for_loop
+                .register(WdEditTool::new(wd.clone()))
+                .await;
+            // 4. bash - Execute shell commands
+            registry_for_loop
+                .register(WdBashTool::new(wd.clone()))
+                .await;
+            // 5. list_files - List directory contents
+            registry_for_loop
+                .register(WdListFilesTool::new(wd.clone()))
+                .await;
+            // 6. search - Search file contents (grep-like)
+            registry_for_loop
+                .register(WdSearchTool::new(wd.clone()))
+                .await;
+            // 7. web_fetch - Fetch URL content
+            registry_for_loop.register(WebFetchTool::new()).await;
+            // 8. web_search - Web search queries
+            registry_for_loop.register(WebSearchTool::new()).await;
+
+            tracing::info!(
+                working_dir = %wd.display(),
+                "Registered 8 built-in tools: read_file, write_file, edit, bash, list_files, search, web_fetch, web_search"
+            );
+
+            // Register additional custom tools (e.g., DISPATCH tools)
+            let additional_count = additional_tools.len();
+            for tool in additional_tools {
+                let tool_name = tool.name().to_string();
+                // Convert Box<dyn Tool> to Arc<dyn Tool>
+                let arc_tool: Arc<dyn mux::tool::Tool> = Arc::from(tool);
+                registry_for_loop.register_arc(arc_tool).await;
+                tracing::debug!(tool = %tool_name, "Registered custom tool");
+            }
+            if additional_count > 0 {
+                tracing::info!(
+                    count = additional_count,
+                    "Registered additional custom tools"
+                );
+            }
+
+            // NOW process commands (tools are guaranteed to be registered)
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     Command::NewSession { reply } => {

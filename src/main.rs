@@ -484,6 +484,107 @@ async fn notify_ready(client: &Client, config: &Config) {
     }
 }
 
+/// Notify DISPATCH users that the control plane is online with contextual status
+async fn dispatch_startup_notification(client: &Client, session_store: &SessionStore) {
+    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+
+    // Get all DISPATCH channels
+    let dispatch_channels = match session_store.list_dispatch_channels() {
+        Ok(channels) => channels,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list DISPATCH channels for startup notification");
+            return;
+        }
+    };
+
+    if dispatch_channels.is_empty() {
+        tracing::debug!("No DISPATCH channels to notify");
+        return;
+    }
+
+    // Get global context (shared across all dispatches for now)
+    let workspace_rooms: Vec<_> = session_store
+        .list_all()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|ch| !ch.is_dispatch_room)
+        .collect();
+
+    let pending_events = session_store.get_pending_dispatch_events().unwrap_or_default();
+
+    for dispatch in dispatch_channels {
+        // Parse the room ID
+        let room_id: matrix_sdk::ruma::OwnedRoomId = match dispatch.room_id.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(room_id = %dispatch.room_id, error = %e, "Invalid DISPATCH room ID");
+                continue;
+            }
+        };
+
+        // Get the room
+        let room = match client.get_room(&room_id) {
+            Some(r) if r.state() == matrix_sdk::RoomState::Joined => r,
+            _ => {
+                tracing::debug!(room_id = %dispatch.room_id, "DISPATCH room not joined, skipping notification");
+                continue;
+            }
+        };
+
+        // Build contextual message
+        let timestamp = chrono::Utc::now().format("%H:%M UTC").to_string();
+        let message = if workspace_rooms.is_empty() && pending_events.is_empty() {
+            format!(
+                "**DISPATCH online** ({})\n\n\
+                No workspace rooms configured yet. Create one with `!create <name>` in this chat.",
+                timestamp
+            )
+        } else {
+            let mut parts = vec![format!("**DISPATCH online** ({})", timestamp)];
+
+            // Workspace summary
+            let active_count = workspace_rooms.iter().filter(|r| r.started).count();
+            parts.push(format!(
+                "📊 **{} workspace{}** ({} active)",
+                workspace_rooms.len(),
+                if workspace_rooms.len() == 1 { "" } else { "s" },
+                active_count
+            ));
+
+            // Pending events
+            if !pending_events.is_empty() {
+                parts.push(format!(
+                    "📬 **{} pending event{}** awaiting acknowledgment",
+                    pending_events.len(),
+                    if pending_events.len() == 1 { "" } else { "s" }
+                ));
+            }
+
+            parts.push("\nUse `list_rooms` or `get_pending_events` for details.".to_string());
+            parts.join("\n")
+        };
+
+        // Send the message
+        match room.send(RoomMessageEventContent::text_plain(&message)).await {
+            Ok(_) => {
+                tracing::info!(
+                    room_id = %dispatch.room_id,
+                    workspaces = workspace_rooms.len(),
+                    pending_events = pending_events.len(),
+                    "DISPATCH startup notification sent"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    room_id = %dispatch.room_id,
+                    error = %e,
+                    "Failed to send DISPATCH startup notification"
+                );
+            }
+        }
+    }
+}
+
 const SETTING_ROOM_PREFIX: &str = "room_prefix";
 
 /// Check if the room prefix has changed and rename rooms if so
@@ -1203,6 +1304,9 @@ async fn run_start() -> Result<()> {
 
     // Notify allowed users that the bot is ready
     notify_ready(&client, &config_arc).await;
+
+    // Notify DISPATCH channels with contextual status
+    dispatch_startup_notification(&client, &session_store_arc).await;
 
     // Start continuous sync loop with the sync token from initial sync
     // Use LocalSet because message handlers with ACP client futures are !Send

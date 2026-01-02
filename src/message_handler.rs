@@ -366,16 +366,20 @@ pub async fn handle_message(
                 return Ok(());
             }
 
-            // Not in onboarding - show regular help
-            let help_msg = "👋 To get started, create a channel:\n\n\
-                !create <channel-name>\n\n\
-                Example: !create PA\n\
-                This creates a dedicated Claude session in a workspace directory.\n\n\
-                Type !list to see your existing channels, or !setup to run guided setup.";
-            let help_html = markdown_to_html(help_msg);
-            room.send(RoomMessageEventContent::text_html(help_msg, &help_html))
-                .await?;
-            return Ok(());
+            // Not in onboarding - auto-create DISPATCH channel and route there
+            // This gives users a natural chat experience in DMs
+            tracing::info!(room_id = %room.room_id(), user = %user_id, "Auto-creating DISPATCH channel for DM");
+            session_store.create_dispatch_channel(room.room_id().as_str())?;
+            metrics::record_message_received("dispatch");
+            return crate::dispatch_handler::handle_dispatch_message(
+                room,
+                event,
+                client,
+                config,
+                session_store,
+                warm_manager,
+            )
+            .await;
         } else {
             let help_msg = "No Claude channel attached to this room.\n\n\
                 💡 DM me to create a channel with: !create <name>\n\n\

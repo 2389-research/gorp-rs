@@ -2,17 +2,21 @@
 // ABOUTME: Runs in 1:1 DM, provides cross-room visibility and task dispatch.
 
 use anyhow::Result;
+use gorp_agent::backends::mux::{MuxBackend, MuxConfig};
 use gorp_agent::AgentEvent;
 use matrix_sdk::{
     room::Room, ruma::events::room::message::RoomMessageEventContent, Client, RoomState,
 };
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::{
     config::Config,
     dispatch_system_prompt::generate_dispatch_prompt,
+    dispatch_tools::create_dispatch_tools,
     session::SessionStore,
     utils::{chunk_message, markdown_to_html, MAX_CHUNK_SIZE},
-    warm_session::{SharedWarmSessionManager, WarmSessionManager},
+    warm_session::SharedWarmSessionManager,
 };
 
 /// Handle a message in the DISPATCH control plane room
@@ -91,32 +95,43 @@ pub async fn handle_dispatch_message(
         }
     });
 
-    // Create mux backend for DISPATCH using the config from warm_manager
-    // DISPATCH uses mux backend (pure API, no CLI) with no workspace directory
-    let (warm_config, registry) = {
+    // Get config from warm_manager
+    let warm_config = {
         let mgr = warm_manager.read().await;
-        (mgr.config(), mgr.registry())
+        mgr.config()
     };
 
     // DISPATCH uses a temporary directory since it doesn't have a workspace
-    let dispatch_working_dir = std::env::temp_dir()
-        .join("gorp-dispatch")
-        .to_string_lossy()
-        .to_string();
+    let dispatch_working_dir = std::env::temp_dir().join("gorp-dispatch");
 
     // Ensure the dispatch directory exists
     if let Err(e) = std::fs::create_dir_all(&dispatch_working_dir) {
         tracing::warn!(error = %e, "Failed to create DISPATCH working directory");
     }
 
-    // Create agent handle using mux backend explicitly
-    let agent_handle = match WarmSessionManager::create_agent_handle_with_config(
-        &registry,
-        &dispatch_working_dir,
-        &warm_config,
-        Some("mux"), // Force mux backend for DISPATCH
-    ) {
-        Ok(handle) => handle,
+    // Create MuxConfig from warm_config
+    let mux_config = MuxConfig {
+        model: warm_config
+            .model
+            .clone()
+            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string()),
+        max_tokens: warm_config.max_tokens.unwrap_or(8192),
+        working_dir: dispatch_working_dir.clone(),
+        global_system_prompt_path: warm_config
+            .global_system_prompt_path
+            .clone()
+            .map(PathBuf::from),
+        local_prompt_files: vec![], // DISPATCH doesn't use local prompts
+        mcp_servers: vec![],        // DISPATCH uses its own tools, not MCP servers
+    };
+
+    // Create DISPATCH-specific tools with access to session store
+    let session_store_arc = Arc::new(session_store.clone());
+    let dispatch_tools = create_dispatch_tools(session_store_arc);
+
+    // Create MuxBackend with dispatch tools
+    let agent_handle = match MuxBackend::new(mux_config) {
+        Ok(backend) => backend.with_tools(dispatch_tools).into_handle(),
         Err(e) => {
             let _ = typing_tx.send(());
             typing_handle.abort();
@@ -129,6 +144,11 @@ pub async fn handle_dispatch_message(
             return Ok(());
         }
     };
+
+    tracing::info!(
+        tool_count = 8,
+        "Created DISPATCH agent with dispatch tools: list_rooms, get_room_status, dispatch_task, check_task, list_pending_tasks, get_pending_events, reset_room, acknowledge_event"
+    );
 
     // Load or create session
     let session_id = &dispatch_channel.session_id;

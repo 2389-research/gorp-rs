@@ -725,6 +725,37 @@ impl SessionStore {
         self.create_dispatch_channel(room_id)
     }
 
+    /// List all DISPATCH channels (for startup notifications)
+    pub fn list_dispatch_channels(&self) -> Result<Vec<Channel>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let mut stmt = db.prepare(
+            "SELECT channel_name, room_id, session_id, directory, started, created_at, backend_type, is_dispatch_room
+             FROM channels WHERE is_dispatch_room = 1",
+        )?;
+
+        let channels = stmt
+            .query_map([], |row| {
+                Ok(Channel {
+                    channel_name: row.get(0)?,
+                    room_id: row.get(1)?,
+                    session_id: row.get(2)?,
+                    directory: row.get(3)?,
+                    started: row.get::<_, i32>(4)? != 0,
+                    created_at: row.get(5)?,
+                    backend_type: row.get(6)?,
+                    is_dispatch_room: row.get::<_, i32>(7)? != 0,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(channels)
+    }
+
     /// Get onboarding state for a user (stored as JSON in settings table)
     pub fn get_onboarding_state(&self, user_id: &str) -> Result<Option<String>> {
         let key = format!("onboarding:{}", user_id);

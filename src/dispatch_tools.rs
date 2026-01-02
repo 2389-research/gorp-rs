@@ -2,7 +2,11 @@
 // ABOUTME: These tools give DISPATCH cross-room visibility without filesystem access.
 
 use crate::session::{Channel, DispatchTask, DispatchTaskStatus, SessionStore};
+use async_trait::async_trait;
+use mux::tool::{Tool, ToolResult};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::sync::Arc;
 
 /// Room information for DISPATCH
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +237,454 @@ pub fn list_all_rooms_summary(session_store: &SessionStore) -> Result<String, St
         .collect();
 
     Ok(summary.join("\n\n"))
+}
+
+// ============================================================================
+// mux::Tool implementations for DISPATCH agent
+// ============================================================================
+
+/// MuxTool: list_rooms - Get status of all workspace rooms
+pub struct ListRoomsTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl ListRoomsTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for ListRoomsTool {
+    fn name(&self) -> &str {
+        "list_rooms"
+    }
+
+    fn description(&self) -> &str {
+        "List all active workspace rooms with their status. Returns room name, ID, and workspace path for each room."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    }
+
+    async fn execute(&self, _params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        let rooms = list_rooms(&self.session_store)
+            .map_err(|e| anyhow::anyhow!("Failed to list rooms: {}", e))?;
+        Ok(ToolResult::text(serde_json::to_string_pretty(&rooms)?))
+    }
+}
+
+/// MuxTool: get_room_status - Get detailed info about a specific room
+pub struct GetRoomStatusTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl GetRoomStatusTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for GetRoomStatusTool {
+    fn name(&self) -> &str {
+        "get_room_status"
+    }
+
+    fn description(&self) -> &str {
+        "Get detailed status of a specific workspace room by room_id or channel_name."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "room_id": {
+                    "type": "string",
+                    "description": "Matrix room ID (e.g., !abc123:matrix.org)"
+                },
+                "channel_name": {
+                    "type": "string",
+                    "description": "Channel name (alternative to room_id)"
+                }
+            },
+            "required": []
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        #[derive(Deserialize)]
+        struct Params {
+            room_id: Option<String>,
+            channel_name: Option<String>,
+        }
+        let params: Params = serde_json::from_value(params)?;
+
+        let info = if let Some(room_id) = params.room_id {
+            get_room_status(&self.session_store, &room_id)
+        } else if let Some(name) = params.channel_name {
+            get_room_by_name(&self.session_store, &name)
+        } else {
+            return Ok(ToolResult::error(
+                "Either room_id or channel_name is required",
+            ));
+        };
+
+        match info {
+            Ok(info) => Ok(ToolResult::text(serde_json::to_string_pretty(&info)?)),
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+}
+
+/// MuxTool: dispatch_task - Send a task to a worker room
+pub struct DispatchTaskTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl DispatchTaskTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for DispatchTaskTool {
+    fn name(&self) -> &str {
+        "dispatch_task"
+    }
+
+    fn description(&self) -> &str {
+        "Create a task to be sent to a worker room. The task will be queued and executed when the worker is available."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "room_id": {
+                    "type": "string",
+                    "description": "Target room ID to send the task to"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The task prompt to send to the worker"
+                }
+            },
+            "required": ["room_id", "prompt"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        #[derive(Deserialize)]
+        struct Params {
+            room_id: String,
+            prompt: String,
+        }
+        let params: Params = serde_json::from_value(params)?;
+
+        match dispatch_task(&self.session_store, &params.room_id, &params.prompt) {
+            Ok(task) => {
+                let result = json!({
+                    "task_id": task.id,
+                    "target_room_id": task.target_room_id,
+                    "status": "pending",
+                    "message": "Task created and queued for execution"
+                });
+                Ok(ToolResult::text(serde_json::to_string_pretty(&result)?))
+            }
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+}
+
+/// MuxTool: check_task - Check status of a dispatched task
+pub struct CheckTaskTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl CheckTaskTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for CheckTaskTool {
+    fn name(&self) -> &str {
+        "check_task"
+    }
+
+    fn description(&self) -> &str {
+        "Check the status of a previously dispatched task by its ID."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The task ID returned from dispatch_task"
+                }
+            },
+            "required": ["task_id"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        #[derive(Deserialize)]
+        struct Params {
+            task_id: String,
+        }
+        let params: Params = serde_json::from_value(params)?;
+
+        match check_task(&self.session_store, &params.task_id) {
+            Ok(task) => {
+                let result = json!({
+                    "task_id": task.id,
+                    "target_room_id": task.target_room_id,
+                    "prompt": task.prompt,
+                    "status": format!("{}", task.status),
+                    "created_at": task.created_at,
+                    "completed_at": task.completed_at,
+                    "result_summary": task.result_summary,
+                });
+                Ok(ToolResult::text(serde_json::to_string_pretty(&result)?))
+            }
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+}
+
+/// MuxTool: list_pending_tasks - List all pending and in-progress tasks
+pub struct ListPendingTasksTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl ListPendingTasksTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for ListPendingTasksTool {
+    fn name(&self) -> &str {
+        "list_pending_tasks"
+    }
+
+    fn description(&self) -> &str {
+        "List all pending and in-progress tasks across all rooms."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    }
+
+    async fn execute(&self, _params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        match list_pending_tasks(&self.session_store) {
+            Ok(tasks) => {
+                let tasks: Vec<_> = tasks
+                    .into_iter()
+                    .map(|t| {
+                        json!({
+                            "task_id": t.id,
+                            "target_room_id": t.target_room_id,
+                            "prompt": t.prompt,
+                            "status": format!("{}", t.status),
+                            "created_at": t.created_at,
+                        })
+                    })
+                    .collect();
+                Ok(ToolResult::text(serde_json::to_string_pretty(&tasks)?))
+            }
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+}
+
+/// MuxTool: get_pending_events - Get events from worker rooms
+pub struct GetPendingEventsTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl GetPendingEventsTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for GetPendingEventsTool {
+    fn name(&self) -> &str {
+        "get_pending_events"
+    }
+
+    fn description(&self) -> &str {
+        "Get pending events from worker rooms that need attention (completions, errors, questions)."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+    }
+
+    async fn execute(&self, _params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        match get_pending_events(&self.session_store) {
+            Ok(events) => {
+                let events: Vec<_> = events
+                    .into_iter()
+                    .map(|e| {
+                        json!({
+                            "event_id": e.id,
+                            "source_room_id": e.source_room_id,
+                            "event_type": e.event_type,
+                            "payload": e.payload,
+                            "created_at": e.created_at,
+                        })
+                    })
+                    .collect();
+                Ok(ToolResult::text(serde_json::to_string_pretty(&events)?))
+            }
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+}
+
+/// MuxTool: reset_room - Reset a room's agent session
+pub struct ResetRoomTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl ResetRoomTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for ResetRoomTool {
+    fn name(&self) -> &str {
+        "reset_room"
+    }
+
+    fn description(&self) -> &str {
+        "Reset a room's agent session, generating a new session ID. Use when a session becomes corrupted or needs a fresh start."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "room_id": {
+                    "type": "string",
+                    "description": "The room ID to reset"
+                }
+            },
+            "required": ["room_id"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        #[derive(Deserialize)]
+        struct Params {
+            room_id: String,
+        }
+        let params: Params = serde_json::from_value(params)?;
+
+        match reset_room(&self.session_store, &params.room_id) {
+            Ok(new_session_id) => {
+                let result = json!({
+                    "room_id": params.room_id,
+                    "new_session_id": new_session_id,
+                    "message": "Session reset successfully"
+                });
+                Ok(ToolResult::text(serde_json::to_string_pretty(&result)?))
+            }
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+}
+
+/// MuxTool: acknowledge_event - Mark an event as acknowledged
+pub struct AcknowledgeEventTool {
+    session_store: Arc<SessionStore>,
+}
+
+impl AcknowledgeEventTool {
+    pub fn new(session_store: Arc<SessionStore>) -> Self {
+        Self { session_store }
+    }
+}
+
+#[async_trait]
+impl Tool for AcknowledgeEventTool {
+    fn name(&self) -> &str {
+        "acknowledge_event"
+    }
+
+    fn description(&self) -> &str {
+        "Mark an event as acknowledged so it no longer appears in pending events."
+    }
+
+    fn schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "event_id": {
+                    "type": "string",
+                    "description": "The event ID to acknowledge"
+                }
+            },
+            "required": ["event_id"]
+        })
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<ToolResult, anyhow::Error> {
+        #[derive(Deserialize)]
+        struct Params {
+            event_id: String,
+        }
+        let params: Params = serde_json::from_value(params)?;
+
+        match acknowledge_event(&self.session_store, &params.event_id) {
+            Ok(()) => {
+                let result = json!({
+                    "event_id": params.event_id,
+                    "message": "Event acknowledged"
+                });
+                Ok(ToolResult::text(serde_json::to_string_pretty(&result)?))
+            }
+            Err(e) => Ok(ToolResult::error(e)),
+        }
+    }
+}
+
+/// Create all DISPATCH tools with the given session store
+pub fn create_dispatch_tools(session_store: Arc<SessionStore>) -> Vec<Box<dyn Tool>> {
+    vec![
+        Box::new(ListRoomsTool::new(Arc::clone(&session_store))),
+        Box::new(GetRoomStatusTool::new(Arc::clone(&session_store))),
+        Box::new(DispatchTaskTool::new(Arc::clone(&session_store))),
+        Box::new(CheckTaskTool::new(Arc::clone(&session_store))),
+        Box::new(ListPendingTasksTool::new(Arc::clone(&session_store))),
+        Box::new(GetPendingEventsTool::new(Arc::clone(&session_store))),
+        Box::new(ResetRoomTool::new(Arc::clone(&session_store))),
+        Box::new(AcknowledgeEventTool::new(Arc::clone(&session_store))),
+    ]
 }
 
 #[cfg(test)]
