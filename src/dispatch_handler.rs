@@ -151,14 +151,12 @@ pub async fn handle_dispatch_message(
     );
 
     // Load or create session
+    // Always call load_session - it creates the session if it doesn't exist
     let session_id = &dispatch_channel.session_id;
-    if dispatch_channel.started {
-        // Try to resume existing session
-        if let Err(e) = agent_handle.load_session(session_id).await {
-            tracing::warn!(error = %e, session_id = %session_id, "Failed to load DISPATCH session, creating new");
-            // Session doesn't exist or is corrupted - that's fine for mux backend
-            // It will create a new one automatically
-        }
+    if let Err(e) = agent_handle.load_session(session_id).await {
+        tracing::warn!(error = %e, session_id = %session_id, "Failed to load DISPATCH session, will create new");
+        // Session doesn't exist or is corrupted - that's fine for mux backend
+        // It will create a new one automatically
     }
 
     // Build prompt with system context
