@@ -66,16 +66,13 @@ impl DirectCodexBackend {
                         is_new_session,
                     } => {
                         let _ = reply.send(Ok(()));
-                        // Spawn each prompt in its own task to allow concurrent requests
-                        // This enables multiple users to interact with the same channel simultaneously
-                        let config_clone = config.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) =
-                                run_prompt(&config_clone, &session_id, &text, event_tx, is_new_session).await
-                            {
-                                tracing::error!(error = %e, "Direct Codex prompt failed");
-                            }
-                        });
+                        // Run prompt sequentially per-channel to maintain session state integrity
+                        // Cross-channel concurrency is handled by each channel having its own AgentHandle
+                        if let Err(e) =
+                            run_prompt(&config, &session_id, &text, event_tx, is_new_session).await
+                        {
+                            tracing::error!(error = %e, "Direct Codex prompt failed");
+                        }
                     }
                     Command::Cancel { reply, .. } => {
                         // TODO: Kill the running process
