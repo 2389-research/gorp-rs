@@ -14,18 +14,14 @@ use tokio::sync::mpsc;
 /// Configuration for the Direct Codex CLI backend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectCodexConfig {
-    /// Path to the codex binary
-    #[serde(default = "default_binary")]
+    /// Path to the CLI binary (e.g., "claude" for Claude Code CLI)
+    /// Required - no default, must be explicitly set
     pub binary: String,
     /// Working directory for the agent
     pub working_dir: PathBuf,
     /// Sandbox mode: read-only, workspace-write, or danger-full-access
     #[serde(default = "default_sandbox")]
     pub sandbox_mode: String,
-}
-
-fn default_binary() -> String {
-    "codex".to_string()
 }
 
 fn default_sandbox() -> String {
@@ -38,6 +34,9 @@ pub struct DirectCodexBackend {
 
 impl DirectCodexBackend {
     pub fn new(config: DirectCodexConfig) -> Result<Self> {
+        if config.binary.is_empty() {
+            anyhow::bail!("direct backend requires 'binary' to be set (e.g., binary = \"claude\")");
+        }
         Ok(Self { config })
     }
 
