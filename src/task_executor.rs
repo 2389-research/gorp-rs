@@ -59,13 +59,25 @@ async fn run_executor_loop(
 
         // Process each pending task
         for task in pending_tasks {
-            // Mark as in_progress first to prevent duplicate execution
-            if let Err(e) = session_store.update_dispatch_task_status(
+            // Atomically claim the task using compare-and-swap
+            // Only one executor can successfully claim a task, preventing duplicate execution
+            let claimed = match session_store.claim_dispatch_task(
                 &task.id,
+                DispatchTaskStatus::Pending,
                 DispatchTaskStatus::InProgress,
-                None,
             ) {
-                tracing::error!(task_id = %task.id, error = %e, "Failed to claim task");
+                Ok(true) => true,
+                Ok(false) => {
+                    tracing::debug!(task_id = %task.id, "Task already claimed by another executor");
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!(task_id = %task.id, error = %e, "Failed to claim task");
+                    continue;
+                }
+            };
+
+            if !claimed {
                 continue;
             }
 

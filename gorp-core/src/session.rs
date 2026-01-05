@@ -718,11 +718,32 @@ impl SessionStore {
     }
 
     /// Get existing DISPATCH channel or create one for this room
+    /// Handles race condition where multiple threads try to create the same channel
     pub fn get_or_create_dispatch_channel(&self, room_id: &str) -> Result<Channel> {
+        // First check if channel already exists
         if let Some(channel) = self.get_dispatch_channel(room_id)? {
             return Ok(channel);
         }
-        self.create_dispatch_channel(room_id)
+
+        // Try to create the channel
+        match self.create_dispatch_channel(room_id) {
+            Ok(channel) => Ok(channel),
+            Err(e) => {
+                // If we got a UNIQUE constraint violation, another thread created the channel
+                // between our check and insert. Fetch the existing channel.
+                let err_msg = e.to_string();
+                if err_msg.contains("UNIQUE constraint failed") {
+                    tracing::debug!(
+                        room_id = %room_id,
+                        "DISPATCH channel created by concurrent operation, fetching existing"
+                    );
+                    self.get_dispatch_channel(room_id)?
+                        .ok_or_else(|| anyhow::anyhow!("Channel disappeared after UNIQUE constraint error"))
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// List all DISPATCH channels (for startup notifications)
@@ -1049,6 +1070,29 @@ impl SessionStore {
         )?;
 
         Ok(())
+    }
+
+    /// Atomically claim a task by updating its status only if it's currently in the expected status
+    /// Returns true if the task was successfully claimed (status was updated)
+    /// Returns false if the task was already claimed by another process (status didn't match)
+    /// This provides compare-and-swap semantics to prevent duplicate task execution
+    pub fn claim_dispatch_task(
+        &self,
+        id: &str,
+        expected_status: DispatchTaskStatus,
+        new_status: DispatchTaskStatus,
+    ) -> Result<bool> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+
+        let rows_affected = db.execute(
+            "UPDATE dispatch_tasks SET status = ?1 WHERE id = ?2 AND status = ?3",
+            params![new_status.to_string(), id, expected_status.to_string()],
+        )?;
+
+        Ok(rows_affected > 0)
     }
 
     /// List dispatch tasks, optionally filtered by status
