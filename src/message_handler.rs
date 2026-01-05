@@ -502,6 +502,7 @@ pub async fn handle_message(
 
     // Prepare session (creates session if needed)
     // Uses prepare_session_async which minimizes lock holding for concurrent access
+    tracing::info!(channel = %channel.channel_name, "[CONCURRENCY] prepare_session_async START");
     let (session_handle, session_id, is_new_session) =
         match prepare_session_async(&warm_manager, &channel).await {
             Ok((handle, sid, is_new)) => (handle, sid, is_new),
@@ -518,6 +519,8 @@ pub async fn handle_message(
             }
         };
 
+    tracing::info!(channel = %channel.channel_name, "[CONCURRENCY] prepare_session_async DONE");
+
     // Update session store if a new session was created
     if is_new_session {
         if let Err(e) = session_store.update_session_id(room.room_id().as_str(), &session_id) {
@@ -527,7 +530,7 @@ pub async fn handle_message(
 
     // Send prompt and get event receiver directly - no intermediate channel needed
     // The backend streams events through the returned EventReceiver
-    tracing::info!(channel = %channel.channel_name, session_id = %session_id, "Sending prompt to agent");
+    tracing::info!(channel = %channel.channel_name, session_id = %session_id, "[CONCURRENCY] send_prompt START");
 
     let mut event_rx =
         match crate::warm_session::send_prompt_with_handle(&session_handle, &session_id, &prompt)
@@ -547,6 +550,8 @@ pub async fn handle_message(
             }
         };
 
+    tracing::info!(channel = %channel.channel_name, "[CONCURRENCY] send_prompt DONE - got receiver");
+
     // Check if debug mode is enabled for this channel
     // Debug mode shows tool usage in Matrix (create .gorp/enable-debug to enable)
     let debug_enabled = is_debug_enabled(&channel.directory);
@@ -559,7 +564,7 @@ pub async fn handle_message(
     let mut tools_used: Vec<String> = Vec::new();
     let mut session_id_from_event: Option<String> = None;
 
-    tracing::info!(channel = %channel.channel_name, "Starting event loop - waiting for ACP events");
+    tracing::info!(channel = %channel.channel_name, "[CONCURRENCY] event_loop START - waiting for events");
     let mut event_count = 0;
 
     while let Some(event) = event_rx.recv().await {
@@ -736,7 +741,7 @@ pub async fn handle_message(
         }
     }
 
-    tracing::info!(channel = %channel.channel_name, event_count, "Event loop finished");
+    tracing::info!(channel = %channel.channel_name, event_count, "[CONCURRENCY] event_loop DONE");
 
     // Check if we got a response
     if final_response.is_empty() {
