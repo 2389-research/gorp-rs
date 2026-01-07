@@ -123,19 +123,22 @@ pub async fn start_scheduler(
                         {
                             let channel_name = schedule.channel_name.clone();
 
-                            // Pre-warm directly (without spawning to avoid Send issues)
-                            let mut mgr = warm_manager.write().await;
-                            if let Err(e) = mgr.pre_warm(&channel).await {
-                                tracing::warn!(
-                                    channel = %channel_name,
-                                    error = %e,
-                                    "Pre-warm failed for upcoming schedule"
-                                );
-                            } else {
-                                tracing::debug!(
-                                    channel = %channel_name,
-                                    "Pre-warmed session for upcoming schedule"
-                                );
+                            // Pre-warm using prepare_session_async which minimizes lock holding
+                            // This allows concurrent pre-warming without blocking other channels
+                            match prepare_session_async(&warm_manager, &channel).await {
+                                Ok(_) => {
+                                    tracing::debug!(
+                                        channel = %channel_name,
+                                        "Pre-warmed session for upcoming schedule"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        channel = %channel_name,
+                                        error = %e,
+                                        "Pre-warm failed for upcoming schedule"
+                                    );
+                                }
                             }
                         }
                     }
