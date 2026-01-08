@@ -109,12 +109,13 @@ pub async fn handle_dispatch_message(
         tracing::warn!(error = %e, "Failed to create DISPATCH working directory");
     }
 
-    // Create MuxConfig from warm_config
+    // Create MuxConfig from warm_config - model must be configured
+    let model = warm_config.model.clone().ok_or_else(|| {
+        anyhow::anyhow!("No model configured in mux config. Set 'model' in config.toml under [mux] section.")
+    })?;
+
     let mux_config = MuxConfig {
-        model: warm_config
-            .model
-            .clone()
-            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string()),
+        model,
         max_tokens: warm_config.max_tokens.unwrap_or(8192),
         working_dir: dispatch_working_dir.clone(),
         global_system_prompt_path: warm_config
