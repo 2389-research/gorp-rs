@@ -47,6 +47,11 @@ gorp-core = { path = "gorp-core" }
 # For DISPATCH tools
 mux = { git = "https://github.com/2389-research/mux-rs", branch = "main" }
 
+# GUI (desktop app)
+iced = { version = "0.13", features = ["tokio", "svg", "image"] }
+tray-icon = "0.19"
+global-hotkey = "0.6"
+
 [dev-dependencies]
 serial_test = "3.0"
 tempfile = "3.10"

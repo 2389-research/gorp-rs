@@ -1,6 +1,9 @@
 // ABOUTME: Root library module exposing all public modules
 // ABOUTME: Provides access to config, session, matrix client, and webhook modules
 
+// GUI module (desktop app)
+pub mod gui;
+
 // Matrix-specific modules (stay local)
 pub mod admin;
 pub mod dispatch_handler;

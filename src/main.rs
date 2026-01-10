@@ -10,7 +10,7 @@ use gorp::{
     scheduler::{start_scheduler, SchedulerStore},
     session::SessionStore,
     task_executor::start_task_executor,
-    warm_session::{create_shared_manager, SharedWarmSessionManager, WarmConfig},
+    warm_session::SharedWarmSessionManager,
     webhook,
 };
 use matrix_sdk::{
@@ -284,8 +284,6 @@ enum ScheduleAction {
     },
 }
 
-/// Timeout for initial sync operation (uploading device keys, receiving room state)
-const INITIAL_SYNC_TIMEOUT_SECS: u64 = 60;
 
 /// Validate recovery key format (Base58 encoded, typically 48+ chars with spaces)
 fn is_valid_recovery_key_format(key: &str) -> bool {
@@ -716,11 +714,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // No subcommand - print help with ASCII banner
-            use clap::CommandFactory;
-            Cli::command().print_help()?;
-            println!(); // Add newline after help
-            Ok(())
+            // No subcommand - launch GUI (desktop app mode)
+            gorp::gui::run_gui()
         }
         Some(Commands::Start) => run_start().await,
         Some(Commands::Config { action }) => run_config(action),
@@ -1062,72 +1057,16 @@ async fn run_start() -> Result<()> {
         "Configuration loaded"
     );
 
-    // Create warm session manager
-    let warm_config = WarmConfig {
-        keep_alive_duration: std::time::Duration::from_secs(config.backend.keep_alive_secs),
-        pre_warm_lead_time: std::time::Duration::from_secs(config.backend.pre_warm_secs),
-        agent_binary: config
-            .backend
-            .binary
-            .clone()
-            .unwrap_or_else(|| "claude".to_string()),
-        backend_type: config.backend.backend_type.clone(),
-        model: config.backend.model.clone(),
-        max_tokens: config.backend.max_tokens,
-        global_system_prompt_path: config.backend.global_system_prompt_path.clone(),
-        mcp_servers: config.backend.mcp_servers.clone(),
-    };
-    let warm_manager = create_shared_manager(warm_config);
+    // Initialize server state (single source of truth - shared with GUI mode)
+    let server = gorp::gui::ServerState::initialize(config).await?;
 
-    // Spawn cleanup task
-    let cleanup_manager = warm_manager.clone();
-    let cleanup_interval = config.backend.keep_alive_secs / 4; // Check 4x per keep-alive period
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(cleanup_interval));
-        loop {
-            interval.tick().await;
-            let mut manager = cleanup_manager.write().await;
-            manager.cleanup_stale();
-        }
-    });
-
-    // Keep warm_manager alive for future use (will be connected to handlers in later tasks)
-    let _ = &warm_manager;
-    tracing::info!(
-        "Warm session manager initialized with {}s keep-alive",
-        config.backend.keep_alive_secs
-    );
-
-    // Initialize session store
-    let session_store = SessionStore::new(&config.workspace.path)?;
-    tracing::info!(workspace = %config.workspace.path, "Session store initialized");
-
-    // Initialize scheduler store (shares database with session store)
-    let scheduler_store = SchedulerStore::new(session_store.db_connection());
-    scheduler_store.initialize_schema()?;
-    tracing::info!("Scheduler store initialized");
-
-    // Create Matrix client
-    let client = matrix_client::create_client(
-        &config.matrix.home_server,
-        &config.matrix.user_id,
-        &config.matrix.device_name,
-    )
-    .await?;
-
-    // Login
-    matrix_client::login(
-        &client,
-        &config.matrix.user_id,
-        config.matrix.password.as_deref(),
-        config.matrix.access_token.as_deref(),
-        &config.matrix.device_name,
-    )
-    .await?;
-
-    // Wrap config and session store in Arc for sharing across handlers
-    let config_arc = Arc::new(config);
-    let session_store_arc = Arc::new(session_store);
+    // Extract fields for use in headless-specific code
+    let config_arc = Arc::clone(&server.config);
+    let session_store_arc = Arc::clone(&server.session_store);
+    let scheduler_store = server.scheduler_store.clone();
+    let warm_manager = server.warm_manager.clone();
+    let client = server.matrix_client.clone();
+    let sync_token = server.sync_token.clone();
 
     // Start webhook server in background (can run before initial sync)
     let webhook_port = config_arc.webhook.port;
@@ -1178,20 +1117,7 @@ async fn run_start() -> Result<()> {
         });
     });
 
-    // Perform initial sync BEFORE registering event handlers
-    // This ensures device encryption keys are uploaded and room keys are received
-    // before any events are processed. Prevents race conditions with encrypted rooms.
-    tracing::info!("Performing initial sync to set up encryption...");
-    let response = tokio::time::timeout(
-        Duration::from_secs(INITIAL_SYNC_TIMEOUT_SECS),
-        client.sync_once(SyncSettings::default()),
-    )
-    .await
-    .context("Initial sync timed out - homeserver may be unresponsive")?
-    .context("Initial sync failed - unable to establish encryption keys with homeserver")?;
-
-    tracing::info!("Initial sync complete - encryption keys exchanged");
-
+    // Initial sync was performed by ServerState::initialize()
     // Record startup time AFTER initial sync completes
     // This filters out historical messages from the initial sync batch
     let startup_time = chrono::Utc::now();
@@ -1319,7 +1245,7 @@ async fn run_start() -> Result<()> {
 
     // Start continuous sync loop with the sync token from initial sync
     // Use LocalSet because message handlers with ACP client futures are !Send
-    let settings = SyncSettings::default().token(response.next_batch);
+    let settings = SyncSettings::default().token(sync_token);
     tracing::info!("Starting continuous sync loop with LocalSet");
 
     let local = tokio::task::LocalSet::new();
