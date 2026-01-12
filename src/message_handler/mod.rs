@@ -12,13 +12,14 @@ pub mod schedule_import;
 pub mod traits;
 
 // Re-exports from submodules for backward compatibility
+pub use attachments::download_attachment;
+pub use context::{route_to_dispatch, write_context_file};
 pub use helpers::{is_debug_enabled, looks_like_cron, truncate_str, validate_channel_name};
 pub use schedule_import::parse_schedule_input;
 pub use traits::{MatrixRoom, MessageSender, MockRoom};
 
 use anyhow::Result;
 use matrix_sdk::{
-    media::{MediaFormat, MediaRequestParameters},
     room::Room,
     ruma::events::room::message::RoomMessageEventContent,
     Client, RoomState,
@@ -33,113 +34,6 @@ use crate::{
     utils::markdown_to_html,
     warm_session::SharedWarmSessionManager,
 };
-use std::path::Path;
-
-
-/// Write context file for MCP tools to read
-/// This tells tools like gorp_schedule_prompt which channel/room they're operating in
-async fn write_context_file(
-    channel_dir: &str,
-    room_id: &str,
-    channel_name: &str,
-    session_id: &str,
-) -> Result<()> {
-    let gorp_dir = Path::new(channel_dir).join(".gorp");
-    tokio::fs::create_dir_all(&gorp_dir).await?;
-
-    let context = serde_json::json!({
-        "room_id": room_id,
-        "channel_name": channel_name,
-        "session_id": session_id,
-        "updated_at": chrono::Utc::now().to_rfc3339()
-    });
-
-    let context_path = gorp_dir.join("context.json");
-    tokio::fs::write(&context_path, serde_json::to_string_pretty(&context)?).await?;
-
-    tracing::debug!(path = %context_path.display(), "Wrote MCP context file");
-    Ok(())
-}
-
-/// Download an attachment from Matrix and save it to the workspace
-/// Returns the relative path to the saved file
-async fn download_attachment(
-    client: &Client,
-    source: &matrix_sdk::ruma::events::room::MediaSource,
-    filename: &str,
-    workspace_dir: &str,
-) -> Result<String> {
-    use tokio::io::AsyncWriteExt;
-
-    // Create attachments directory
-    let attachments_dir = Path::new(workspace_dir).join("attachments");
-    tokio::fs::create_dir_all(&attachments_dir).await?;
-
-    // Generate unique filename to avoid collisions
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let safe_filename = filename
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .collect::<String>();
-    let unique_filename = format!("{}_{}", timestamp, safe_filename);
-    let file_path = attachments_dir.join(&unique_filename);
-
-    // Download the media
-    let request = MediaRequestParameters {
-        source: source.clone(),
-        format: MediaFormat::File,
-    };
-
-    let data = client
-        .media()
-        .get_media_content(&request, true) // use_cache=true
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to download media: {}", e))?;
-
-    // Write to file
-    let mut file = tokio::fs::File::create(&file_path).await?;
-    file.write_all(&data).await?;
-
-    tracing::info!(
-        filename = %unique_filename,
-        size = data.len(),
-        "Downloaded attachment"
-    );
-
-    Ok(format!("attachments/{}", unique_filename))
-}
-
-/// Route an agent event to the DISPATCH control plane
-///
-/// When an agent emits a custom event with a "dispatch:" prefix,
-/// this function stores it in the dispatch_events table for
-/// later processing by the DISPATCH agent.
-async fn route_to_dispatch(
-    session_store: &SessionStore,
-    source_room_id: &str,
-    event_kind: &str,
-    payload: &serde_json::Value,
-) -> Result<()> {
-    // Create dispatch event for storage
-    let event = crate::session::DispatchEvent {
-        id: uuid::Uuid::new_v4().to_string(),
-        source_room_id: source_room_id.to_string(),
-        event_type: event_kind.to_string(),
-        payload: payload.clone(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        acknowledged_at: None,
-    };
-
-    session_store.insert_dispatch_event(&event)?;
-    tracing::info!(
-        event_id = %event.id,
-        event_type = %event_kind,
-        source_room = %source_room_id,
-        "Event queued for DISPATCH"
-    );
-
-    Ok(())
-}
 
 pub async fn handle_message(
     room: Room,
