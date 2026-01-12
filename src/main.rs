@@ -715,7 +715,15 @@ async fn main() -> Result<()> {
     match cli.command {
         None => {
             // No subcommand - launch GUI (desktop app mode)
-            gorp::gui::run_gui()
+            #[cfg(feature = "gui")]
+            {
+                gorp::gui::run_gui()
+            }
+            #[cfg(not(feature = "gui"))]
+            {
+                eprintln!("GUI not available. Use 'gorp start' for headless mode or build with --features gui");
+                std::process::exit(1);
+            }
         }
         Some(Commands::Start) => run_start().await,
         Some(Commands::Config { action }) => run_config(action),

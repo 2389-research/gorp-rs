@@ -4,7 +4,8 @@
 // Server state module (shared between GUI and headless mode)
 pub mod server;
 
-// GUI module (desktop app)
+// GUI module (desktop app) - only available with `gui` feature
+#[cfg(feature = "gui")]
 pub mod gui;
 
 // Matrix-specific modules (stay local)

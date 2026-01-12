@@ -1,5 +1,5 @@
 // ABOUTME: GUI module entry point - desktop app using iced framework
-// ABOUTME: Provides run_gui() function and re-exports ServerState from crate::server
+// ABOUTME: Provides run_gui() function to launch the desktop application
 
 pub mod app;
 pub mod components;
@@ -9,9 +9,6 @@ pub mod views;
 
 use crate::config::Config;
 use anyhow::Result;
-
-// Re-export ServerState and RoomInfo from server module for backward compatibility
-pub use crate::server::{RoomInfo, ServerState};
 
 /// Launch the GUI application.
 /// Initializes server components and runs iced application.

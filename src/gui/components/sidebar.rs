@@ -7,7 +7,7 @@ use crate::gui::theme::{
     button_room, button_room_active, sidebar_style,
 };
 use crate::gui::views::View;
-use crate::gui::RoomInfo;
+use crate::server::RoomInfo;
 use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, Column, Space};
 use iced::{Alignment, Border, Element, Length, Padding};
 

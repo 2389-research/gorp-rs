@@ -1,17 +1,18 @@
 // ABOUTME: Main iced Application implementation for gorp desktop
 // ABOUTME: Manages app state, message routing, and view rendering
 
+use super::components::common;
 use super::components::hotkey::{self, HotkeyManager};
 use super::components::tray::{self, ConnectionState};
 use super::sync::{self, MatrixEvent};
 use super::theme::{
-    self, colors, radius, spacing, text_size, backdrop_style, button_primary,
+    self, colors, radius, spacing, text_size, button_primary,
     button_secondary, content_style, modal_style, text_input_style,
 };
 use super::views::chat::{chat_scroll_id, ChatMessage};
 use super::views::{self, View};
-use super::{RoomInfo, ServerState};
 use crate::config::Config;
+use crate::server::{RoomInfo, ServerState};
 use crate::scheduler::ScheduledPrompt;
 use global_hotkey::HotKeyState;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
@@ -1258,11 +1259,6 @@ impl GorpApp {
 
     /// Render the quick prompt modal overlay
     fn quick_prompt_modal(&self) -> Element<'_, Message> {
-        let backdrop = container(Space::new(0, 0))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(backdrop_style);
-
         let input = text_input("Ask Claude anything...", &self.quick_prompt_input)
             .on_input(Message::QuickPromptInputChanged)
             .on_submit(Message::QuickPromptSubmit)
@@ -1323,22 +1319,11 @@ impl GorpApp {
         )
         .style(modal_style);
 
-        let centered_modal = container(modal_content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill);
-
-        iced::widget::stack![backdrop, centered_modal].into()
+        common::modal_frame(modal_content.into())
     }
 
     /// Render the create room modal overlay
     fn create_room_modal(&self) -> Element<'_, Message> {
-        let backdrop = container(Space::new(0, 0))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(backdrop_style);
-
         let input = text_input("Room name (e.g., my-project)", &self.new_room_name)
             .on_input(Message::RoomNameChanged)
             .on_submit(Message::CreateRoom)
@@ -1409,13 +1394,7 @@ impl GorpApp {
         )
         .style(modal_style);
 
-        let centered_modal = container(modal_content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill);
-
-        iced::widget::stack![backdrop, centered_modal].into()
+        common::modal_frame(modal_content.into())
     }
 
     fn theme(&self) -> Theme {

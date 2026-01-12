@@ -3,7 +3,7 @@
 
 use crate::gui::app::Message;
 use crate::gui::theme::{colors, radius, spacing, text_size, content_style, stat_card_style};
-use crate::gui::ServerState;
+use crate::server::ServerState;
 use iced::widget::{column, container, row, text, Space};
 use iced::{Alignment, Border, Element, Length};
 use std::sync::Arc;

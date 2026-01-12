@@ -2,11 +2,12 @@
 // ABOUTME: Displays schedule cards with status badges, actions, and create form modal
 
 use crate::gui::app::Message;
+use crate::gui::components::common;
 use crate::gui::theme::{
     colors, radius, spacing, text_size, button_primary, button_secondary,
-    content_style, modal_style, backdrop_style, stat_card_style, text_input_style,
+    content_style, modal_style, stat_card_style, text_input_style,
 };
-use crate::gui::RoomInfo;
+use crate::server::RoomInfo;
 use crate::scheduler::{ScheduleStatus, ScheduledPrompt};
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input, Column, Space};
 use iced::{Alignment, Border, Element, Length};
@@ -165,23 +166,6 @@ fn schedule_card<'a>(schedule: &'a ScheduledPrompt) -> Element<'a, Message> {
     .into()
 }
 
-/// Loading state
-fn loading_state<'a>() -> Element<'a, Message> {
-    container(
-        column![
-            text("◌").size(48.0).color(colors::ACCENT_PRIMARY),
-            Space::with_height(spacing::MD),
-            text("Loading schedules...")
-                .size(text_size::LARGE)
-                .color(colors::TEXT_PRIMARY),
-        ]
-        .align_x(Alignment::Center),
-    )
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .into()
-}
-
 /// Empty state when no schedules
 fn empty_state<'a>() -> Element<'a, Message> {
     container(
@@ -223,11 +207,6 @@ fn create_form_modal<'a>(
     error: Option<&'a str>,
     rooms: &'a [RoomInfo],
 ) -> Element<'a, Message> {
-    let backdrop = container(Space::new(0, 0))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(backdrop_style);
-
     // Channel picker (using text input for now - picklist needs owned strings)
     let room_names: Vec<String> = rooms.iter().map(|r| r.name.clone()).collect();
     let selected_room = if channel.is_empty() { None } else { Some(channel.to_string()) };
@@ -317,13 +296,7 @@ fn create_form_modal<'a>(
     )
     .style(modal_style);
 
-    let centered = container(form_content)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
-
-    iced::widget::stack![backdrop, centered].into()
+    common::modal_frame(form_content.into())
 }
 
 pub fn view<'a>(
@@ -364,7 +337,7 @@ pub fn view<'a>(
 
     // Main content
     let main_content: Element<'a, Message> = if loading {
-        loading_state()
+        common::loading_state("Loading schedules...")
     } else if schedules.is_empty() {
         empty_state()
     } else {
