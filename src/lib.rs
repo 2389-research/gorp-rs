@@ -1,6 +1,9 @@
 // ABOUTME: Root library module exposing all public modules
 // ABOUTME: Provides access to config, session, matrix client, and webhook modules
 
+// Server state module (shared between GUI and headless mode)
+pub mod server;
+
 // GUI module (desktop app)
 pub mod gui;
 

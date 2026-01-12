@@ -1058,7 +1058,7 @@ async fn run_start() -> Result<()> {
     );
 
     // Initialize server state (single source of truth - shared with GUI mode)
-    let server = gorp::gui::ServerState::initialize(config).await?;
+    let server = gorp::server::ServerState::initialize(config).await?;
 
     // Extract fields for use in headless-specific code
     let config_arc = Arc::clone(&server.config);
