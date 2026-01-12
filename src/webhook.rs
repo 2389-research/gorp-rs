@@ -5,11 +5,12 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    middleware,
-    response::{IntoResponse, Redirect},
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
+#[cfg(feature = "admin")]
+use axum::{middleware, response::Redirect};
 use matrix_sdk::{
     ruma::{events::room::message::RoomMessageEventContent, OwnedRoomId},
     Client,
@@ -22,8 +23,9 @@ use tokio::{
 };
 use tower_http::trace::TraceLayer;
 
+#[cfg(feature = "admin")]
+use crate::admin::{admin_router, auth_middleware, AdminState};
 use crate::{
-    admin::{admin_router, auth_middleware, AdminState},
     config::Config,
     mcp::{mcp_handler, McpState},
     metrics,
@@ -122,12 +124,14 @@ pub async fn start_webhook_server(
         .unwrap_or(0);
     metrics::set_active_schedules(active_schedule_count as u64);
 
+    #[cfg(feature = "admin")]
     let admin_state = AdminState {
         config: Arc::clone(&state.config),
         session_store: state.session_store.clone(),
         scheduler_store: scheduler_store.clone(),
     };
 
+    #[cfg(feature = "admin")]
     let admin_routes = admin_router()
         .layer(middleware::from_fn_with_state(
             admin_state.clone(),
@@ -154,9 +158,26 @@ pub async fn start_webhook_server(
         .route("/metrics", get(metrics_handler))
         .with_state(Arc::new(metrics_handle));
 
+    #[cfg(feature = "admin")]
     let app = Router::new()
         .route("/", get(|| async { Redirect::permanent("/admin") }))
         .nest("/admin", admin_routes)
+        .merge(mcp_routes)
+        .merge(webhook_routes)
+        .merge(metrics_routes)
+        .layer(TraceLayer::new_for_http());
+
+    #[cfg(not(feature = "admin"))]
+    let app = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                Json(serde_json::json!({
+                    "status": "ok",
+                    "message": "gorp webhook server"
+                }))
+            }),
+        )
         .merge(mcp_routes)
         .merge(webhook_routes)
         .merge(metrics_routes)

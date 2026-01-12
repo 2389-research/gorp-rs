@@ -9,6 +9,7 @@ pub mod server;
 pub mod gui;
 
 // Matrix-specific modules (stay local)
+#[cfg(feature = "admin")]
 pub mod admin;
 pub mod dispatch_handler;
 pub mod dispatch_system_prompt;
