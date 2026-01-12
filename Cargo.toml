@@ -6,6 +6,11 @@ name = "gorp"
 version = "0.3.1"
 edition = "2021"
 
+[features]
+default = ["gui", "admin"]
+gui = ["dep:iced", "dep:tray-icon", "dep:global-hotkey"]
+admin = ["dep:askama", "dep:tower-sessions"]
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 matrix-sdk = { version = "0.16", features = ["e2e-encryption", "sqlite"] }
@@ -31,8 +36,8 @@ cron = "0.15"
 regex = "1.12.2"
 chrono-tz = "0.10.4"
 clap = { version = "4.5.53", features = ["derive"] }
-askama = "0.14"
-tower-sessions = { version = "0.14", features = ["memory-store"] }
+askama = { version = "0.14", optional = true }
+tower-sessions = { version = "0.14", features = ["memory-store"], optional = true }
 mime_guess = "2.0"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
@@ -48,9 +53,9 @@ gorp-core = { path = "gorp-core" }
 mux = { git = "https://github.com/2389-research/mux-rs", branch = "main" }
 
 # GUI (desktop app)
-iced = { version = "0.13", features = ["tokio", "svg", "image"] }
-tray-icon = "0.19"
-global-hotkey = "0.6"
+iced = { version = "0.13", features = ["tokio", "svg", "image"], optional = true }
+tray-icon = { version = "0.19", optional = true }
+global-hotkey = { version = "0.6", optional = true }
 
 [dev-dependencies]
 serial_test = "3.0"
