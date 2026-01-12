@@ -1146,14 +1146,7 @@ pub async fn handle_matrix_command(
         }
         "reset" => {
             // Reset Claude session for this channel (generates new session ID)
-            if is_dm {
-                room.send(RoomMessageEventContent::text_plain(
-                    "❌ The !reset command only works in channel rooms.",
-                ))
-                .await?;
-                return Ok(());
-            }
-
+            // Note: DM resets with channel name argument are handled by "reset" if is_dm above
             let Some(channel) = session_store.get_by_room(room.room_id().as_str())? else {
                 room.send(RoomMessageEventContent::text_plain(
                     "No channel attached to this room.",
