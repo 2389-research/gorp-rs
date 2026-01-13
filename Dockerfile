@@ -13,7 +13,6 @@ COPY Cargo.toml Cargo.lock ./
 # Copy workspace crates (local path dependencies)
 COPY gorp-agent ./gorp-agent
 COPY gorp-core ./gorp-core
-COPY gorp-ffi ./gorp-ffi
 
 # Create dummy source to build dependencies only
 RUN mkdir src && \

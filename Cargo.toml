@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "gorp-agent", "gorp-core", "gorp-ffi"]
+members = [".", "gorp-agent", "gorp-core"]
 
 [package]
 name = "gorp"
