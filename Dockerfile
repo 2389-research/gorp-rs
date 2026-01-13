@@ -10,8 +10,9 @@ WORKDIR /app
 # Copy manifests first (changes rarely)
 COPY Cargo.toml Cargo.lock ./
 
-# Copy gorp-agent crate (local path dependency)
+# Copy workspace crates (local path dependencies)
 COPY gorp-agent ./gorp-agent
+COPY gorp-core ./gorp-core
 
 # Create dummy source to build dependencies only
 RUN mkdir src && \
@@ -29,7 +30,8 @@ RUN mkdir -p ~/.ssh && \
 
 # Build dependencies (this layer is cached unless Cargo.toml/lock changes)
 # Uses SSH agent forwarding for private git repos
-RUN --mount=type=ssh cargo build --release && \
+# Build headless (no GUI/admin) for server deployment
+RUN --mount=type=ssh cargo build --release --no-default-features && \
     rm -rf src templates
 
 # Now copy real source code, templates, and docs
@@ -43,7 +45,8 @@ RUN touch src/main.rs
 
 # Build the actual binary (deps are already cached)
 # Uses SSH agent forwarding for private git repos
-RUN --mount=type=ssh cargo build --release
+# Build headless (no GUI/admin) for server deployment
+RUN --mount=type=ssh cargo build --release --no-default-features
 
 # Runtime stage
 FROM debian:bookworm-slim
