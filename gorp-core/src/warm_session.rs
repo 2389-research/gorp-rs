@@ -100,6 +100,11 @@ impl WarmSessionManager {
         &self.config.agent_binary
     }
 
+    /// Get the backend type name (e.g., "acp", "mux", "direct")
+    pub fn backend_type(&self) -> &str {
+        &self.config.backend_type
+    }
+
     /// Get the keep-alive duration
     pub fn keep_alive_duration(&self) -> Duration {
         self.config.keep_alive_duration

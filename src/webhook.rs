@@ -389,11 +389,12 @@ async fn webhook_handler(
             );
             metrics::record_webhook_request("error");
             metrics::record_error("webhook_worker_dropped");
+            let backend = &state.config.backend.backend_type;
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
                     success: false,
-                    message: "Agent worker failed to respond".to_string(),
+                    message: format!("{} backend worker failed to respond", backend),
                 }),
             );
         }
@@ -408,7 +409,8 @@ async fn webhook_handler(
                 error = %e,
                 "Warm session worker returned error"
             );
-            let error_msg = format!("⚠️ Agent error: {}", e);
+            let backend = &state.config.backend.backend_type;
+            let error_msg = format!("⚠️ {} backend error: {}", backend, e);
             let _ = room
                 .send(RoomMessageEventContent::text_plain(&error_msg))
                 .await;
@@ -418,7 +420,7 @@ async fn webhook_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
                     success: false,
-                    message: format!("Agent error: {}", e),
+                    message: format!("{} backend error: {}", backend, e),
                 }),
             );
         }
@@ -682,8 +684,9 @@ async fn process_webhook_job(
     }
 
     if response.trim().is_empty() {
-        metrics::record_error("acp_no_response");
-        return Err(anyhow::anyhow!("Agent finished without a response"));
+        let backend_type = warm_manager.read().await.backend_type().to_string();
+        metrics::record_error("agent_no_response");
+        return Err(anyhow::anyhow!("{} backend finished without a response", backend_type));
     }
 
     // Update session ID if Claude CLI reported a new one

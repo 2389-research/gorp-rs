@@ -396,20 +396,23 @@ pub async fn process_chat_message(
         typing_handle.abort();
         room.typing_notice(false).await?;
 
-        metrics::record_error("acp_no_response");
+        let backend_type = warm_manager.read().await.backend_type().to_string();
+        metrics::record_error("agent_no_response");
         room.send(RoomMessageEventContent::text_plain(
-            "⚠️ Agent finished without a response",
+            format!("⚠️ {} backend finished without a response", backend_type),
         ))
         .await?;
         return Ok(());
     }
 
     let claude_duration = claude_start.elapsed().as_secs_f64();
+    let backend_type = warm_manager.read().await.backend_type().to_string();
     metrics::record_claude_duration(claude_duration);
     metrics::record_claude_response_length(final_response.len());
     tracing::info!(
         response_length = final_response.len(),
         tools_count = tools_used.len(),
+        backend = %backend_type,
         "Agent responded"
     );
 

@@ -158,10 +158,12 @@ async fn execute_schedule(
     warm_manager: SharedWarmSessionManager,
 ) {
     let prompt_preview: String = schedule.prompt.chars().take(50).collect();
+    let backend_type = warm_manager.read().await.backend_type().to_string();
     tracing::info!(
         schedule_id = %schedule.id,
         channel = %schedule.channel_name,
         prompt_preview = %prompt_preview,
+        backend = %backend_type,
         "Executing scheduled prompt"
     );
 
@@ -474,18 +476,21 @@ async fn execute_schedule(
             tracing::error!(
                 schedule_id = %schedule.id,
                 prompt = %schedule.prompt,
+                backend = %backend_type,
                 "Agent returned empty response with error for scheduled task"
             );
-            let error_msg =
-                "⚠️ Scheduled task failed: Agent encountered an error and returned no response.";
+            let error_msg = format!(
+                "⚠️ Scheduled task failed: {} backend encountered an error and returned no response.",
+                backend_type
+            );
             if let Err(e) = room
-                .send(RoomMessageEventContent::text_plain(error_msg))
+                .send(RoomMessageEventContent::text_plain(&error_msg))
                 .await
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
             if let Err(e) =
-                scheduler_store.mark_failed(&schedule.id, "Agent error with empty response")
+                scheduler_store.mark_failed(&schedule.id, &format!("{} error with empty response", backend_type))
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
@@ -493,16 +498,20 @@ async fn execute_schedule(
             tracing::error!(
                 schedule_id = %schedule.id,
                 prompt = %schedule.prompt,
+                backend = %backend_type,
                 "Agent returned empty response for scheduled task"
             );
-            let error_msg = "⚠️ Scheduled task failed: Agent returned an empty response. This may indicate a session issue or prompt problem.";
+            let error_msg = format!(
+                "⚠️ Scheduled task failed: {} backend returned an empty response. This may indicate a session issue or prompt problem.",
+                backend_type
+            );
             if let Err(e) = room
-                .send(RoomMessageEventContent::text_plain(error_msg))
+                .send(RoomMessageEventContent::text_plain(&error_msg))
                 .await
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
-            if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Empty response from agent") {
+            if let Err(e) = scheduler_store.mark_failed(&schedule.id, &format!("Empty response from {} backend", backend_type)) {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
         }
@@ -615,7 +624,8 @@ async fn execute_schedule(
     if had_error {
         tracing::warn!(
             schedule_id = %schedule.id,
-            "Scheduled task completed with warnings (agent encountered non-fatal errors)"
+            backend = %backend_type,
+            "Scheduled task completed with warnings (backend encountered non-fatal errors)"
         );
     }
 }
