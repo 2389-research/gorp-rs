@@ -56,6 +56,7 @@ mux = { git = "https://github.com/2389-research/mux-rs", branch = "main" }
 iced = { version = "0.13", features = ["tokio", "svg", "image"], optional = true }
 tray-icon = { version = "0.19", optional = true }
 global-hotkey = { version = "0.6", optional = true }
+tokio-stream = "0.1.18"
 
 [dev-dependencies]
 serial_test = "3.0"

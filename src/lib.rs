@@ -8,13 +8,18 @@ pub mod server;
 #[cfg(feature = "gui")]
 pub mod gui;
 
-// Matrix-specific modules (stay local)
+// Platform abstraction layer
+pub mod platform;
+
+// Backwards compatibility: alias platform::matrix as matrix_client
+pub use platform::matrix as matrix_client;
+
+// Matrix-specific modules (stay local until migrated)
 #[cfg(feature = "admin")]
 pub mod admin;
 pub mod dispatch_handler;
 pub mod dispatch_system_prompt;
 pub mod dispatch_tools;
-pub mod matrix_client;
 pub mod matrix_interface;
 pub mod mcp;
 pub mod message_handler;

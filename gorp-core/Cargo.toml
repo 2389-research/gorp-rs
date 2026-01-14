@@ -27,6 +27,7 @@ pulldown-cmark = "0.13"
 
 # Internal
 gorp-agent = { path = "../gorp-agent", features = ["acp"] }
+tokio-stream = "0.1.18"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

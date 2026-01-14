@@ -145,10 +145,10 @@ impl<I: ChatInterface> Orchestrator<I> {
         }
 
         // Get the room
-        let room = match self.interface.get_room(&msg.room_id).await {
+        let room = match self.interface.get_room(msg.room_id()).await {
             Some(r) => r,
             None => {
-                tracing::warn!(room_id = %msg.room_id, "Room not found");
+                tracing::warn!(room_id = %msg.room_id(), "Room not found");
                 return Ok(HandleResult::Ignored);
             }
         };

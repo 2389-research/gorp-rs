@@ -15,5 +15,21 @@ pub mod warm_session;
 
 pub use dispatch_events::WorkerEvent;
 
+// Re-export core traits for convenient access
+pub use traits::{
+    // Tier 1: Messaging Platform
+    EventStream, MessagingPlatform,
+    // Tier 2: Chat Platform
+    ChatChannel, ChatPlatform,
+    // Tier 3: Local Interface
+    LocalInterface, WorkspaceInfo,
+    // Optional Capabilities
+    AttachmentHandler, ChannelCreator, ChannelManager, EncryptedPlatform, TypingIndicator,
+    // Data Types
+    AttachmentInfo, ChatUser, IncomingMessage, MessageContent,
+    // Deprecated (backwards compatibility)
+    ChatInterface, ChatRoom,
+};
+
 // Re-export gorp-agent types
 pub use gorp_agent::{AgentEvent, AgentHandle, AgentRegistry};
