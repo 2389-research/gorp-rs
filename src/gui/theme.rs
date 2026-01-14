@@ -1,7 +1,7 @@
 // ABOUTME: Design system for gorp desktop app - "Obsidian Terminal" aesthetic
 // ABOUTME: Color palette, spacing scale, and styled component helpers
 
-use iced::widget::{button, container, text, text_input};
+use iced::widget::{button, container, text_input};
 use iced::{Border, Color, Shadow, Theme, Vector};
 
 // ============================================================================
@@ -68,11 +68,9 @@ pub mod spacing {
 // ============================================================================
 
 pub mod radius {
-    pub const NONE: f32 = 0.0;
     pub const SM: f32 = 4.0;
     pub const MD: f32 = 8.0;
     pub const LG: f32 = 12.0;
-    pub const XL: f32 = 16.0;
     pub const FULL: f32 = 9999.0; // pill shape
 }
 
@@ -95,10 +93,6 @@ pub mod text_size {
 // ============================================================================
 
 pub const SIDEBAR_WIDTH: f32 = 260.0;
-pub const HEADER_HEIGHT: f32 = 56.0;
-pub const INPUT_HEIGHT: f32 = 44.0;
-pub const BUTTON_HEIGHT: f32 = 36.0;
-pub const ROOM_CARD_HEIGHT: f32 = 52.0;
 pub const MESSAGE_MAX_WIDTH: f32 = 600.0;
 
 // ============================================================================
@@ -557,43 +551,4 @@ pub fn text_input_style(_theme: &Theme, status: text_input::Status) -> text_inpu
             ..base
         },
     }
-}
-
-// ============================================================================
-// TEXT HELPERS
-// ============================================================================
-
-/// Create styled text with primary color
-pub fn text_primary(content: impl ToString) -> text::Text<'static> {
-    text(content.to_string()).color(colors::TEXT_PRIMARY)
-}
-
-/// Create styled text with secondary color
-pub fn text_secondary(content: impl ToString) -> text::Text<'static> {
-    text(content.to_string()).color(colors::TEXT_SECONDARY)
-}
-
-/// Create styled text with tertiary (muted) color
-pub fn text_muted(content: impl ToString) -> text::Text<'static> {
-    text(content.to_string()).color(colors::TEXT_TERTIARY)
-}
-
-/// Create styled text with accent color
-pub fn text_accent(content: impl ToString) -> text::Text<'static> {
-    text(content.to_string()).color(colors::ACCENT_PRIMARY)
-}
-
-/// Create styled text with warm accent (amber)
-pub fn text_warm(content: impl ToString) -> text::Text<'static> {
-    text(content.to_string()).color(colors::ACCENT_WARM)
-}
-
-/// Create styled text with success color
-pub fn text_success(content: impl ToString) -> text::Text<'static> {
-    text(content.to_string()).color(colors::ACCENT_SUCCESS)
-}
-
-/// Create styled text with danger color
-pub fn text_danger(content: impl ToString) -> text::Text<'static> {
-    text(content.to_string()).color(colors::ACCENT_DANGER)
 }

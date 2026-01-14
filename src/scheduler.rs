@@ -474,10 +474,10 @@ async fn execute_schedule(
             tracing::error!(
                 schedule_id = %schedule.id,
                 prompt = %schedule.prompt,
-                "ACP returned empty response with error for scheduled task"
+                "Agent returned empty response with error for scheduled task"
             );
             let error_msg =
-                "⚠️ Scheduled task failed: ACP encountered an error and returned no response.";
+                "⚠️ Scheduled task failed: Agent encountered an error and returned no response.";
             if let Err(e) = room
                 .send(RoomMessageEventContent::text_plain(error_msg))
                 .await
@@ -485,7 +485,7 @@ async fn execute_schedule(
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
             if let Err(e) =
-                scheduler_store.mark_failed(&schedule.id, "ACP error with empty response")
+                scheduler_store.mark_failed(&schedule.id, "Agent error with empty response")
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
@@ -493,16 +493,16 @@ async fn execute_schedule(
             tracing::error!(
                 schedule_id = %schedule.id,
                 prompt = %schedule.prompt,
-                "ACP returned empty response for scheduled task"
+                "Agent returned empty response for scheduled task"
             );
-            let error_msg = "⚠️ Scheduled task failed: ACP returned an empty response. This may indicate a session issue or prompt problem.";
+            let error_msg = "⚠️ Scheduled task failed: Agent returned an empty response. This may indicate a session issue or prompt problem.";
             if let Err(e) = room
                 .send(RoomMessageEventContent::text_plain(error_msg))
                 .await
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
-            if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Empty response from ACP") {
+            if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Empty response from agent") {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
         }
@@ -615,7 +615,7 @@ async fn execute_schedule(
     if had_error {
         tracing::warn!(
             schedule_id = %schedule.id,
-            "Scheduled task completed with warnings (ACP encountered non-fatal errors)"
+            "Scheduled task completed with warnings (agent encountered non-fatal errors)"
         );
     }
 }

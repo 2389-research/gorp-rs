@@ -143,7 +143,7 @@ pub async fn process_chat_message(
         }
     });
 
-    // Invoke ACP agent with streaming to show tool usage
+    // Invoke agent with streaming to show tool usage
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("matrix");
 
@@ -206,7 +206,7 @@ pub async fn process_chat_message(
         tracing::debug!(channel = %channel.channel_name, "Debug mode enabled - will show tool usage");
     }
 
-    // Process streaming events from ACP
+    // Process streaming events from agent
     let mut final_response = String::new();
     let mut tools_used: Vec<String> = Vec::new();
     let mut session_id_from_event: Option<String> = None;
@@ -398,7 +398,7 @@ pub async fn process_chat_message(
 
         metrics::record_error("acp_no_response");
         room.send(RoomMessageEventContent::text_plain(
-            "⚠️ ACP agent finished without a response",
+            "⚠️ Agent finished without a response",
         ))
         .await?;
         return Ok(());
@@ -410,11 +410,11 @@ pub async fn process_chat_message(
     tracing::info!(
         response_length = final_response.len(),
         tools_count = tools_used.len(),
-        "ACP agent responded"
+        "Agent responded"
     );
 
     // Filter out XML function call blocks before sending to Matrix
-    // The ACP backend may output raw XML that shouldn't be shown to users
+    // Some backends may output raw XML that shouldn't be shown to users
     let response = strip_function_calls(&final_response);
 
     // Update session ID if Claude CLI reported a new one via SessionChanged event

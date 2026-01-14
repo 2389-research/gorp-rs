@@ -2,6 +2,7 @@
 // ABOUTME: Shows timestamped, color-coded log entries with filter dropdown
 
 use crate::gui::app::{LogEntry, Message};
+use crate::gui::components::common;
 use crate::gui::theme::{colors, radius, spacing, text_size, button_primary, button_secondary, content_style};
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, Column, Space};
 use iced::{Alignment, Border, Element, Length};
@@ -89,23 +90,6 @@ fn log_entry_row(entry: &LogEntry) -> Element<'static, Message> {
         },
         ..Default::default()
     })
-    .into()
-}
-
-/// Loading state
-fn loading_state<'a>() -> Element<'a, Message> {
-    container(
-        column![
-            text("◌").size(48.0).color(colors::ACCENT_PRIMARY),
-            Space::with_height(spacing::MD),
-            text("Loading logs...")
-                .size(text_size::LARGE)
-                .color(colors::TEXT_PRIMARY),
-        ]
-        .align_x(Alignment::Center),
-    )
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
     .into()
 }
 
@@ -208,7 +192,7 @@ pub fn view<'a>(
 
     // Main content
     let main_content: Element<'a, Message> = if loading {
-        loading_state()
+        common::loading_state("Loading logs...")
     } else if filtered_entries.is_empty() {
         if entries.is_empty() {
             empty_state()

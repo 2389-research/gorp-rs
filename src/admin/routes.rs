@@ -623,7 +623,7 @@ const MAX_LOG_FILE_SIZE: u64 = 10 * 1024 * 1024;
 /// Read the last N lines of a file efficiently by reading backwards from end.
 /// Returns empty vec if file doesn't exist, is too large, or on any error.
 /// This avoids loading entire files into memory.
-fn read_last_n_lines(path: &std::path::Path, n: usize) -> Vec<String> {
+pub fn read_last_n_lines(path: &std::path::Path, n: usize) -> Vec<String> {
     let file = match File::open(path) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
@@ -735,7 +735,7 @@ fn read_last_n_lines_reverse(mut file: File, n: usize, file_size: u64) -> Vec<St
 
 /// Count lines matching a pattern in the last portion of a file.
 /// Only reads the tail of the file to avoid loading entire logs.
-fn count_recent_lines_matching(path: &std::path::Path, pattern: &str) -> usize {
+pub fn count_recent_lines_matching(path: &std::path::Path, pattern: &str) -> usize {
     // Read last 1000 lines max for counting today's messages
     // This gives a reasonable approximation without reading entire files
     let lines = read_last_n_lines(path, 1000);
@@ -1338,7 +1338,7 @@ fn view_file(
 }
 
 /// Validate path and prevent directory traversal attacks
-fn validate_and_resolve_path(
+pub fn validate_and_resolve_path(
     workspace_root: &Path,
     user_path: &str,
 ) -> Result<std::path::PathBuf, ToastTemplate> {
@@ -1390,7 +1390,7 @@ fn validate_and_resolve_path(
 }
 
 /// Format file size in human-readable format
-fn format_file_size(size: u64) -> String {
+pub fn format_file_size(size: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;

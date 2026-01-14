@@ -1040,7 +1040,7 @@ async fn run_start() -> Result<()> {
 
     tracing::info!("Starting gorp - Matrix-Claude Bridge");
 
-    // Log PATH for debugging ACP spawn issues
+    // Log PATH for debugging agent spawn issues
     if let Ok(path) = std::env::var("PATH") {
         tracing::info!(path_len = path.len(), "Environment PATH length");
         if path.contains("mise") {

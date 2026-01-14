@@ -6,9 +6,6 @@ use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
 };
 
-// Note: Accelerator is imported for type annotations but not used directly
-// since tray menu accelerators are display-only on macOS
-
 /// Connection state for tray icon display
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -41,17 +38,7 @@ pub fn create_tray_icon() -> Result<TrayIcon, tray_icon::Error> {
 fn build_menu() -> Menu {
     let menu = Menu::new();
 
-    // Status section (will be updated dynamically)
-    let status_item = MenuItem::with_id(
-        "status",
-        "Connecting...",
-        false, // disabled - just for display
-        None,
-    );
-    let _ = menu.append(&status_item);
-    let _ = menu.append(&PredefinedMenuItem::separator());
-
-    // Quick actions - no accelerators for tray menu (they're display-only hints anyway)
+    // Quick actions
     let dashboard_item = MenuItem::with_id(
         menu_ids::OPEN_DASHBOARD,
         "Open Dashboard",
@@ -138,10 +125,8 @@ pub fn update_icon(tray: &TrayIcon, state: ConnectionState) {
     }
 }
 
-/// Update the status text in the menu
+/// Update the tooltip text
 pub fn update_status(tray: &TrayIcon, status: &str) {
-    // Note: tray-icon/muda doesn't have a direct way to update menu item text
-    // after creation. For now, we'll rebuild the menu or use tooltip.
     if let Err(e) = tray.set_tooltip(Some(status)) {
         tracing::warn!(error = %e, "Failed to update tray tooltip");
     }

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>gorp</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>gorp</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.2389.gorp</string>
+
+    <key>CFBundleVersion</key>
+    <string>VERSION_PLACEHOLDER</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>VERSION_PLACEHOLDER</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleExecutable</key>
+    <string>gorp</string>
+
+    <key>CFBundleIconFile</key>
+    <string>gorp.icns</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2024-2026 2389 Research. All rights reserved.</string>
+
+    <!-- Required for network access -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+
+    <!-- For keychain access (Matrix credentials) -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>gorp needs to communicate with other applications.</string>
+</dict>
+</plist>

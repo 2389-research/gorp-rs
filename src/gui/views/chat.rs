@@ -2,6 +2,7 @@
 // ABOUTME: Message bubbles with visual distinction for own/other messages, typing indicators
 
 use crate::gui::app::Message;
+use crate::gui::components::common;
 use crate::gui::theme::{
     self, colors, radius, spacing, text_size, button_primary,
     content_style, header_style, message_other_style, message_own_style, text_input_style,
@@ -119,25 +120,6 @@ fn empty_state<'a>() -> Element<'a, Message> {
     .into()
 }
 
-/// Loading state while fetching messages
-fn loading_state<'a>() -> Element<'a, Message> {
-    container(
-        column![
-            text("◌")
-                .size(48.0)
-                .color(colors::ACCENT_PRIMARY),
-            Space::with_height(spacing::MD),
-            text("Loading messages...")
-                .size(text_size::LARGE)
-                .color(colors::TEXT_PRIMARY),
-        ]
-        .align_x(Alignment::Center),
-    )
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .into()
-}
-
 /// Scrollable ID for auto-scroll
 pub fn chat_scroll_id() -> scrollable::Id {
     scrollable::Id::new("chat-messages")
@@ -228,7 +210,7 @@ pub fn view<'a>(
 
     // Message list
     let messages_view: Element<'a, Message> = if loading {
-        loading_state()
+        common::loading_state("Loading messages...")
     } else if messages.is_empty() {
         empty_state()
     } else {

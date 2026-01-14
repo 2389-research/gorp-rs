@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    ABOUTME: LaunchAgent plist for gorp auto-start at login
+    ABOUTME: Install to ~/Library/LaunchAgents/com.2389.gorp.plist
+
+    To install:
+        cp com.2389.gorp.plist ~/Library/LaunchAgents/
+        launchctl load ~/Library/LaunchAgents/com.2389.gorp.plist
+
+    To uninstall:
+        launchctl unload ~/Library/LaunchAgents/com.2389.gorp.plist
+        rm ~/Library/LaunchAgents/com.2389.gorp.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.2389.gorp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/gorp.app/Contents/MacOS/gorp</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/gorp.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/gorp.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

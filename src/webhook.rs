@@ -393,7 +393,7 @@ async fn webhook_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
                     success: false,
-                    message: "ACP worker failed to respond".to_string(),
+                    message: "Agent worker failed to respond".to_string(),
                 }),
             );
         }
@@ -408,7 +408,7 @@ async fn webhook_handler(
                 error = %e,
                 "Warm session worker returned error"
             );
-            let error_msg = format!("⚠️ ACP error: {}", e);
+            let error_msg = format!("⚠️ Agent error: {}", e);
             let _ = room
                 .send(RoomMessageEventContent::text_plain(&error_msg))
                 .await;
@@ -418,7 +418,7 @@ async fn webhook_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
                     success: false,
-                    message: format!("ACP error: {}", e),
+                    message: format!("Agent error: {}", e),
                 }),
             );
         }
@@ -683,7 +683,7 @@ async fn process_webhook_job(
 
     if response.trim().is_empty() {
         metrics::record_error("acp_no_response");
-        return Err(anyhow::anyhow!("ACP agent finished without a response"));
+        return Err(anyhow::anyhow!("Agent finished without a response"));
     }
 
     // Update session ID if Claude CLI reported a new one
