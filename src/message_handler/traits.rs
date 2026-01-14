@@ -1,11 +1,24 @@
 // ABOUTME: Traits for abstracting Matrix room operations
 // ABOUTME: Enables testing command handlers without real Matrix connections
+//
+// NOTE: This module contains a local `MessageSender` abstraction that predates
+// the gorp_core::traits::ChatChannel abstraction. For new code, prefer using
+// `ChatChannel` directly. The `MessageSender` trait is kept for backwards
+// compatibility with existing command handlers.
+//
+// Migration path:
+// - New code should use `gorp_core::traits::ChatChannel`
+// - Existing code using `MessageSender` can be migrated incrementally
+// - `platform::matrix::MatrixChannel` implements `ChatChannel`
 
 use anyhow::Result;
 use async_trait::async_trait;
 
 /// Trait for sending messages to a room
 /// Abstracts Matrix room operations for testability
+///
+/// DEPRECATED: Prefer `gorp_core::traits::ChatChannel` for new code.
+/// This trait is kept for backwards compatibility with existing command handlers.
 #[async_trait]
 pub trait MessageSender: Send + Sync {
     /// Send a plain text message
@@ -226,5 +239,61 @@ mod tests {
 
         let room2 = MockRoom::new("!channel:matrix.org");
         assert!(!room2.is_dm().await);
+    }
+}
+
+// =============================================================================
+// ChatChannel Adapter - Bridge to new abstraction
+// =============================================================================
+
+use gorp_core::traits::{ChatChannel, MessageContent, TypingIndicator};
+
+/// Adapter that wraps a `ChatChannel` to implement `MessageSender`
+///
+/// This enables gradual migration from `MessageSender` to `ChatChannel`.
+/// Use this when you have a `ChatChannel` but need to pass it to code
+/// expecting a `MessageSender`.
+pub struct ChannelAdapter<C: ChatChannel> {
+    channel: C,
+    channel_id: String,
+}
+
+impl<C: ChatChannel> ChannelAdapter<C> {
+    pub fn new(channel: C) -> Self {
+        let channel_id = channel.id().to_string();
+        Self { channel, channel_id }
+    }
+
+    /// Get the underlying channel
+    pub fn inner(&self) -> &C {
+        &self.channel
+    }
+}
+
+#[async_trait]
+impl<C: ChatChannel + 'static> MessageSender for ChannelAdapter<C> {
+    async fn send_text(&self, msg: &str) -> Result<()> {
+        self.channel.send(MessageContent::plain(msg)).await
+    }
+
+    async fn send_html(&self, plain: &str, html: &str) -> Result<()> {
+        self.channel.send(MessageContent::html(plain, html)).await
+    }
+
+    async fn typing(&self, typing: bool) -> Result<()> {
+        if let Some(indicator) = self.channel.typing_indicator() {
+            indicator.set_typing(typing).await
+        } else {
+            // No-op if typing not supported
+            Ok(())
+        }
+    }
+
+    fn room_id(&self) -> &str {
+        &self.channel_id
+    }
+
+    async fn is_dm(&self) -> bool {
+        self.channel.is_direct().await
     }
 }

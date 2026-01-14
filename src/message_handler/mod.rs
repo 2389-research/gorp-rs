@@ -16,7 +16,7 @@ pub use attachments::download_attachment;
 pub use context::{route_to_dispatch, write_context_file};
 pub use helpers::{is_debug_enabled, looks_like_cron, truncate_str, validate_channel_name};
 pub use schedule_import::parse_schedule_input;
-pub use traits::{MatrixRoom, MessageSender, MockRoom};
+pub use traits::{ChannelAdapter, MatrixRoom, MessageSender, MockRoom};
 
 use anyhow::Result;
 use matrix_sdk::{
