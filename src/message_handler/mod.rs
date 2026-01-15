@@ -16,7 +16,7 @@ pub use attachments::download_attachment;
 pub use context::{route_to_dispatch, write_context_file};
 pub use helpers::{is_debug_enabled, looks_like_cron, truncate_str, validate_channel_name};
 pub use schedule_import::parse_schedule_input;
-pub use traits::{ChannelAdapter, MatrixRoom, MessageSender, MockRoom};
+pub use traits::MockChannel;
 
 use anyhow::Result;
 use matrix_sdk::{
@@ -29,6 +29,7 @@ use crate::{
     commands::{parse_message, Command, ParseResult},
     config::Config,
     matrix_client, metrics, onboarding,
+    platform::MatrixChannel,
     scheduler::SchedulerStore,
     session::SessionStore,
     utils::markdown_to_html,
@@ -305,12 +306,12 @@ async fn handle_command(
     config: &Config,
     warm_manager: &SharedWarmSessionManager,
 ) -> Result<()> {
-    // Wrap Room in MatrixRoom for testable command handler
-    let matrix_room = MatrixRoom::new(room.clone());
+    // Wrap Room in MatrixChannel for testable command handler
+    let matrix_channel = MatrixChannel::new(room.clone(), client.clone());
 
     // Try the testable command handler first
     match commands::handle_command(
-        &matrix_room,
+        &matrix_channel,
         cmd,
         session_store,
         scheduler_store,

@@ -1,7 +1,8 @@
 // ABOUTME: Command handler for Matrix bot commands
-// ABOUTME: Processes !help, !create, !status, etc. using MessageSender trait for testability
+// ABOUTME: Processes !help, !create, !status, etc. using ChatChannel trait for testability
 
 use anyhow::Result;
+use gorp_core::traits::{ChatChannel, MessageContent};
 use matrix_sdk::Client;
 
 use crate::{
@@ -15,7 +16,6 @@ use crate::{
 };
 
 use super::helpers::is_debug_enabled;
-use super::traits::MessageSender;
 
 /// Help documentation loaded at compile time
 const HELP_MD: &str = include_str!("../../docs/HELP.md");
@@ -26,12 +26,12 @@ const CHANGELOG_MD: &str = include_str!("../../docs/CHANGELOG.md");
 
 /// Handle a parsed command
 ///
-/// This function is designed to be testable - it takes a MessageSender trait
+/// This function is designed to be testable - it takes a ChatChannel trait
 /// instead of a concrete Room, allowing mock implementations for testing.
 /// The client parameter is optional since it's only needed for delegated commands.
 #[allow(clippy::too_many_arguments)]
-pub async fn handle_command<R: MessageSender>(
-    room: &R,
+pub async fn handle_command<C: ChatChannel>(
+    channel: &C,
     cmd: &Command,
     session_store: &SessionStore,
     _scheduler_store: &SchedulerStore,
@@ -65,7 +65,7 @@ pub async fn handle_command<R: MessageSender>(
             !debug - Toggle tool usage display\n\
             !leave - Bot leaves this room"
         };
-        room.send_text(help_msg).await?;
+        channel.send(MessageContent::plain(help_msg)).await?;
         return Ok(());
     }
 
@@ -74,24 +74,24 @@ pub async fn handle_command<R: MessageSender>(
     match command {
         "help" => {
             let help_html = markdown_to_html(HELP_MD);
-            room.send_html(HELP_MD, &help_html).await?;
+            channel.send(MessageContent::html(HELP_MD, &help_html)).await?;
         }
         "changelog" => {
             let changelog_html = markdown_to_html(CHANGELOG_MD);
-            room.send_html(CHANGELOG_MD, &changelog_html).await?;
+            channel.send(MessageContent::html(CHANGELOG_MD, &changelog_html)).await?;
         }
         "motd" => {
             let motd_html = markdown_to_html(MOTD_MD);
-            room.send_html(MOTD_MD, &motd_html).await?;
+            channel.send(MessageContent::html(MOTD_MD, &motd_html)).await?;
         }
         "status" => {
-            if let Some(channel) = session_store.get_by_room(room.room_id())? {
-                let debug_status = if is_debug_enabled(&channel.directory) {
+            if let Some(ch) = session_store.get_by_room(channel.id())? {
+                let debug_status = if is_debug_enabled(&ch.directory) {
                     "🔧 Enabled (tool usage shown)"
                 } else {
                     "🔇 Disabled (tool usage hidden)"
                 };
-                let backend_display = channel
+                let backend_display = ch
                     .backend_type
                     .as_deref()
                     .unwrap_or(&config.backend.backend_type);
@@ -106,11 +106,11 @@ pub async fn handle_command<R: MessageSender>(
                     Webhook URL:\n\
                     POST http://{}:{}/webhook/session/{}\n\n\
                     This room is backed by a persistent Claude session.",
-                    channel.channel_name,
-                    channel.session_id,
-                    channel.directory,
+                    ch.channel_name,
+                    ch.session_id,
+                    ch.directory,
                     backend_display,
-                    if channel.started {
+                    if ch.started {
                         "Yes"
                     } else {
                         "No (first message will start it)"
@@ -118,30 +118,29 @@ pub async fn handle_command<R: MessageSender>(
                     debug_status,
                     config.webhook.host,
                     config.webhook.port,
-                    channel.session_id
+                    ch.session_id
                 );
-                room.send_text(&status).await?;
+                channel.send(MessageContent::plain(&status)).await?;
             } else {
-                room.send_text(
+                channel.send(MessageContent::plain(
                     "📊 Channel Status\n\n\
                     No channel attached.\n\n\
                     DM me to create one: !create <name>",
-                )
+                ))
                 .await?;
             }
         }
         "list" => {
             if !is_dm {
-                room.send_text("❌ The !list command only works in DMs.")
-                    .await?;
+                channel.send(MessageContent::plain("❌ The !list command only works in DMs.")).await?;
                 return Ok(());
             }
 
             let channels = session_store.list_all()?;
             if channels.is_empty() {
-                room.send_text(
+                channel.send(MessageContent::plain(
                     "📋 No channels yet.\n\nCreate one with: !create <name>",
-                )
+                ))
                 .await?;
             } else {
                 let mut msg = String::from("📋 Channels:\n\n");
@@ -150,23 +149,21 @@ pub async fn handle_command<R: MessageSender>(
                     msg.push_str(&format!("{} {} - {}\n", status, ch.channel_name, ch.directory));
                 }
                 msg.push_str("\nUse !join <name> to get invited to a channel.");
-                room.send_text(&msg).await?;
+                channel.send(MessageContent::plain(&msg)).await?;
             }
         }
         "debug" => {
             if is_dm {
-                room.send_text("❌ The !debug command only works in channel rooms.")
-                    .await?;
+                channel.send(MessageContent::plain("❌ The !debug command only works in channel rooms.")).await?;
                 return Ok(());
             }
 
-            let Some(channel) = session_store.get_by_room(room.room_id())? else {
-                room.send_text("No channel attached to this room.")
-                    .await?;
+            let Some(ch) = session_store.get_by_room(channel.id())? else {
+                channel.send(MessageContent::plain("No channel attached to this room.")).await?;
                 return Ok(());
             };
 
-            let channel_path = std::path::Path::new(&channel.directory);
+            let channel_path = std::path::Path::new(&ch.directory);
             let debug_dir = channel_path.join(".gorp");
             let debug_file = debug_dir.join("enable-debug");
 
@@ -174,34 +171,31 @@ pub async fn handle_command<R: MessageSender>(
             match subcommand.as_deref() {
                 Some("on") | Some("enable") => {
                     if let Err(e) = std::fs::create_dir_all(&debug_dir) {
-                        room.send_text(&format!("⚠️ Failed to create debug directory: {}", e))
-                            .await?;
+                        channel.send(MessageContent::plain(&format!("⚠️ Failed to create debug directory: {}", e))).await?;
                         return Ok(());
                     }
                     if let Err(e) = std::fs::write(&debug_file, "") {
-                        room.send_text(&format!("⚠️ Failed to enable debug: {}", e))
-                            .await?;
+                        channel.send(MessageContent::plain(&format!("⚠️ Failed to enable debug: {}", e))).await?;
                         return Ok(());
                     }
-                    room.send_text(
+                    channel.send(MessageContent::plain(
                         "🔧 Debug mode ENABLED\n\nTool usage will now be shown in this channel.",
-                    )
+                    ))
                     .await?;
-                    tracing::info!(channel = %channel.channel_name, "Debug mode enabled");
+                    tracing::info!(channel = %ch.channel_name, "Debug mode enabled");
                 }
                 Some("off") | Some("disable") => {
                     if debug_file.exists() {
                         if let Err(e) = std::fs::remove_file(&debug_file) {
-                            room.send_text(&format!("⚠️ Failed to disable debug: {}", e))
-                                .await?;
+                            channel.send(MessageContent::plain(&format!("⚠️ Failed to disable debug: {}", e))).await?;
                             return Ok(());
                         }
                     }
-                    room.send_text(
+                    channel.send(MessageContent::plain(
                         "🔇 Debug mode DISABLED\n\nTool usage will be hidden in this channel.",
-                    )
+                    ))
                     .await?;
-                    tracing::info!(channel = %channel.channel_name, "Debug mode disabled");
+                    tracing::info!(channel = %ch.channel_name, "Debug mode disabled");
                 }
                 _ => {
                     let status = if debug_file.exists() {
@@ -209,24 +203,22 @@ pub async fn handle_command<R: MessageSender>(
                     } else {
                         "🔇 Debug mode is DISABLED\n\nTool usage is hidden in this channel."
                     };
-                    room.send_text(&format!(
+                    channel.send(MessageContent::plain(&format!(
                         "{}\n\nCommands:\n  !debug on - Show tool usage\n  !debug off - Hide tool usage",
                         status
-                    ))
+                    )))
                     .await?;
                 }
             }
         }
         "backend" => {
             if is_dm {
-                room.send_text("❌ The !backend command only works in channel rooms.")
-                    .await?;
+                channel.send(MessageContent::plain("❌ The !backend command only works in channel rooms.")).await?;
                 return Ok(());
             }
 
-            let Some(channel) = session_store.get_by_room(room.room_id())? else {
-                room.send_text("No channel attached to this room.")
-                    .await?;
+            let Some(ch) = session_store.get_by_room(channel.id())? else {
+                channel.send(MessageContent::plain("No channel attached to this room.")).await?;
                 return Ok(());
             };
 
@@ -234,26 +226,26 @@ pub async fn handle_command<R: MessageSender>(
             match subcommand.as_deref() {
                 Some("list") => {
                     let available = "acp, mux, direct";
-                    let current = channel
+                    let current = ch
                         .backend_type
                         .as_deref()
                         .unwrap_or("(global default)");
-                    room.send_text(&format!(
+                    channel.send(MessageContent::plain(&format!(
                         "📋 Available Backends\n\n\
                         Current: {}\n\
                         Available: {}\n\n\
                         Use `!backend set <name>` to change.",
                         current, available
-                    ))
+                    )))
                     .await?;
                 }
                 Some("set") => {
                     let Some(new_backend) = command_parts.get(2) else {
-                        room.send_text(
+                        channel.send(MessageContent::plain(
                             "Usage: !backend set <name>\n\n\
                             Available: acp, mux, direct\n\n\
                             Example: !backend set mux",
-                        )
+                        ))
                         .await?;
                         return Ok(());
                     };
@@ -261,57 +253,57 @@ pub async fn handle_command<R: MessageSender>(
                     let new_backend = new_backend.to_lowercase();
                     let valid_backends = ["acp", "mux", "direct"];
                     if !valid_backends.contains(&new_backend.as_str()) {
-                        room.send_text(&format!(
+                        channel.send(MessageContent::plain(&format!(
                             "❌ Unknown backend: {}\n\nAvailable: {}",
                             new_backend,
                             valid_backends.join(", ")
-                        ))
+                        )))
                         .await?;
                         return Ok(());
                     }
 
-                    session_store.update_backend_type(&channel.channel_name, Some(&new_backend))?;
+                    session_store.update_backend_type(&ch.channel_name, Some(&new_backend))?;
                     {
                         let mut mgr = warm_manager.write().await;
-                        mgr.invalidate_session(&channel.channel_name);
+                        mgr.invalidate_session(&ch.channel_name);
                     }
 
-                    room.send_text(&format!(
+                    channel.send(MessageContent::plain(&format!(
                         "✅ Backend changed to: {}\n\nSession has been reset. Next message will use the new backend.",
                         new_backend
-                    ))
+                    )))
                     .await?;
 
                     tracing::info!(
-                        channel = %channel.channel_name,
+                        channel = %ch.channel_name,
                         backend = %new_backend,
                         "Backend changed via command"
                     );
                 }
                 Some("reset") | Some("default") => {
-                    session_store.update_backend_type(&channel.channel_name, None)?;
+                    session_store.update_backend_type(&ch.channel_name, None)?;
                     {
                         let mut mgr = warm_manager.write().await;
-                        mgr.invalidate_session(&channel.channel_name);
+                        mgr.invalidate_session(&ch.channel_name);
                     }
 
-                    room.send_text(
+                    channel.send(MessageContent::plain(
                         "✅ Backend reset to global default.\n\nSession has been reset. Next message will use the default backend.",
-                    )
+                    ))
                     .await?;
 
                     tracing::info!(
-                        channel = %channel.channel_name,
+                        channel = %ch.channel_name,
                         "Backend reset to default via command"
                     );
                 }
                 _ => {
-                    let current = channel
+                    let current = ch
                         .backend_type
                         .as_deref()
                         .unwrap_or("(global default)");
                     let global_default = &config.backend.backend_type;
-                    room.send_text(&format!(
+                    channel.send(MessageContent::plain(&format!(
                         "🔌 Backend Status\n\n\
                         Channel backend: {}\n\
                         Global default: {}\n\n\
@@ -320,7 +312,7 @@ pub async fn handle_command<R: MessageSender>(
                         !backend set <name> - Change backend\n  \
                         !backend reset - Use global default",
                         current, global_default
-                    ))
+                    )))
                     .await?;
                 }
             }
@@ -355,7 +347,7 @@ pub async fn handle_command<R: MessageSender>(
                 !leave - Bot leaves room\n\
                 !help - Show detailed help"
             };
-            room.send_text(help_msg).await?;
+            channel.send(MessageContent::plain(help_msg)).await?;
         }
     }
 
@@ -365,7 +357,7 @@ pub async fn handle_command<R: MessageSender>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_handler::traits::MockRoom;
+    use crate::message_handler::traits::MockChannel;
     use crate::scheduler::SchedulerStore;
     use crate::session::SessionStore;
     use crate::warm_session::create_shared_manager;
@@ -460,7 +452,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_command_shows_dm_help() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!test:matrix.org");
+        let room = MockChannel::dm("!test:matrix.org");
         let cmd = make_command("", vec![]);
 
         let result = handle_command(
@@ -484,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_command_shows_channel_help() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("", vec![]);
 
         let result = handle_command(
@@ -512,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn test_help_command() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("help", vec![]);
 
         let result = handle_command(
@@ -536,7 +528,7 @@ mod tests {
     #[tokio::test]
     async fn test_changelog_command() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("changelog", vec![]);
 
         let result = handle_command(
@@ -559,7 +551,7 @@ mod tests {
     #[tokio::test]
     async fn test_motd_command() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("motd", vec![]);
 
         let result = handle_command(
@@ -586,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn test_status_with_channel() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         let cmd = make_command("status", vec![]);
 
@@ -612,7 +604,7 @@ mod tests {
     #[tokio::test]
     async fn test_status_without_channel() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("status", vec![]);
 
         let result = handle_command(
@@ -639,7 +631,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_empty_dm() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         let cmd = make_command("list", vec![]);
 
         let result = handle_command(
@@ -662,7 +654,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_with_channels() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         ctx.create_channel("project-a", "!room1:matrix.org");
         ctx.create_channel("project-b", "!room2:matrix.org");
         let cmd = make_command("list", vec![]);
@@ -689,7 +681,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_rejected_in_channel() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("list", vec![]);
 
         let result = handle_command(
@@ -716,7 +708,7 @@ mod tests {
     #[tokio::test]
     async fn test_debug_rejected_in_dm() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         let cmd = make_command("debug", vec![]);
 
         let result = handle_command(
@@ -739,7 +731,7 @@ mod tests {
     #[tokio::test]
     async fn test_debug_no_channel() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("debug", vec![]);
 
         let result = handle_command(
@@ -762,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn test_debug_status() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         let cmd = make_command("debug", vec![]);
 
@@ -790,7 +782,7 @@ mod tests {
     #[tokio::test]
     async fn test_backend_rejected_in_dm() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         let cmd = make_command("backend", vec![]);
 
         let result = handle_command(
@@ -813,7 +805,7 @@ mod tests {
     #[tokio::test]
     async fn test_backend_status() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         let cmd = make_command("backend", vec![]);
 
@@ -837,7 +829,7 @@ mod tests {
     #[tokio::test]
     async fn test_backend_list() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         let cmd = make_command("backend", vec!["list"]);
 
@@ -862,7 +854,7 @@ mod tests {
     #[tokio::test]
     async fn test_backend_set_valid() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         let cmd = make_command("backend", vec!["set", "mux"]);
 
@@ -890,7 +882,7 @@ mod tests {
     #[tokio::test]
     async fn test_backend_set_invalid() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         let cmd = make_command("backend", vec!["set", "invalid"]);
 
@@ -914,7 +906,7 @@ mod tests {
     #[tokio::test]
     async fn test_backend_reset() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         // First set a backend
         ctx.session_store.update_backend_type("test-channel", Some("mux")).unwrap();
@@ -948,7 +940,7 @@ mod tests {
     #[tokio::test]
     async fn test_reset_delegated_in_dm() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         let cmd = make_command("reset", vec!["channel-name"]);
 
         let result = handle_command(
@@ -978,7 +970,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_delegated() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         let cmd = make_command("create", vec!["new-channel"]);
 
         let result = handle_command(
@@ -1001,7 +993,7 @@ mod tests {
     #[tokio::test]
     async fn test_join_delegated() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         let cmd = make_command("join", vec!["channel-name"]);
 
         let result = handle_command(
@@ -1024,7 +1016,7 @@ mod tests {
     #[tokio::test]
     async fn test_schedule_delegated() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("schedule", vec!["in", "1", "hour", "test"]);
 
         let result = handle_command(
@@ -1051,7 +1043,7 @@ mod tests {
     #[tokio::test]
     async fn test_unknown_command_dm() {
         let ctx = TestContext::new();
-        let room = MockRoom::dm("!dm:matrix.org");
+        let room = MockChannel::dm("!dm:matrix.org");
         let cmd = make_command("foobar", vec![]);
 
         let result = handle_command(
@@ -1075,7 +1067,7 @@ mod tests {
     #[tokio::test]
     async fn test_unknown_command_channel() {
         let ctx = TestContext::new();
-        let room = MockRoom::new("!channel:matrix.org");
+        let room = MockChannel::new("!channel:matrix.org");
         let cmd = make_command("foobar", vec![]);
 
         let result = handle_command(
