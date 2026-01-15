@@ -51,12 +51,13 @@ RUN --mount=type=ssh cargo build --release --no-default-features
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies, Node.js, and Chromium for Claude Code
+# Install runtime dependencies, Node.js, vim, and Chromium for Claude Code
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     curl \
     git \
+    vim \
     chromium \
     fonts-liberation \
     libnss3 \
