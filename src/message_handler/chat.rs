@@ -226,6 +226,15 @@ pub async fn process_chat_message(
                 tools_used.push(name.clone());
                 metrics::record_tool_used(&name);
 
+                // When tool output is hidden, add paragraph break between text blocks
+                // This ensures text before and after tool usage is visually separated
+                if !debug_enabled
+                    && !final_response.is_empty()
+                    && !final_response.ends_with('\n')
+                {
+                    final_response.push_str("\n\n");
+                }
+
                 // Extract input preview from JSON input
                 let input_preview: String = input
                     .as_object()
