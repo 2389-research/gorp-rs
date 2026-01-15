@@ -88,9 +88,9 @@ fn parse_args(input: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_quotes = false;
     let mut quote_char = '"';
-    let mut chars = input.chars().peekable();
+    let chars = input.chars();
 
-    while let Some(c) = chars.next() {
+    for c in chars {
         match c {
             '"' | '\'' if !in_quotes => {
                 in_quotes = true;
@@ -150,8 +150,8 @@ pub fn parse_message(body: &str, bot_prefix: &str) -> ParseResult {
     }
 
     // Escape sequence: !! at start means treat as regular message
-    if trimmed.starts_with("!!") {
-        let escaped = trimmed[2..].trim();
+    if let Some(stripped) = trimmed.strip_prefix("!!") {
+        let escaped = stripped.trim();
         if escaped.is_empty() {
             return ParseResult::Ignore;
         }

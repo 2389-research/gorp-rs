@@ -194,16 +194,17 @@ impl Tool for WdListFilesTool {
         let full_pattern = format!("{}/{}", base_path.display(), glob_pattern);
 
         let mut files = Vec::new();
-        for entry in glob::glob(&full_pattern).unwrap_or_else(|_| glob::glob("").unwrap()) {
-            if let Ok(path) = entry {
-                // Show paths relative to working_dir for cleaner output
-                let display_path = path
-                    .strip_prefix(&self.working_dir)
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| path.display().to_string());
-                let prefix = if path.is_dir() { "[dir] " } else { "" };
-                files.push(format!("{}{}", prefix, display_path));
-            }
+        for path in glob::glob(&full_pattern)
+            .unwrap_or_else(|_| glob::glob("").unwrap())
+            .flatten()
+        {
+            // Show paths relative to working_dir for cleaner output
+            let display_path = path
+                .strip_prefix(&self.working_dir)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| path.display().to_string());
+            let prefix = if path.is_dir() { "[dir] " } else { "" };
+            files.push(format!("{}{}", prefix, display_path));
         }
 
         if files.is_empty() {
@@ -278,24 +279,25 @@ impl Tool for WdSearchTool {
             Err(e) => return Ok(ToolResult::error(format!("Invalid regex: {}", e))),
         };
 
-        for entry in glob::glob(&full_pattern).unwrap_or_else(|_| glob::glob("").unwrap()) {
-            if let Ok(path) = entry {
-                if path.is_file() {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        for (line_num, line) in content.lines().enumerate() {
-                            if regex.is_match(line) {
-                                // Show paths relative to working_dir
-                                let display_path = path
-                                    .strip_prefix(&self.working_dir)
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_else(|_| path.display().to_string());
-                                results.push(format!(
-                                    "{}:{}: {}",
-                                    display_path,
-                                    line_num + 1,
-                                    line.trim()
-                                ));
-                            }
+        for path in glob::glob(&full_pattern)
+            .unwrap_or_else(|_| glob::glob("").unwrap())
+            .flatten()
+        {
+            if path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    for (line_num, line) in content.lines().enumerate() {
+                        if regex.is_match(line) {
+                            // Show paths relative to working_dir
+                            let display_path = path
+                                .strip_prefix(&self.working_dir)
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_else(|_| path.display().to_string());
+                            results.push(format!(
+                                "{}:{}: {}",
+                                display_path,
+                                line_num + 1,
+                                line.trim()
+                            ));
                         }
                     }
                 }

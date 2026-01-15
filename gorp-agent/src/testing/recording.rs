@@ -158,7 +158,7 @@ impl ReplayAgent {
                             let mut t = transcript.lock().unwrap();
                             t.iter()
                                 .position(|i| i.prompt == text)
-                                .and_then(|idx| Some(t.remove(idx).unwrap()))
+                                .map(|idx| t.remove(idx).unwrap())
                         };
 
                         if let Some(interaction) = interaction {

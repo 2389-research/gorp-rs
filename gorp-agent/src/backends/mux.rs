@@ -147,26 +147,24 @@ impl SessionDb {
                 content: m
                     .content
                     .iter()
-                    .filter_map(|c| match c {
+                    .map(|c| match c {
                         ContentBlock::Text { text } => {
-                            Some(StoredContentBlock::Text { text: text.clone() })
+                            StoredContentBlock::Text { text: text.clone() }
                         }
-                        ContentBlock::ToolUse { id, name, input } => {
-                            Some(StoredContentBlock::ToolUse {
-                                id: id.clone(),
-                                name: name.clone(),
-                                input: input.clone(),
-                            })
-                        }
+                        ContentBlock::ToolUse { id, name, input } => StoredContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        },
                         ContentBlock::ToolResult {
                             tool_use_id,
                             content,
                             is_error,
-                        } => Some(StoredContentBlock::ToolResult {
+                        } => StoredContentBlock::ToolResult {
                             tool_use_id: tool_use_id.clone(),
                             content: content.clone(),
                             is_error: *is_error,
-                        }),
+                        },
                     })
                     .collect(),
             })
@@ -660,6 +658,7 @@ async fn connect_mcp_server(
     Ok(client)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_prompt(
     client: &AnthropicClient,
     sessions: &Arc<RwLock<HashMap<String, MuxSession>>>,
@@ -773,8 +772,7 @@ async fn run_prompt(
                         }
                         StreamEvent::ContentBlockStop { index } => {
                             // Finalize text blocks
-                            if !current_text.is_empty() && response_content.len() == *index as usize
-                            {
+                            if !current_text.is_empty() && response_content.len() == *index {
                                 response_content.push(ContentBlock::Text {
                                     text: std::mem::take(&mut current_text),
                                 });
@@ -800,7 +798,7 @@ async fn run_prompt(
                         } => {
                             total_usage.input_tokens += usage.input_tokens as u64;
                             total_usage.output_tokens += usage.output_tokens as u64;
-                            stop_reason = sr.clone();
+                            stop_reason = *sr;
                         }
                         StreamEvent::MessageStart { .. } | StreamEvent::MessageStop => {}
                     }

@@ -171,6 +171,7 @@ pub async fn handle_message_with_sender<S: OnboardingSender>(
 }
 
 /// Send the welcome message
+#[allow(dead_code)]
 async fn send_welcome_message(room: &Room) -> Result<()> {
     send_welcome_message_with_sender(&MatrixOnboardingRoom(room)).await
 }
@@ -189,6 +190,7 @@ async fn send_welcome_message_with_sender<S: OnboardingSender>(sender: &S) -> Re
 }
 
 /// Handle response to welcome message
+#[allow(dead_code)]
 async fn handle_welcome_response(
     room: &Room,
     session_store: &SessionStore,
@@ -257,6 +259,7 @@ async fn handle_welcome_response_with_sender<S: OnboardingSender>(
 }
 
 /// Handle response to API key check (retry/skip)
+#[allow(dead_code)]
 async fn handle_api_key_response(
     room: &Room,
     session_store: &SessionStore,
@@ -314,6 +317,7 @@ async fn handle_api_key_response_with_sender<S: OnboardingSender>(
 }
 
 /// Send the channel name prompt
+#[allow(dead_code)]
 async fn send_channel_prompt(room: &Room) -> Result<()> {
     send_channel_prompt_with_sender(&MatrixOnboardingRoom(room)).await
 }

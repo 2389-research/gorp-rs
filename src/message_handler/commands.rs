@@ -188,7 +188,7 @@ pub async fn handle_command<C: ChatChannel>(
                 Some("on") | Some("enable") => {
                     if let Err(e) = std::fs::create_dir_all(&debug_dir) {
                         channel
-                            .send(MessageContent::plain(&format!(
+                            .send(MessageContent::plain(format!(
                                 "⚠️ Failed to create debug directory: {}",
                                 e
                             )))
@@ -197,7 +197,7 @@ pub async fn handle_command<C: ChatChannel>(
                     }
                     if let Err(e) = std::fs::write(&debug_file, "") {
                         channel
-                            .send(MessageContent::plain(&format!(
+                            .send(MessageContent::plain(format!(
                                 "⚠️ Failed to enable debug: {}",
                                 e
                             )))
@@ -214,7 +214,7 @@ pub async fn handle_command<C: ChatChannel>(
                     if debug_file.exists() {
                         if let Err(e) = std::fs::remove_file(&debug_file) {
                             channel
-                                .send(MessageContent::plain(&format!(
+                                .send(MessageContent::plain(format!(
                                     "⚠️ Failed to disable debug: {}",
                                     e
                                 )))
@@ -235,7 +235,7 @@ pub async fn handle_command<C: ChatChannel>(
                     } else {
                         "🔇 Debug mode is DISABLED\n\nTool usage is hidden in this channel."
                     };
-                    channel.send(MessageContent::plain(&format!(
+                    channel.send(MessageContent::plain(format!(
                         "{}\n\nCommands:\n  !debug on - Show tool usage\n  !debug off - Hide tool usage",
                         status
                     )))
@@ -266,7 +266,7 @@ pub async fn handle_command<C: ChatChannel>(
                     let available = "acp, mux, direct";
                     let current = ch.backend_type.as_deref().unwrap_or("(global default)");
                     channel
-                        .send(MessageContent::plain(&format!(
+                        .send(MessageContent::plain(format!(
                             "📋 Available Backends\n\n\
                         Current: {}\n\
                         Available: {}\n\n\
@@ -291,7 +291,7 @@ pub async fn handle_command<C: ChatChannel>(
                     let valid_backends = ["acp", "mux", "direct"];
                     if !valid_backends.contains(&new_backend.as_str()) {
                         channel
-                            .send(MessageContent::plain(&format!(
+                            .send(MessageContent::plain(format!(
                                 "❌ Unknown backend: {}\n\nAvailable: {}",
                                 new_backend,
                                 valid_backends.join(", ")
@@ -306,7 +306,7 @@ pub async fn handle_command<C: ChatChannel>(
                         mgr.invalidate_session(&ch.channel_name);
                     }
 
-                    channel.send(MessageContent::plain(&format!(
+                    channel.send(MessageContent::plain(format!(
                         "✅ Backend changed to: {}\n\nSession has been reset. Next message will use the new backend.",
                         new_backend
                     )))
@@ -339,7 +339,7 @@ pub async fn handle_command<C: ChatChannel>(
                     let current = ch.backend_type.as_deref().unwrap_or("(global default)");
                     let global_default = &config.backend.backend_type;
                     channel
-                        .send(MessageContent::plain(&format!(
+                        .send(MessageContent::plain(format!(
                             "🔌 Backend Status\n\n\
                         Channel backend: {}\n\
                         Global default: {}\n\n\

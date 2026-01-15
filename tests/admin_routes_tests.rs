@@ -425,6 +425,7 @@ fn test_schedule_status_icons() {
 // =============================================================================
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn test_file_size_limits() {
     // These constants should match the ones in routes.rs
     const MAX_LOG_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
@@ -443,6 +444,7 @@ fn test_file_size_limits() {
 // =============================================================================
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn test_search_limits() {
     const MAX_SEARCH_RESULTS: usize = 100;
     const MAX_FILES_TO_SCAN: usize = 1000;
