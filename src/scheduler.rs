@@ -489,9 +489,10 @@ async fn execute_schedule(
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
-            if let Err(e) =
-                scheduler_store.mark_failed(&schedule.id, &format!("{} error with empty response", backend_type))
-            {
+            if let Err(e) = scheduler_store.mark_failed(
+                &schedule.id,
+                &format!("{} error with empty response", backend_type),
+            ) {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
         } else {
@@ -511,7 +512,10 @@ async fn execute_schedule(
             {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
             }
-            if let Err(e) = scheduler_store.mark_failed(&schedule.id, &format!("Empty response from {} backend", backend_type)) {
+            if let Err(e) = scheduler_store.mark_failed(
+                &schedule.id,
+                &format!("Empty response from {} backend", backend_type),
+            ) {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
         }

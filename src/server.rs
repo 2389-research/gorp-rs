@@ -59,7 +59,11 @@ impl ServerState {
                 RoomInfo {
                     id: room.room_id().to_string(),
                     name,
-                    is_direct: room.is_direct().now_or_never().and_then(|r| r.ok()).unwrap_or(false),
+                    is_direct: room
+                        .is_direct()
+                        .now_or_never()
+                        .and_then(|r| r.ok())
+                        .unwrap_or(false),
                     unread_count: room.unread_notification_counts().notification_count,
                 }
             })

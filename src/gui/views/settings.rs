@@ -2,7 +2,7 @@
 // ABOUTME: Read-only view of Config from ServerState, organized in collapsible sections
 
 use crate::gui::app::Message;
-use crate::gui::theme::{colors, radius, spacing, text_size, content_style, surface_style};
+use crate::gui::theme::{colors, content_style, radius, spacing, surface_style, text_size};
 use crate::server::ServerState;
 use iced::widget::{column, container, row, scrollable, text, Space};
 use iced::{Alignment, Border, Element, Length};
@@ -65,9 +65,7 @@ fn section_card<'a>(
 fn config_hint<'a>() -> Element<'a, Message> {
     container(
         row![
-            text("ℹ")
-                .size(text_size::BODY)
-                .color(colors::TEXT_TERTIARY),
+            text("ℹ").size(text_size::BODY).color(colors::TEXT_TERTIARY),
             Space::with_width(spacing::SM),
             text("Edit config.toml to change settings. Changes require restart.")
                 .size(text_size::SMALL)

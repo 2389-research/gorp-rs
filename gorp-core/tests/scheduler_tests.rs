@@ -44,7 +44,9 @@ fn create_test_store() -> SchedulerStore {
     }
 
     let store = SchedulerStore::new(Arc::new(Mutex::new(conn)));
-    store.initialize_schema().expect("Failed to initialize schema");
+    store
+        .initialize_schema()
+        .expect("Failed to initialize schema");
     store
 }
 
@@ -487,11 +489,16 @@ fn test_store_mark_failed() {
     let schedule = create_test_schedule("fail-test", "general", "Fail test");
 
     store.create_schedule(&schedule).unwrap();
-    store.mark_failed("fail-test", "Test error message").unwrap();
+    store
+        .mark_failed("fail-test", "Test error message")
+        .unwrap();
 
     let retrieved = store.get_by_id("fail-test").unwrap().unwrap();
     assert_eq!(retrieved.status, ScheduleStatus::Failed);
-    assert_eq!(retrieved.error_message, Some("Test error message".to_string()));
+    assert_eq!(
+        retrieved.error_message,
+        Some("Test error message".to_string())
+    );
 }
 
 #[test]

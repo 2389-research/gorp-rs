@@ -4,8 +4,8 @@
 use crate::gui::app::Message;
 use crate::gui::components::common;
 use crate::gui::theme::{
-    self, colors, radius, spacing, text_size, button_primary,
-    content_style, header_style, message_other_style, message_own_style, text_input_style,
+    self, button_primary, colors, content_style, header_style, message_other_style,
+    message_own_style, radius, spacing, text_input_style, text_size,
 };
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Column, Space};
 use iced::{Alignment, Border, Element, Length};
@@ -50,13 +50,11 @@ fn message_bubble<'a>(msg: &'a ChatMessage) -> Element<'a, Message> {
         .size(text_size::BODY)
         .color(colors::TEXT_PRIMARY);
 
-    let bubble = container(
-        column![header, Space::with_height(spacing::XXS), content,]
-            .width(Length::Fill),
-    )
-    .padding([spacing::SM, spacing::MD])
-    .max_width(theme::MESSAGE_MAX_WIDTH)
-    .style(style);
+    let bubble =
+        container(column![header, Space::with_height(spacing::XXS), content,].width(Length::Fill))
+            .padding([spacing::SM, spacing::MD])
+            .max_width(theme::MESSAGE_MAX_WIDTH)
+            .style(style);
 
     // Align own messages to the right
     if msg.is_own {
@@ -87,7 +85,9 @@ fn typing_indicator<'a>(typing_users: &'a [String]) -> Element<'a, Message> {
     container(
         row![
             // Animated dots (static for now - could animate with subscription)
-            text("•••").size(text_size::BODY).color(colors::ACCENT_PRIMARY),
+            text("•••")
+                .size(text_size::BODY)
+                .color(colors::ACCENT_PRIMARY),
             Space::with_width(spacing::XS),
             text(typing_text)
                 .size(text_size::SMALL)
@@ -143,15 +143,14 @@ pub fn view<'a>(
 
     let connection_badge = container(
         row![
-            container(Space::with_width(6).height(6))
-                .style(move |_theme| container::Style {
-                    background: Some(status_dot_color.into()),
-                    border: Border {
-                        radius: radius::FULL.into(),
-                        ..Default::default()
-                    },
+            container(Space::with_width(6).height(6)).style(move |_theme| container::Style {
+                background: Some(status_dot_color.into()),
+                border: Border {
+                    radius: radius::FULL.into(),
                     ..Default::default()
-                }),
+                },
+                ..Default::default()
+            }),
             Space::with_width(spacing::XS),
             text(status_text)
                 .size(text_size::CAPTION)
@@ -214,10 +213,8 @@ pub fn view<'a>(
     } else if messages.is_empty() {
         empty_state()
     } else {
-        let message_items: Vec<Element<'a, Message>> = messages
-            .iter()
-            .map(|msg| message_bubble(msg))
-            .collect();
+        let message_items: Vec<Element<'a, Message>> =
+            messages.iter().map(|msg| message_bubble(msg)).collect();
 
         scrollable(
             Column::with_children(message_items)

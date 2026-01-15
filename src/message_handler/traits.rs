@@ -86,11 +86,7 @@ impl MockChannel {
 
 impl std::fmt::Debug for MockChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let message_count = self
-            .messages
-            .lock()
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let message_count = self.messages.lock().map(|m| m.len()).unwrap_or(0);
         f.debug_struct("MockChannel")
             .field("channel_id", &self.channel_id)
             .field("channel_name", &self.channel_name)
@@ -214,20 +210,16 @@ mod tests {
 
         if let Some(indicator) = channel.typing_indicator() {
             indicator.set_typing(true).await.unwrap();
-            assert!(
-                *channel
-                    .typing_state
-                    .lock()
-                    .expect("MockChannel typing_state mutex poisoned")
-            );
+            assert!(*channel
+                .typing_state
+                .lock()
+                .expect("MockChannel typing_state mutex poisoned"));
 
             indicator.set_typing(false).await.unwrap();
-            assert!(
-                !*channel
-                    .typing_state
-                    .lock()
-                    .expect("MockChannel typing_state mutex poisoned")
-            );
+            assert!(!*channel
+                .typing_state
+                .lock()
+                .expect("MockChannel typing_state mutex poisoned"));
         }
     }
 }

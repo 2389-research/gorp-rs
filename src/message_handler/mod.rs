@@ -20,9 +20,7 @@ pub use traits::MockChannel;
 
 use anyhow::Result;
 use matrix_sdk::{
-    room::Room,
-    ruma::events::room::message::RoomMessageEventContent,
-    Client, RoomState,
+    room::Room, ruma::events::room::message::RoomMessageEventContent, Client, RoomState,
 };
 
 use crate::{
@@ -283,15 +281,7 @@ pub async fn handle_message(
     };
 
     // Delegate to chat module for actual Claude invocation and response streaming
-    chat::process_chat_message(
-        room,
-        event,
-        client,
-        channel,
-        session_store,
-        warm_manager,
-    )
-    .await
+    chat::process_chat_message(room, event, client, channel, session_store, warm_manager).await
 }
 
 #[allow(clippy::too_many_arguments)]

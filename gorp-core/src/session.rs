@@ -737,8 +737,9 @@ impl SessionStore {
                         room_id = %room_id,
                         "DISPATCH channel created by concurrent operation, fetching existing"
                     );
-                    self.get_dispatch_channel(room_id)?
-                        .ok_or_else(|| anyhow::anyhow!("Channel disappeared after UNIQUE constraint error"))
+                    self.get_dispatch_channel(room_id)?.ok_or_else(|| {
+                        anyhow::anyhow!("Channel disappeared after UNIQUE constraint error")
+                    })
                 } else {
                     Err(e)
                 }

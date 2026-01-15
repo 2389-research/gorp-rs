@@ -1,12 +1,12 @@
 // ABOUTME: Schedule import and parsing utilities
 // ABOUTME: Handles YAML schedule imports and natural language time parsing
 
+use super::helpers::looks_like_cron;
 use crate::scheduler::{
     compute_next_cron_execution_in_tz, parse_time_expression, ParsedSchedule, ScheduleStatus,
     ScheduledPrompt, SchedulerStore,
 };
 use crate::session::Channel;
-use super::helpers::looks_like_cron;
 
 /// Import a single schedule from YAML data
 pub fn import_schedule(
@@ -67,7 +67,10 @@ pub fn import_schedule(
 
 /// Parse schedule input to extract time expression and prompt
 /// Uses greedy matching with a max lookahead to avoid consuming the entire prompt
-pub fn parse_schedule_input(input: &str, timezone: &str) -> anyhow::Result<(ParsedSchedule, String)> {
+pub fn parse_schedule_input(
+    input: &str,
+    timezone: &str,
+) -> anyhow::Result<(ParsedSchedule, String)> {
     let words: Vec<&str> = input.split_whitespace().collect();
 
     // Require at least 1 word for prompt, limit time expression to 10 words max
@@ -128,7 +131,9 @@ mod tests {
         .expect("Failed to insert test channel");
 
         let store = SchedulerStore::new(Arc::new(Mutex::new(conn)));
-        store.initialize_schema().expect("Failed to initialize schema");
+        store
+            .initialize_schema()
+            .expect("Failed to initialize schema");
         store
     }
 

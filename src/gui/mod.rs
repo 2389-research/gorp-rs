@@ -18,16 +18,15 @@ pub fn run_gui() -> Result<()> {
     // Initialize logging (simplified for GUI - just console)
     use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-    let console_layer = fmt::layer()
-        .pretty()
-        .with_target(true)
-        .with_filter(tracing_subscriber::EnvFilter::new(
-            "warn,gorp=info,matrix_sdk_crypto=error",
-        ));
+    let console_layer =
+        fmt::layer()
+            .pretty()
+            .with_target(true)
+            .with_filter(tracing_subscriber::EnvFilter::new(
+                "warn,gorp=info,matrix_sdk_crypto=error",
+            ));
 
-    tracing_subscriber::registry()
-        .with(console_layer)
-        .init();
+    tracing_subscriber::registry().with(console_layer).init();
 
     // Load config
     dotenvy::dotenv().ok();

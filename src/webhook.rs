@@ -686,7 +686,10 @@ async fn process_webhook_job(
     if response.trim().is_empty() {
         let backend_type = warm_manager.read().await.backend_type().to_string();
         metrics::record_error("agent_no_response");
-        return Err(anyhow::anyhow!("{} backend finished without a response", backend_type));
+        return Err(anyhow::anyhow!(
+            "{} backend finished without a response",
+            backend_type
+        ));
     }
 
     // Update session ID if Claude CLI reported a new one

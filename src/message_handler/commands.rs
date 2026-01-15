@@ -6,13 +6,8 @@ use gorp_core::traits::{ChatChannel, MessageContent};
 use matrix_sdk::Client;
 
 use crate::{
-    commands::Command,
-    config::Config,
-    metrics,
-    scheduler::SchedulerStore,
-    session::SessionStore,
-    utils::markdown_to_html,
-    warm_session::SharedWarmSessionManager,
+    commands::Command, config::Config, metrics, scheduler::SchedulerStore, session::SessionStore,
+    utils::markdown_to_html, warm_session::SharedWarmSessionManager,
 };
 
 use super::helpers::is_debug_enabled;
@@ -74,15 +69,21 @@ pub async fn handle_command<C: ChatChannel>(
     match command {
         "help" => {
             let help_html = markdown_to_html(HELP_MD);
-            channel.send(MessageContent::html(HELP_MD, &help_html)).await?;
+            channel
+                .send(MessageContent::html(HELP_MD, &help_html))
+                .await?;
         }
         "changelog" => {
             let changelog_html = markdown_to_html(CHANGELOG_MD);
-            channel.send(MessageContent::html(CHANGELOG_MD, &changelog_html)).await?;
+            channel
+                .send(MessageContent::html(CHANGELOG_MD, &changelog_html))
+                .await?;
         }
         "motd" => {
             let motd_html = markdown_to_html(MOTD_MD);
-            channel.send(MessageContent::html(MOTD_MD, &motd_html)).await?;
+            channel
+                .send(MessageContent::html(MOTD_MD, &motd_html))
+                .await?;
         }
         "status" => {
             if let Some(ch) = session_store.get_by_room(channel.id())? {
@@ -122,31 +123,40 @@ pub async fn handle_command<C: ChatChannel>(
                 );
                 channel.send(MessageContent::plain(&status)).await?;
             } else {
-                channel.send(MessageContent::plain(
-                    "📊 Channel Status\n\n\
+                channel
+                    .send(MessageContent::plain(
+                        "📊 Channel Status\n\n\
                     No channel attached.\n\n\
                     DM me to create one: !create <name>",
-                ))
-                .await?;
+                    ))
+                    .await?;
             }
         }
         "list" => {
             if !is_dm {
-                channel.send(MessageContent::plain("❌ The !list command only works in DMs.")).await?;
+                channel
+                    .send(MessageContent::plain(
+                        "❌ The !list command only works in DMs.",
+                    ))
+                    .await?;
                 return Ok(());
             }
 
             let channels = session_store.list_all()?;
             if channels.is_empty() {
-                channel.send(MessageContent::plain(
-                    "📋 No channels yet.\n\nCreate one with: !create <name>",
-                ))
-                .await?;
+                channel
+                    .send(MessageContent::plain(
+                        "📋 No channels yet.\n\nCreate one with: !create <name>",
+                    ))
+                    .await?;
             } else {
                 let mut msg = String::from("📋 Channels:\n\n");
                 for ch in &channels {
                     let status = if ch.started { "🟢" } else { "⚪" };
-                    msg.push_str(&format!("{} {} - {}\n", status, ch.channel_name, ch.directory));
+                    msg.push_str(&format!(
+                        "{} {} - {}\n",
+                        status, ch.channel_name, ch.directory
+                    ));
                 }
                 msg.push_str("\nUse !join <name> to get invited to a channel.");
                 channel.send(MessageContent::plain(&msg)).await?;
@@ -154,12 +164,18 @@ pub async fn handle_command<C: ChatChannel>(
         }
         "debug" => {
             if is_dm {
-                channel.send(MessageContent::plain("❌ The !debug command only works in channel rooms.")).await?;
+                channel
+                    .send(MessageContent::plain(
+                        "❌ The !debug command only works in channel rooms.",
+                    ))
+                    .await?;
                 return Ok(());
             }
 
             let Some(ch) = session_store.get_by_room(channel.id())? else {
-                channel.send(MessageContent::plain("No channel attached to this room.")).await?;
+                channel
+                    .send(MessageContent::plain("No channel attached to this room."))
+                    .await?;
                 return Ok(());
             };
 
@@ -171,11 +187,21 @@ pub async fn handle_command<C: ChatChannel>(
             match subcommand.as_deref() {
                 Some("on") | Some("enable") => {
                     if let Err(e) = std::fs::create_dir_all(&debug_dir) {
-                        channel.send(MessageContent::plain(&format!("⚠️ Failed to create debug directory: {}", e))).await?;
+                        channel
+                            .send(MessageContent::plain(&format!(
+                                "⚠️ Failed to create debug directory: {}",
+                                e
+                            )))
+                            .await?;
                         return Ok(());
                     }
                     if let Err(e) = std::fs::write(&debug_file, "") {
-                        channel.send(MessageContent::plain(&format!("⚠️ Failed to enable debug: {}", e))).await?;
+                        channel
+                            .send(MessageContent::plain(&format!(
+                                "⚠️ Failed to enable debug: {}",
+                                e
+                            )))
+                            .await?;
                         return Ok(());
                     }
                     channel.send(MessageContent::plain(
@@ -187,14 +213,20 @@ pub async fn handle_command<C: ChatChannel>(
                 Some("off") | Some("disable") => {
                     if debug_file.exists() {
                         if let Err(e) = std::fs::remove_file(&debug_file) {
-                            channel.send(MessageContent::plain(&format!("⚠️ Failed to disable debug: {}", e))).await?;
+                            channel
+                                .send(MessageContent::plain(&format!(
+                                    "⚠️ Failed to disable debug: {}",
+                                    e
+                                )))
+                                .await?;
                             return Ok(());
                         }
                     }
-                    channel.send(MessageContent::plain(
-                        "🔇 Debug mode DISABLED\n\nTool usage will be hidden in this channel.",
-                    ))
-                    .await?;
+                    channel
+                        .send(MessageContent::plain(
+                            "🔇 Debug mode DISABLED\n\nTool usage will be hidden in this channel.",
+                        ))
+                        .await?;
                     tracing::info!(channel = %ch.channel_name, "Debug mode disabled");
                 }
                 _ => {
@@ -213,12 +245,18 @@ pub async fn handle_command<C: ChatChannel>(
         }
         "backend" => {
             if is_dm {
-                channel.send(MessageContent::plain("❌ The !backend command only works in channel rooms.")).await?;
+                channel
+                    .send(MessageContent::plain(
+                        "❌ The !backend command only works in channel rooms.",
+                    ))
+                    .await?;
                 return Ok(());
             }
 
             let Some(ch) = session_store.get_by_room(channel.id())? else {
-                channel.send(MessageContent::plain("No channel attached to this room.")).await?;
+                channel
+                    .send(MessageContent::plain("No channel attached to this room."))
+                    .await?;
                 return Ok(());
             };
 
@@ -226,39 +264,39 @@ pub async fn handle_command<C: ChatChannel>(
             match subcommand.as_deref() {
                 Some("list") => {
                     let available = "acp, mux, direct";
-                    let current = ch
-                        .backend_type
-                        .as_deref()
-                        .unwrap_or("(global default)");
-                    channel.send(MessageContent::plain(&format!(
-                        "📋 Available Backends\n\n\
+                    let current = ch.backend_type.as_deref().unwrap_or("(global default)");
+                    channel
+                        .send(MessageContent::plain(&format!(
+                            "📋 Available Backends\n\n\
                         Current: {}\n\
                         Available: {}\n\n\
                         Use `!backend set <name>` to change.",
-                        current, available
-                    )))
-                    .await?;
+                            current, available
+                        )))
+                        .await?;
                 }
                 Some("set") => {
                     let Some(new_backend) = command_parts.get(2) else {
-                        channel.send(MessageContent::plain(
-                            "Usage: !backend set <name>\n\n\
+                        channel
+                            .send(MessageContent::plain(
+                                "Usage: !backend set <name>\n\n\
                             Available: acp, mux, direct\n\n\
                             Example: !backend set mux",
-                        ))
-                        .await?;
+                            ))
+                            .await?;
                         return Ok(());
                     };
 
                     let new_backend = new_backend.to_lowercase();
                     let valid_backends = ["acp", "mux", "direct"];
                     if !valid_backends.contains(&new_backend.as_str()) {
-                        channel.send(MessageContent::plain(&format!(
-                            "❌ Unknown backend: {}\n\nAvailable: {}",
-                            new_backend,
-                            valid_backends.join(", ")
-                        )))
-                        .await?;
+                        channel
+                            .send(MessageContent::plain(&format!(
+                                "❌ Unknown backend: {}\n\nAvailable: {}",
+                                new_backend,
+                                valid_backends.join(", ")
+                            )))
+                            .await?;
                         return Ok(());
                     }
 
@@ -298,28 +336,27 @@ pub async fn handle_command<C: ChatChannel>(
                     );
                 }
                 _ => {
-                    let current = ch
-                        .backend_type
-                        .as_deref()
-                        .unwrap_or("(global default)");
+                    let current = ch.backend_type.as_deref().unwrap_or("(global default)");
                     let global_default = &config.backend.backend_type;
-                    channel.send(MessageContent::plain(&format!(
-                        "🔌 Backend Status\n\n\
+                    channel
+                        .send(MessageContent::plain(&format!(
+                            "🔌 Backend Status\n\n\
                         Channel backend: {}\n\
                         Global default: {}\n\n\
                         Commands:\n  \
                         !backend list - Show available backends\n  \
                         !backend set <name> - Change backend\n  \
                         !backend reset - Use global default",
-                        current, global_default
-                    )))
-                    .await?;
+                            current, global_default
+                        )))
+                        .await?;
                 }
             }
         }
         // Commands that need Matrix client operations are delegated back
         // For now, return a placeholder - these will be handled in mod.rs
-        "create" | "join" | "delete" | "leave" | "cleanup" | "restore-rooms" | "setup" | "schedule" | "reset" => {
+        "create" | "join" | "delete" | "leave" | "cleanup" | "restore-rooms" | "setup"
+        | "schedule" | "reset" => {
             // These commands need the Matrix client for room operations
             // or have more complete implementations in matrix_commands.rs
             // Reset is delegated to ensure consistent use of reset_session (which resets started flag)
@@ -875,7 +912,11 @@ mod tests {
         assert!(room.has_message_containing("Backend changed to: mux"));
 
         // Verify it was actually saved
-        let channel = ctx.session_store.get_by_name("test-channel").unwrap().unwrap();
+        let channel = ctx
+            .session_store
+            .get_by_name("test-channel")
+            .unwrap()
+            .unwrap();
         assert_eq!(channel.backend_type, Some("mux".to_string()));
     }
 
@@ -909,7 +950,9 @@ mod tests {
         let room = MockChannel::new("!channel:matrix.org");
         ctx.create_channel("test-channel", "!channel:matrix.org");
         // First set a backend
-        ctx.session_store.update_backend_type("test-channel", Some("mux")).unwrap();
+        ctx.session_store
+            .update_backend_type("test-channel", Some("mux"))
+            .unwrap();
         let cmd = make_command("backend", vec!["reset"]);
 
         let result = handle_command(
@@ -929,7 +972,11 @@ mod tests {
         assert!(room.has_message_containing("reset to global default"));
 
         // Verify it was reset
-        let channel = ctx.session_store.get_by_name("test-channel").unwrap().unwrap();
+        let channel = ctx
+            .session_store
+            .get_by_name("test-channel")
+            .unwrap()
+            .unwrap();
         assert_eq!(channel.backend_type, None);
     }
 
@@ -958,7 +1005,10 @@ mod tests {
 
         // Should delegate to Matrix handler
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("DELEGATE_TO_MATRIX:reset"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("DELEGATE_TO_MATRIX:reset"));
     }
 
     // =========================================================================
@@ -987,7 +1037,10 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("DELEGATE_TO_MATRIX:create"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("DELEGATE_TO_MATRIX:create"));
     }
 
     #[tokio::test]
@@ -1010,7 +1063,10 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("DELEGATE_TO_MATRIX:join"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("DELEGATE_TO_MATRIX:join"));
     }
 
     #[tokio::test]
@@ -1033,7 +1089,10 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("DELEGATE_TO_MATRIX:schedule"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("DELEGATE_TO_MATRIX:schedule"));
     }
 
     // =========================================================================

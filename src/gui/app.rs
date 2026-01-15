@@ -6,14 +6,14 @@ use super::components::hotkey::{self, HotkeyManager};
 use super::components::tray::{self, ConnectionState};
 use super::sync::{self, MatrixEvent};
 use super::theme::{
-    self, colors, radius, spacing, text_size, button_primary,
-    button_secondary, content_style, modal_style, text_input_style,
+    self, button_primary, button_secondary, colors, content_style, modal_style, radius, spacing,
+    text_input_style, text_size,
 };
 use super::views::chat::{chat_scroll_id, ChatMessage};
 use super::views::{self, View};
 use crate::config::Config;
-use crate::server::{RoomInfo, ServerState};
 use crate::scheduler::ScheduledPrompt;
+use crate::server::{RoomInfo, ServerState};
 use global_hotkey::HotKeyState;
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Border, Element, Length, Subscription, Task, Theme};
@@ -411,13 +411,18 @@ impl GorpApp {
                         self.view = view;
                         return Task::perform(
                             async move {
-                                let messages = sync::load_room_messages(&client, &room_id, 50).await;
+                                let messages =
+                                    sync::load_room_messages(&client, &room_id, 50).await;
                                 messages
                                     .into_iter()
                                     .map(|(sender, content, timestamp, is_own)| {
                                         // UTF-8 safe truncation for dedup key
-                                        let content_prefix: String = content.chars().take(50).collect();
-                                        let dedup_key = Some(format!("{}:{}:{}", sender, timestamp, content_prefix));
+                                        let content_prefix: String =
+                                            content.chars().take(50).collect();
+                                        let dedup_key = Some(format!(
+                                            "{}:{}:{}",
+                                            sender, timestamp, content_prefix
+                                        ));
                                         ChatMessage {
                                             sender,
                                             content,
@@ -596,7 +601,8 @@ impl GorpApp {
                 });
 
                 // Create scroll task for after optimistic update
-                let scroll_task = scrollable::snap_to(chat_scroll_id(), scrollable::RelativeOffset::END);
+                let scroll_task =
+                    scrollable::snap_to(chat_scroll_id(), scrollable::RelativeOffset::END);
 
                 // Send message asynchronously
                 if let Some(ref server) = self.server {
@@ -672,21 +678,24 @@ impl GorpApp {
                             let dedup_key = format!("{}:{}:{}", sender, timestamp, content_prefix);
 
                             // Check for duplicates using dedup_key
-                            let is_duplicate = self.chat_messages.iter().any(|m| {
-                                m.dedup_key.as_ref() == Some(&dedup_key)
-                            });
+                            let is_duplicate = self
+                                .chat_messages
+                                .iter()
+                                .any(|m| m.dedup_key.as_ref() == Some(&dedup_key));
 
                             // Also check for optimistic update duplicates:
                             // If this is our own message, check if there's an optimistic "You:..." entry
-                            let is_optimistic_duplicate = is_own && self.chat_messages.iter().any(|m| {
-                                if let Some(ref key) = m.dedup_key {
-                                    // Optimistic updates use "You:timestamp:content"
-                                    let optimistic_key = format!("You:{}:{}", timestamp, content_prefix);
-                                    key == &optimistic_key
-                                } else {
-                                    false
-                                }
-                            });
+                            let is_optimistic_duplicate = is_own
+                                && self.chat_messages.iter().any(|m| {
+                                    if let Some(ref key) = m.dedup_key {
+                                        // Optimistic updates use "You:timestamp:content"
+                                        let optimistic_key =
+                                            format!("You:{}:{}", timestamp, content_prefix);
+                                        key == &optimistic_key
+                                    } else {
+                                        false
+                                    }
+                                });
 
                             if !is_duplicate && !is_optimistic_duplicate {
                                 self.chat_messages.push(ChatMessage {
@@ -700,11 +709,15 @@ impl GorpApp {
                                 // Cap message history to prevent unbounded growth
                                 const MAX_MESSAGES: usize = 200;
                                 if self.chat_messages.len() > MAX_MESSAGES {
-                                    self.chat_messages.drain(0..self.chat_messages.len() - MAX_MESSAGES);
+                                    self.chat_messages
+                                        .drain(0..self.chat_messages.len() - MAX_MESSAGES);
                                 }
 
                                 // Auto-scroll to bottom on new message
-                                return scrollable::snap_to(chat_scroll_id(), scrollable::RelativeOffset::END);
+                                return scrollable::snap_to(
+                                    chat_scroll_id(),
+                                    scrollable::RelativeOffset::END,
+                                );
                             }
                         }
                     }
@@ -761,9 +774,9 @@ impl GorpApp {
 
                     for live_msg in live_messages {
                         // Only add if not already in loaded messages (by dedup_key)
-                        let is_duplicate = messages.iter().any(|m| {
-                            m.dedup_key.is_some() && m.dedup_key == live_msg.dedup_key
-                        });
+                        let is_duplicate = messages
+                            .iter()
+                            .any(|m| m.dedup_key.is_some() && m.dedup_key == live_msg.dedup_key);
                         if !is_duplicate {
                             messages.push(live_msg);
                         }
@@ -935,7 +948,8 @@ impl GorpApp {
                         .map(|r| r.id.clone());
 
                     let Some(room_id) = room_id else {
-                        self.schedule_form_error = Some(format!("Room '{}' not found", self.schedule_form_channel));
+                        self.schedule_form_error =
+                            Some(format!("Room '{}' not found", self.schedule_form_channel));
                         return Task::none();
                     };
 
@@ -1077,8 +1091,14 @@ impl GorpApp {
                     self.room_creation_error = Some("Room name cannot be empty".to_string());
                     return Task::none();
                 }
-                if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-                    self.room_creation_error = Some("Room name can only contain letters, numbers, hyphens and underscores".to_string());
+                if !name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
+                    self.room_creation_error = Some(
+                        "Room name can only contain letters, numbers, hyphens and underscores"
+                            .to_string(),
+                    );
                     return Task::none();
                 }
 
@@ -1174,7 +1194,9 @@ impl GorpApp {
                 column![
                     // Logo container
                     container(
-                        text("G").size(text_size::DISPLAY).color(colors::TEXT_INVERSE),
+                        text("G")
+                            .size(text_size::DISPLAY)
+                            .color(colors::TEXT_INVERSE),
                     )
                     .padding([spacing::MD, spacing::LG])
                     .style(|_theme| container::Style {
@@ -1355,7 +1377,9 @@ impl GorpApp {
             column![
                 // Header
                 row![
-                    text("#").size(text_size::TITLE).color(colors::ACCENT_PRIMARY),
+                    text("#")
+                        .size(text_size::TITLE)
+                        .color(colors::ACCENT_PRIMARY),
                     Space::with_width(spacing::SM),
                     column![
                         text("New Room")
@@ -1370,7 +1394,9 @@ impl GorpApp {
                 .align_y(Alignment::Center),
                 Space::with_height(spacing::LG),
                 // Name field
-                text("Room Name").size(text_size::SMALL).color(colors::TEXT_SECONDARY),
+                text("Room Name")
+                    .size(text_size::SMALL)
+                    .color(colors::TEXT_SECONDARY),
                 Space::with_height(spacing::XXS),
                 input,
                 Space::with_height(spacing::XS),

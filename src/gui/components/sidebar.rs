@@ -3,12 +3,14 @@
 
 use crate::gui::app::Message;
 use crate::gui::theme::{
-    self, colors, radius, spacing, text_size, button_nav, button_nav_active,
-    button_room, button_room_active, sidebar_style,
+    self, button_nav, button_nav_active, button_room, button_room_active, colors, radius,
+    sidebar_style, spacing, text_size,
 };
 use crate::gui::views::View;
 use crate::server::RoomInfo;
-use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, Column, Space};
+use iced::widget::{
+    button, column, container, horizontal_rule, row, scrollable, text, Column, Space,
+};
 use iced::{Alignment, Border, Element, Length, Padding};
 
 /// Section label for sidebar groups
@@ -92,7 +94,9 @@ fn room_item<'a>(room: &'a RoomInfo, is_active: bool) -> Element<'a, Message> {
 
     // Room type indicator
     let type_indicator = if room.is_direct {
-        text("@").size(text_size::BODY).color(colors::ACCENT_PRIMARY) // DM
+        text("@")
+            .size(text_size::BODY)
+            .color(colors::ACCENT_PRIMARY) // DM
     } else {
         text("#").size(text_size::BODY).color(colors::TEXT_TERTIARY) // Channel
     };
@@ -149,21 +153,21 @@ pub fn view<'a>(current_view: &View, rooms: &'a [RoomInfo]) -> Element<'a, Messa
     // Brand header
     let brand = container(
         row![
-            container(
-                text("G").size(text_size::LARGE).color(colors::TEXT_INVERSE),
-            )
-            .padding([spacing::XS, spacing::SM])
-            .style(|_theme| container::Style {
-                background: Some(colors::ACCENT_PRIMARY.into()),
-                border: Border {
-                    radius: radius::MD.into(),
+            container(text("G").size(text_size::LARGE).color(colors::TEXT_INVERSE),)
+                .padding([spacing::XS, spacing::SM])
+                .style(|_theme| container::Style {
+                    background: Some(colors::ACCENT_PRIMARY.into()),
+                    border: Border {
+                        radius: radius::MD.into(),
+                        ..Default::default()
+                    },
                     ..Default::default()
-                },
-                ..Default::default()
-            }),
+                }),
             Space::with_width(spacing::SM),
             column![
-                text("gorp").size(text_size::LARGE).color(colors::TEXT_PRIMARY),
+                text("gorp")
+                    .size(text_size::LARGE)
+                    .color(colors::TEXT_PRIMARY),
                 text("Matrix-Claude Bridge")
                     .size(text_size::CAPTION)
                     .color(colors::TEXT_TERTIARY),
@@ -212,16 +216,13 @@ pub fn view<'a>(current_view: &View, rooms: &'a [RoomInfo]) -> Element<'a, Messa
             .into()
     };
 
-    let scrollable_rooms = scrollable(rooms_section)
-        .height(Length::Fill);
+    let scrollable_rooms = scrollable(rooms_section).height(Length::Fill);
 
     // Settings at bottom
     let bottom_nav = column![
         divider(),
-        container(
-            nav_button("Settings", "⚙", View::Settings, current_view),
-        )
-        .padding([0.0, spacing::XS]),
+        container(nav_button("Settings", "⚙", View::Settings, current_view),)
+            .padding([0.0, spacing::XS]),
     ];
 
     // ROOMS section header with add button
@@ -231,10 +232,14 @@ pub fn view<'a>(current_view: &View, rooms: &'a [RoomInfo]) -> Element<'a, Messa
                 .size(text_size::CAPTION)
                 .color(colors::TEXT_TERTIARY),
             Space::with_width(Length::Fill),
-            button(text("+").size(text_size::BODY).color(colors::TEXT_SECONDARY))
-                .on_press(Message::ShowCreateRoom)
-                .style(button_nav)
-                .padding([spacing::XXXS, spacing::XS]),
+            button(
+                text("+")
+                    .size(text_size::BODY)
+                    .color(colors::TEXT_SECONDARY)
+            )
+            .on_press(Message::ShowCreateRoom)
+            .style(button_nav)
+            .padding([spacing::XXXS, spacing::XS]),
         ]
         .align_y(Alignment::Center),
     )

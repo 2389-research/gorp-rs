@@ -17,18 +17,29 @@ pub use dispatch_events::WorkerEvent;
 
 // Re-export core traits for convenient access
 pub use traits::{
-    // Tier 1: Messaging Platform
-    EventStream, MessagingPlatform,
-    // Tier 2: Chat Platform
-    ChatChannel, ChatPlatform,
-    // Tier 3: Local Interface
-    LocalInterface, WorkspaceInfo,
     // Optional Capabilities
-    AttachmentHandler, ChannelCreator, ChannelManager, EncryptedPlatform, TypingIndicator,
+    AttachmentHandler,
     // Data Types
-    AttachmentInfo, ChatUser, IncomingMessage, MessageContent,
+    AttachmentInfo,
+    ChannelCreator,
+    ChannelManager,
+    // Tier 2: Chat Platform
+    ChatChannel,
     // Deprecated (backwards compatibility)
-    ChatInterface, ChatRoom,
+    ChatInterface,
+    ChatPlatform,
+    ChatRoom,
+    ChatUser,
+    EncryptedPlatform,
+    // Tier 1: Messaging Platform
+    EventStream,
+    IncomingMessage,
+    // Tier 3: Local Interface
+    LocalInterface,
+    MessageContent,
+    MessagingPlatform,
+    TypingIndicator,
+    WorkspaceInfo,
 };
 
 // Re-export gorp-agent types

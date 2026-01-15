@@ -399,10 +399,7 @@ impl ChannelManager for MatrixPlatform {
 
     async fn members(&self, channel_id: &str) -> Result<Vec<ChatUser>> {
         let room_id: OwnedRoomId = channel_id.parse().context("Invalid room ID")?;
-        let room = self
-            .client
-            .get_room(&room_id)
-            .context("Room not found")?;
+        let room = self.client.get_room(&room_id).context("Room not found")?;
 
         let members = room
             .members(matrix_sdk::RoomMemberships::ACTIVE)

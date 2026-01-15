@@ -111,7 +111,9 @@ pub async fn handle_dispatch_message(
 
     // Create MuxConfig from warm_config - model must be configured
     let model = warm_config.model.clone().ok_or_else(|| {
-        anyhow::anyhow!("No model configured in mux config. Set 'model' in config.toml under [mux] section.")
+        anyhow::anyhow!(
+            "No model configured in mux config. Set 'model' in config.toml under [mux] section."
+        )
     })?;
 
     let mux_config = MuxConfig {

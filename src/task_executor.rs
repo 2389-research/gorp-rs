@@ -43,13 +43,14 @@ async fn run_executor_loop(
         ticker.tick().await;
 
         // Get pending tasks
-        let pending_tasks = match session_store.list_dispatch_tasks(Some(DispatchTaskStatus::Pending)) {
-            Ok(tasks) => tasks,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to list pending dispatch tasks");
-                continue;
-            }
-        };
+        let pending_tasks =
+            match session_store.list_dispatch_tasks(Some(DispatchTaskStatus::Pending)) {
+                Ok(tasks) => tasks,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to list pending dispatch tasks");
+                    continue;
+                }
+            };
 
         if pending_tasks.is_empty() {
             continue;

@@ -113,11 +113,7 @@ fn test_validate_channel_name_invalid_characters() {
 
     for name in invalid_names {
         let result = validate_channel_name(name);
-        assert!(
-            result.is_err(),
-            "Name '{}' should be invalid",
-            name
-        );
+        assert!(result.is_err(), "Name '{}' should be invalid", name);
         assert!(
             result.unwrap_err().contains("letters, numbers, dashes"),
             "Error message should mention allowed characters"
@@ -198,10 +194,10 @@ fn test_looks_like_cron_valid() {
     use gorp::message_handler::looks_like_cron;
 
     // Valid cron expressions
-    assert!(looks_like_cron("0 9 * * *"));      // Every day at 9am
-    assert!(looks_like_cron("*/15 * * * *"));   // Every 15 minutes
-    assert!(looks_like_cron("30 14 1 * *"));    // 2:30pm on the 1st
-    assert!(looks_like_cron("0 0 * * 0"));      // Midnight on Sundays
+    assert!(looks_like_cron("0 9 * * *")); // Every day at 9am
+    assert!(looks_like_cron("*/15 * * * *")); // Every 15 minutes
+    assert!(looks_like_cron("30 14 1 * *")); // 2:30pm on the 1st
+    assert!(looks_like_cron("0 0 * * 0")); // Midnight on Sundays
     assert!(looks_like_cron("0 8-17 * * 1-5")); // Work hours on weekdays
     assert!(looks_like_cron("0 9,12,18 * * *")); // 9am, noon, 6pm
 }
@@ -211,10 +207,10 @@ fn test_looks_like_cron_invalid_field_count() {
     use gorp::message_handler::looks_like_cron;
 
     // Wrong number of fields
-    assert!(!looks_like_cron("0 9 * *"));        // 4 fields
-    assert!(!looks_like_cron("0 9 * * * *"));    // 6 fields
-    assert!(!looks_like_cron("9"));              // 1 field
-    assert!(!looks_like_cron(""));               // empty
+    assert!(!looks_like_cron("0 9 * *")); // 4 fields
+    assert!(!looks_like_cron("0 9 * * * *")); // 6 fields
+    assert!(!looks_like_cron("9")); // 1 field
+    assert!(!looks_like_cron("")); // empty
 }
 
 #[test]
@@ -358,5 +354,5 @@ fn test_looks_like_cron_with_whitespace() {
 
     // Extra whitespace should not affect parsing (split_whitespace handles it)
     assert!(looks_like_cron("0  9  *  *  *")); // Extra spaces
-    assert!(looks_like_cron(" 0 9 * * * "));  // Leading/trailing spaces
+    assert!(looks_like_cron(" 0 9 * * * ")); // Leading/trailing spaces
 }

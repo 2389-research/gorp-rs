@@ -195,8 +195,13 @@ async fn handle_welcome_response(
     user_id: &str,
     message: &str,
 ) -> Result<bool> {
-    handle_welcome_response_with_sender(&MatrixOnboardingRoom(room), session_store, user_id, message)
-        .await
+    handle_welcome_response_with_sender(
+        &MatrixOnboardingRoom(room),
+        session_store,
+        user_id,
+        message,
+    )
+    .await
 }
 
 /// Handle response to welcome message (trait-based for testing)
@@ -258,8 +263,13 @@ async fn handle_api_key_response(
     user_id: &str,
     message: &str,
 ) -> Result<bool> {
-    handle_api_key_response_with_sender(&MatrixOnboardingRoom(room), session_store, user_id, message)
-        .await
+    handle_api_key_response_with_sender(
+        &MatrixOnboardingRoom(room),
+        session_store,
+        user_id,
+        message,
+    )
+    .await
 }
 
 /// Handle response to API key check (trait-based for testing)
@@ -789,7 +799,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!handled, "CreateChannel should return false to let message_handler process");
+        assert!(
+            !handled,
+            "CreateChannel should return false to let message_handler process"
+        );
     }
 
     #[tokio::test]

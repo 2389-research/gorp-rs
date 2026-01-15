@@ -3,7 +3,9 @@
 
 use crate::gui::app::{LogEntry, Message};
 use crate::gui::components::common;
-use crate::gui::theme::{colors, radius, spacing, text_size, button_primary, button_secondary, content_style};
+use crate::gui::theme::{
+    button_primary, button_secondary, colors, content_style, radius, spacing, text_size,
+};
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, Column, Space};
 use iced::{Alignment, Border, Element, Length};
 
@@ -136,17 +138,13 @@ pub fn view<'a>(
         .map(|f| f.to_string())
         .unwrap_or_else(|| "All".to_string());
 
-    let filter_picker = pick_list(
-        filter_options,
-        Some(selected_filter),
-        |s| {
-            if s == "All" {
-                Message::LogLevelFilterChanged(None)
-            } else {
-                Message::LogLevelFilterChanged(Some(s))
-            }
-        },
-    )
+    let filter_picker = pick_list(filter_options, Some(selected_filter), |s| {
+        if s == "All" {
+            Message::LogLevelFilterChanged(None)
+        } else {
+            Message::LogLevelFilterChanged(Some(s))
+        }
+    })
     .placeholder("Filter by level")
     .padding(spacing::XS);
 
@@ -206,9 +204,12 @@ pub fn view<'a>(
                         .size(text_size::LARGE)
                         .color(colors::TEXT_PRIMARY),
                     Space::with_height(spacing::XS),
-                    text(format!("No {} level logs found", level_filter.unwrap_or("filtered")))
-                        .size(text_size::BODY)
-                        .color(colors::TEXT_SECONDARY),
+                    text(format!(
+                        "No {} level logs found",
+                        level_filter.unwrap_or("filtered")
+                    ))
+                    .size(text_size::BODY)
+                    .color(colors::TEXT_SECONDARY),
                     Space::with_height(spacing::LG),
                     button(text("Clear Filter").size(text_size::BODY))
                         .on_press(Message::LogLevelFilterChanged(None))
@@ -236,14 +237,10 @@ pub fn view<'a>(
         .into()
     };
 
-    let content = column![
-        header,
-        Space::with_height(spacing::LG),
-        main_content,
-    ]
-    .padding(spacing::XL)
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let content = column![header, Space::with_height(spacing::LG), main_content,]
+        .padding(spacing::XL)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     container(content)
         .style(content_style)

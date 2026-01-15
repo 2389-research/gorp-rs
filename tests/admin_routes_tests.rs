@@ -338,11 +338,7 @@ fn test_cron_expression_detection() {
             && expr
                 .chars()
                 .all(|c| c.is_ascii_digit() || " */-,".contains(c));
-        assert!(
-            is_cron,
-            "Expression '{}' should be detected as cron",
-            expr
-        );
+        assert!(is_cron, "Expression '{}' should be detected as cron", expr);
     }
 
     // Natural language time expressions should NOT be detected as cron
@@ -473,7 +469,9 @@ fn test_read_last_n_lines_large_file() {
 
     // Write a file larger than 64KB to trigger reverse reading
     let line = "x".repeat(100);
-    let content: String = (1..=1000).map(|i| format!("line{}: {}\n", i, line)).collect();
+    let content: String = (1..=1000)
+        .map(|i| format!("line{}: {}\n", i, line))
+        .collect();
     std::fs::write(&file_path, &content).expect("Failed to write file");
 
     // Request last 5

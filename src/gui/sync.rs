@@ -20,10 +20,7 @@ pub enum MatrixEvent {
     /// Room list changed (joined/left room)
     RoomListChanged,
     /// Typing indicator update
-    Typing {
-        room_id: String,
-        users: Vec<String>,
-    },
+    Typing { room_id: String, users: Vec<String> },
     /// Sync error occurred
     SyncError(String),
     /// Connection state changed
@@ -38,10 +35,7 @@ pub enum ConnectionStatus {
 }
 
 /// Start the Matrix sync loop and return a receiver for GUI events
-pub fn start_sync(
-    client: Client,
-    sync_token: String,
-) -> mpsc::UnboundedReceiver<MatrixEvent> {
+pub fn start_sync(client: Client, sync_token: String) -> mpsc::UnboundedReceiver<MatrixEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
 
     // Clone for event handlers
@@ -53,8 +47,7 @@ pub fn start_sync(
     // Register message handler
     client.add_event_handler({
         let own_user = own_user_id.clone();
-        move |event: matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent,
-              room: Room| {
+        move |event: matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent, room: Room| {
             let tx = tx_messages.clone();
             let own_user = own_user.clone();
             async move {

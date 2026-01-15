@@ -58,23 +58,14 @@ fn build_menu() -> Menu {
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     // Settings
-    let settings_item = MenuItem::with_id(
-        menu_ids::SETTINGS,
-        "Settings...",
-        true,
-        None::<Accelerator>,
-    );
+    let settings_item =
+        MenuItem::with_id(menu_ids::SETTINGS, "Settings...", true, None::<Accelerator>);
     let _ = menu.append(&settings_item);
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
     // Quit
-    let quit_item = MenuItem::with_id(
-        menu_ids::QUIT,
-        "Quit gorp",
-        true,
-        None::<Accelerator>,
-    );
+    let quit_item = MenuItem::with_id(menu_ids::QUIT, "Quit gorp", true, None::<Accelerator>);
     let _ = menu.append(&quit_item);
 
     menu

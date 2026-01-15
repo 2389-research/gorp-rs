@@ -284,7 +284,6 @@ enum ScheduleAction {
     },
 }
 
-
 /// Validate recovery key format (Base58 encoded, typically 48+ chars with spaces)
 fn is_valid_recovery_key_format(key: &str) -> bool {
     let cleaned: String = key.chars().filter(|c| !c.is_whitespace()).collect();
@@ -509,7 +508,9 @@ async fn dispatch_startup_notification(client: &Client, session_store: &SessionS
         .filter(|ch| !ch.is_dispatch_room)
         .collect();
 
-    let pending_events = session_store.get_pending_dispatch_events().unwrap_or_default();
+    let pending_events = session_store
+        .get_pending_dispatch_events()
+        .unwrap_or_default();
 
     for dispatch in dispatch_channels {
         // Parse the room ID
@@ -564,7 +565,10 @@ async fn dispatch_startup_notification(client: &Client, session_store: &SessionS
         };
 
         // Send the message
-        match room.send(RoomMessageEventContent::text_plain(&message)).await {
+        match room
+            .send(RoomMessageEventContent::text_plain(&message))
+            .await
+        {
             Ok(_) => {
                 tracing::info!(
                     room_id = %dispatch.room_id,

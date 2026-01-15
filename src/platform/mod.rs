@@ -6,9 +6,14 @@ pub mod matrix;
 // Re-export platform implementations for convenient access
 pub use matrix::{
     // Client functions
-    create_client, create_dm_room, create_room, invite_user, login,
+    create_client,
+    create_dm_room,
+    create_room,
+    invite_user,
+    login,
     // Platform types (new abstraction layer)
-    MatrixChannel, MatrixPlatform,
+    MatrixChannel,
+    MatrixPlatform,
 };
 
 // When new platforms are added:

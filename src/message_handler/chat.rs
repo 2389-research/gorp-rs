@@ -4,14 +4,18 @@
 use anyhow::Result;
 use matrix_sdk::{
     room::Room,
-    ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+    ruma::events::room::message::{
+        MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
+    },
     Client,
 };
 
 use crate::{
     metrics,
     session::{Channel, SessionStore},
-    utils::{chunk_message, log_matrix_message, markdown_to_html, strip_function_calls, MAX_CHUNK_SIZE},
+    utils::{
+        chunk_message, log_matrix_message, markdown_to_html, strip_function_calls, MAX_CHUNK_SIZE,
+    },
     warm_session::{prepare_session_async, SharedWarmSessionManager},
 };
 use gorp_agent::AgentEvent;
@@ -398,9 +402,10 @@ pub async fn process_chat_message(
 
         let backend_type = warm_manager.read().await.backend_type().to_string();
         metrics::record_error("agent_no_response");
-        room.send(RoomMessageEventContent::text_plain(
-            format!("⚠️ {} backend finished without a response", backend_type),
-        ))
+        room.send(RoomMessageEventContent::text_plain(format!(
+            "⚠️ {} backend finished without a response",
+            backend_type
+        )))
         .await?;
         return Ok(());
     }

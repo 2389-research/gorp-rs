@@ -4,12 +4,14 @@
 use crate::gui::app::Message;
 use crate::gui::components::common;
 use crate::gui::theme::{
-    colors, radius, spacing, text_size, button_primary, button_secondary,
-    content_style, modal_style, stat_card_style, text_input_style,
+    button_primary, button_secondary, colors, content_style, modal_style, radius, spacing,
+    stat_card_style, text_input_style, text_size,
 };
-use crate::server::RoomInfo;
 use crate::scheduler::{ScheduleStatus, ScheduledPrompt};
-use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input, Column, Space};
+use crate::server::RoomInfo;
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, text, text_input, Column, Space,
+};
 use iced::{Alignment, Border, Element, Length};
 
 /// Status badge for schedule status
@@ -55,7 +57,10 @@ fn schedule_card<'a>(schedule: &'a ScheduledPrompt) -> Element<'a, Message> {
 
     // Prompt text (truncated)
     let prompt_display: String = if schedule.prompt.chars().count() > 80 {
-        format!("{}...", schedule.prompt.chars().take(77).collect::<String>())
+        format!(
+            "{}...",
+            schedule.prompt.chars().take(77).collect::<String>()
+        )
     } else {
         schedule.prompt.clone()
     };
@@ -65,7 +70,8 @@ fn schedule_card<'a>(schedule: &'a ScheduledPrompt) -> Element<'a, Message> {
         .color(colors::TEXT_SECONDARY);
 
     // Schedule info row - build the schedule type text
-    let schedule_type_text: Element<'a, Message> = if let Some(ref cron) = schedule.cron_expression {
+    let schedule_type_text: Element<'a, Message> = if let Some(ref cron) = schedule.cron_expression
+    {
         text(format!("Recurring: {}", cron))
             .size(text_size::SMALL)
             .color(colors::TEXT_TERTIARY)
@@ -83,11 +89,15 @@ fn schedule_card<'a>(schedule: &'a ScheduledPrompt) -> Element<'a, Message> {
     };
 
     let info_row = row![
-        text("⏰").size(text_size::SMALL).color(colors::TEXT_TERTIARY),
+        text("⏰")
+            .size(text_size::SMALL)
+            .color(colors::TEXT_TERTIARY),
         Space::with_width(spacing::XS),
         schedule_type_text,
         Space::with_width(spacing::MD),
-        text("Next:").size(text_size::SMALL).color(colors::TEXT_TERTIARY),
+        text("Next:")
+            .size(text_size::SMALL)
+            .color(colors::TEXT_TERTIARY),
         Space::with_width(spacing::XS),
         text(&schedule.next_execution_at)
             .size(text_size::SMALL)
@@ -101,9 +111,12 @@ fn schedule_card<'a>(schedule: &'a ScheduledPrompt) -> Element<'a, Message> {
             .size(text_size::CAPTION)
             .color(colors::TEXT_TERTIARY),
         Space::with_width(spacing::MD),
-        text(format!("ID: {}...", schedule.id.chars().take(8).collect::<String>()))
-            .size(text_size::CAPTION)
-            .color(colors::TEXT_TERTIARY),
+        text(format!(
+            "ID: {}...",
+            schedule.id.chars().take(8).collect::<String>()
+        ))
+        .size(text_size::CAPTION)
+        .color(colors::TEXT_TERTIARY),
     ];
 
     // Action buttons
@@ -111,7 +124,9 @@ fn schedule_card<'a>(schedule: &'a ScheduledPrompt) -> Element<'a, Message> {
         ScheduleStatus::Active => {
             let id = schedule.id.clone();
             button(
-                text("Pause").size(text_size::SMALL).color(colors::TEXT_SECONDARY)
+                text("Pause")
+                    .size(text_size::SMALL)
+                    .color(colors::TEXT_SECONDARY),
             )
             .on_press(Message::PauseSchedule(id))
             .style(button_secondary)
@@ -120,31 +135,27 @@ fn schedule_card<'a>(schedule: &'a ScheduledPrompt) -> Element<'a, Message> {
         }
         ScheduleStatus::Paused => {
             let id = schedule.id.clone();
-            button(
-                text("Resume").size(text_size::SMALL)
-            )
-            .on_press(Message::ResumeSchedule(id))
-            .style(button_primary)
-            .padding([spacing::XS, spacing::SM])
-            .into()
+            button(text("Resume").size(text_size::SMALL))
+                .on_press(Message::ResumeSchedule(id))
+                .style(button_primary)
+                .padding([spacing::XS, spacing::SM])
+                .into()
         }
         _ => Space::with_width(0).into(),
     };
 
     let delete_id = schedule.id.clone();
     let delete_btn = button(
-        text("Delete").size(text_size::SMALL).color(colors::ACCENT_DANGER)
+        text("Delete")
+            .size(text_size::SMALL)
+            .color(colors::ACCENT_DANGER),
     )
     .on_press(Message::DeleteSchedule(delete_id))
     .style(button_secondary)
     .padding([spacing::XS, spacing::SM]);
 
-    let actions = row![
-        pause_resume_btn,
-        Space::with_width(spacing::XS),
-        delete_btn,
-    ]
-    .align_y(Alignment::Center);
+    let actions = row![pause_resume_btn, Space::with_width(spacing::XS), delete_btn,]
+        .align_y(Alignment::Center);
 
     // Assemble card
     container(
@@ -209,13 +220,15 @@ fn create_form_modal<'a>(
 ) -> Element<'a, Message> {
     // Channel picker (using text input for now - picklist needs owned strings)
     let room_names: Vec<String> = rooms.iter().map(|r| r.name.clone()).collect();
-    let selected_room = if channel.is_empty() { None } else { Some(channel.to_string()) };
+    let selected_room = if channel.is_empty() {
+        None
+    } else {
+        Some(channel.to_string())
+    };
 
-    let channel_input = pick_list(
-        room_names,
-        selected_room,
-        |s| Message::ScheduleFormChannelChanged(s),
-    )
+    let channel_input = pick_list(room_names, selected_room, |s| {
+        Message::ScheduleFormChannelChanged(s)
+    })
     .placeholder("Select a room...")
     .width(Length::Fill)
     .padding(spacing::SM);
@@ -264,17 +277,23 @@ fn create_form_modal<'a>(
             // Error message (if any)
             error_display,
             // Channel field
-            text("Room").size(text_size::SMALL).color(colors::TEXT_SECONDARY),
+            text("Room")
+                .size(text_size::SMALL)
+                .color(colors::TEXT_SECONDARY),
             Space::with_height(spacing::XXS),
             channel_input,
             Space::with_height(spacing::MD),
             // Prompt field
-            text("Prompt").size(text_size::SMALL).color(colors::TEXT_SECONDARY),
+            text("Prompt")
+                .size(text_size::SMALL)
+                .color(colors::TEXT_SECONDARY),
             Space::with_height(spacing::XXS),
             prompt_input,
             Space::with_height(spacing::MD),
             // Time field
-            text("Schedule").size(text_size::SMALL).color(colors::TEXT_SECONDARY),
+            text("Schedule")
+                .size(text_size::SMALL)
+                .color(colors::TEXT_SECONDARY),
             Space::with_height(spacing::XXS),
             time_input,
             Space::with_height(spacing::XS),
@@ -341,10 +360,7 @@ pub fn view<'a>(
     } else if schedules.is_empty() {
         empty_state()
     } else {
-        let cards: Vec<Element<'a, Message>> = schedules
-            .iter()
-            .map(|s| schedule_card(s))
-            .collect();
+        let cards: Vec<Element<'a, Message>> = schedules.iter().map(|s| schedule_card(s)).collect();
 
         scrollable(
             Column::with_children(cards)
@@ -355,14 +371,10 @@ pub fn view<'a>(
         .into()
     };
 
-    let content = column![
-        header,
-        Space::with_height(spacing::LG),
-        main_content,
-    ]
-    .padding(spacing::XL)
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let content = column![header, Space::with_height(spacing::LG), main_content,]
+        .padding(spacing::XL)
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     let base = container(content)
         .style(content_style)
