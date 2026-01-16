@@ -180,6 +180,7 @@ RUN mkdir -p /home/gorp/.config/gorp \
              /home/gorp/.local/share/pagen \
              /home/gorp/.local/share/digest \
              /home/gorp/.local/share/charm \
+             /home/gorp/.npm-global \
              /home/gorp/workspace && \
     chown -R gorp:gorp /home/gorp /app
 
@@ -187,8 +188,12 @@ RUN mkdir -p /home/gorp/.config/gorp \
 USER gorp
 WORKDIR /home/gorp
 
+# Configure npm to use user-writable directory for global installs
+RUN npm config set prefix '/home/gorp/.npm-global'
+
 # Environment variables
 ENV HOME=/home/gorp
+ENV PATH="/home/gorp/.npm-global/bin:$PATH"
 
 # Claude Code uses ANTHROPIC_API_KEY for authentication (no OAuth needed)
 # Set this when running the container: docker run -e ANTHROPIC_API_KEY=sk-ant-...
