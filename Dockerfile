@@ -70,9 +70,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 \
     libatk-bridge2.0-0 \
     libgtk-3-0 \
+    locales \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen
 
 # Configure Chromium for headless Docker environment
 # Create symlinks so tools can find Chrome at common paths
@@ -191,9 +194,16 @@ WORKDIR /home/gorp
 # Configure npm to use user-writable directory for global installs
 RUN npm config set prefix '/home/gorp/.npm-global'
 
+# Set up .bashrc with PATH for interactive shells
+RUN echo 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"' >> /home/gorp/.bashrc && \
+    echo 'export LANG=en_US.UTF-8' >> /home/gorp/.bashrc && \
+    echo 'export LC_ALL=en_US.UTF-8' >> /home/gorp/.bashrc
+
 # Environment variables
 ENV HOME=/home/gorp
-ENV PATH="/home/gorp/.npm-global/bin:$PATH"
+ENV PATH="/home/gorp/.npm-global/bin:/home/gorp/.local/bin:$PATH"
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
 
 # Claude Code uses ANTHROPIC_API_KEY for authentication (no OAuth needed)
 # Set this when running the container: docker run -e ANTHROPIC_API_KEY=sk-ant-...
