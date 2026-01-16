@@ -52,10 +52,17 @@ RUN --mount=type=ssh cargo build --release --no-default-features
 FROM debian:bookworm-slim
 
 # Install runtime dependencies, Node.js, vim, and Chromium for Claude Code
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     curl \
+    xz-utils \
+    unzip \
+    file \
+    libatomic1 \
+    libffi8 \
+    libyaml-0-2 \
+    zlib1g \
     git \
     vim \
     chromium \
