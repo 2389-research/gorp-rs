@@ -872,34 +872,115 @@
        ============================================================ */
     footer {
       border-top: 1px solid var(--border);
-      padding: 48px 0;
+      padding: 64px 0 32px;
     }
-    .footer-inner {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+    .footer-top {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 48px;
+      margin-bottom: 48px;
     }
+    .footer-brand-col {}
     .footer-brand {
       font-family: var(--font-display);
       font-weight: 700;
-      font-size: 18px;
+      font-size: 22px;
       color: var(--green);
       letter-spacing: 2px;
+      display: block;
+      margin-bottom: 16px;
     }
-    .footer-links {
+    .footer-desc {
+      color: var(--text-dim);
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 16px;
+      max-width: 320px;
+    }
+    .footer-meta {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 24px;
+    }
+    .footer-social {
       display: flex;
-      gap: 24px;
+      gap: 16px;
       list-style: none;
     }
-    .footer-links a {
+    .footer-social a {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    .footer-social a:hover {
+      border-color: var(--green);
+      color: var(--green);
+      background: rgba(0,255,159,0.05);
+    }
+    .footer-social svg {
+      width: 16px;
+      height: 16px;
+    }
+    .footer-col h4 {
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--text);
+      margin-bottom: 20px;
+    }
+    .footer-col ul {
+      list-style: none;
+    }
+    .footer-col li {
+      margin-bottom: 12px;
+    }
+    .footer-col a {
       color: var(--text-dim);
       text-decoration: none;
       font-size: 14px;
       transition: color 0.2s;
     }
-    .footer-links a:hover { color: var(--green); }
-    .footer-copy {
+    .footer-col a:hover { color: var(--green); }
+    .footer-col .contact-item {
+      color: var(--text-dim);
+      font-size: 14px;
+      display: block;
+      margin-bottom: 8px;
+    }
+    .footer-col .contact-item a {
+      color: var(--text-dim);
+    }
+    .footer-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+    .footer-legal {
+      display: flex;
+      gap: 24px;
+      list-style: none;
+    }
+    .footer-legal a {
+      color: var(--text-dim);
+      text-decoration: none;
       font-size: 13px;
+      transition: color 0.2s;
+    }
+    .footer-legal a:hover { color: var(--green); }
+    .footer-copy {
+      font-size: 12px;
       color: var(--text-dim);
       font-family: var(--font-mono);
     }
@@ -933,10 +1014,18 @@
       .deploy-grid {
         grid-template-columns: 1fr;
       }
-      .footer-inner {
+      .footer-top {
+        grid-template-columns: 1fr;
+        gap: 32px;
+      }
+      .footer-bottom {
         flex-direction: column;
-        gap: 20px;
+        gap: 16px;
         text-align: center;
+      }
+      .footer-legal {
+        flex-wrap: wrap;
+        justify-content: center;
       }
       .nav-links { display: none; }
       .nav-toggle { display: block; }
@@ -1407,15 +1496,88 @@
   <!-- ======== FOOTER ======== -->
   <footer>
     <div class="container">
-      <div class="footer-inner">
-        <span class="footer-brand">GORP</span>
-        <ul class="footer-links">
-          <li><a href="https://github.com/2389-research/gorp-rs">GitHub</a></li>
-          <li><a href="https://github.com/2389-research/gorp-rs/issues">Issues</a></li>
-          <li><a href="HELP.md">Docs</a></li>
-          <li><a href="CHANGELOG.md">Changelog</a></li>
+      <div class="footer-top">
+        <!-- Brand column -->
+        <div class="footer-brand-col">
+          <span class="footer-brand">GORP</span>
+          <p class="footer-desc">
+            Matrix-to-Claude bridge with pluggable agent backends. Built by
+            <a href="https://2389.ai" style="color:var(--green);text-decoration:none;">2389 Research, Inc</a>
+            &mdash; pioneers in AI integration for work and communication.
+          </p>
+          <div class="footer-meta">Founded 2024 &bull; Chicago</div>
+          <ul class="footer-social">
+            <li>
+              <a href="https://twitter.com/2389ai" aria-label="Twitter/X">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+              </a>
+            </li>
+            <li>
+              <a href="https://www.linkedin.com/company/2389-research" aria-label="LinkedIn">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+              </a>
+            </li>
+            <li>
+              <a href="https://github.com/2389-research" aria-label="GitHub">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+              </a>
+            </li>
+            <li>
+              <a href="https://bsky.app/profile/2389.ai" aria-label="Bluesky">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 10.8c-1.087-2.114-4.046-6.053-6.798-7.995C2.566.944 1.561 1.266.902 1.565.139 1.908 0 3.08 0 3.768c0 .69.378 5.65.624 6.479.785 2.627 3.6 3.476 6.158 3.226-4.476.767-8.428 2.628-4.87 9.28C5.436 20.4 8.682 16.418 12 16.418c3.318 0 6.564 3.982 10.088 6.335 3.558-6.652-.394-8.513-4.87-9.28 2.558.25 5.373-.599 6.158-3.226.246-.828.624-5.788.624-6.479 0-.688-.139-1.86-.902-2.203-.659-.3-1.664-.621-4.3 1.24C16.046 4.748 13.087 8.687 12 10.8z"/></svg>
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Product column -->
+        <div class="footer-col">
+          <h4>Product</h4>
+          <ul>
+            <li><a href="https://github.com/2389-research/gorp-rs">GitHub Repo</a></li>
+            <li><a href="https://github.com/2389-research/gorp-rs/releases">Releases</a></li>
+            <li><a href="HELP.md">Documentation</a></li>
+            <li><a href="CHANGELOG.md">Changelog</a></li>
+            <li><a href="GET-STARTED.md">Getting Started</a></li>
+          </ul>
+        </div>
+
+        <!-- Company column -->
+        <div class="footer-col">
+          <h4>Company</h4>
+          <ul>
+            <li><a href="https://2389.ai">About</a></li>
+            <li><a href="https://2389.ai/products/">Products</a></li>
+            <li><a href="https://2389.ai/blog/">Blog</a></li>
+            <li><a href="https://2389.ai/team/">Team</a></li>
+          </ul>
+        </div>
+
+        <!-- Connect column -->
+        <div class="footer-col">
+          <h4>Connect</h4>
+          <ul>
+            <li><a href="https://github.com/2389-research/gorp-rs/issues">Report Issue</a></li>
+            <li>
+              <span class="contact-item">
+                <a href="mailto:hello@2389.ai">hello@2389.ai</a>
+              </span>
+            </li>
+            <li>
+              <span class="contact-item">+1 (814) 666-2389</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Bottom bar -->
+      <div class="footer-bottom">
+        <ul class="footer-legal">
+          <li><a href="https://2389.ai/privacy/">Privacy</a></li>
+          <li><a href="https://2389.ai/terms/">Terms</a></li>
+          <li><a href="https://nda.2389.ai">NDA</a></li>
         </ul>
-        <span class="footer-copy">2389 Research &middot; MIT License</span>
+        <span class="footer-copy">&copy; 2026 2389 Research, Inc &bull; MIT License</span>
       </div>
     </div>
   </footer>
