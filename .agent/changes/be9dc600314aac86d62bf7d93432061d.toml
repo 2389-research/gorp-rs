@@ -1,0 +1,12 @@
+change_id = "be9dc600314aac86d62bf7d93432061d"
+type = "behavioral"
+intent = "docs: add WhatsApp/Baileys platform support design document"
+files = [
+    ".agent/changes/400e676b9ed2d94570be11827de8e234.toml",
+    "docs/plans/2026-02-13-whatsapp-platform-design.md",
+]
+breaking = false
+
+[invariants]
+checked = []
+status = "skipped"
