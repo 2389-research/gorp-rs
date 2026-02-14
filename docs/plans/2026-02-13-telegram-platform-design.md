@@ -56,14 +56,15 @@ while let Some(msg) = events.next().await {
 
 At least one platform must be configured or startup fails.
 
-### IncomingMessage Change
+### Canonical IncomingMessage
 
-Add `platform_id` field so the message handler knows which platform to route replies through:
+Add `platform_id` and `thread_id` fields. This is the canonical definition — all platform specs reference this struct:
 
 ```rust
 pub struct IncomingMessage {
-    pub platform_id: String,   // "matrix" or "telegram"
+    pub platform_id: String,              // "matrix", "telegram", "slack", "whatsapp"
     pub channel_id: String,
+    pub thread_id: Option<String>,        // Slack thread_ts, WhatsApp quoted message ID, None for others
     pub sender: ChatUser,
     pub body: String,
     pub is_direct: bool,
@@ -71,6 +72,41 @@ pub struct IncomingMessage {
     pub attachment: Option<AttachmentInfo>,
     pub event_id: String,
     pub timestamp: i64,
+}
+```
+
+### Canonical Shared Types
+
+These types are defined in `gorp-core/src/traits.rs` and used by all platforms:
+
+```rust
+/// Metadata for an incoming file attachment
+pub struct AttachmentInfo {
+    pub source_id: String,     // Platform-specific ID (file_id, MXC URI, message key, url_private)
+    pub filename: String,
+    pub mime_type: String,
+    pub size: Option<u64>,     // Bytes, if known before download
+}
+
+/// Type alias for the async stream of incoming messages from a platform
+pub type EventStream = Pin<Box<dyn Stream<Item = IncomingMessage> + Send>>;
+
+/// Connection state reported by each platform for health checks
+pub enum PlatformConnectionState {
+    Connected,
+    Connecting,
+    Disconnected { reason: String },
+    AuthRequired,              // WhatsApp QR needed, Matrix device verify, etc.
+    RateLimited { retry_after: Duration },
+}
+```
+
+`ChatPlatform` exposes connection state for monitoring by the TUI, web admin, and health endpoints:
+
+```rust
+pub trait ChatPlatform: MessagingPlatform {
+    // ... existing methods ...
+    fn connection_state(&self) -> PlatformConnectionState;
 }
 ```
 
@@ -221,6 +257,72 @@ Telegram GUI support can be added later by generalizing `MatrixEvent` to `Platfo
 - **Scheduler, task executor, dispatch handler** — platform-agnostic
 - **Webhook system** — independent of chat platforms
 - **Workspace/session management** — platform-agnostic
+
+## Graceful Shutdown
+
+All platforms follow the same shutdown protocol, coordinated by `PlatformRegistry`:
+
+```rust
+impl PlatformRegistry {
+    pub async fn shutdown(&mut self) {
+        // Shutdown all platforms concurrently with a 10s timeout
+        let futures: Vec<_> = self.platforms.values_mut()
+            .map(|p| p.shutdown())
+            .collect();
+        let _ = tokio::time::timeout(
+            Duration::from_secs(10),
+            futures::future::join_all(futures),
+        ).await;
+    }
+}
+```
+
+Each platform's `MessagingPlatform` trait includes a shutdown method:
+
+```rust
+pub trait MessagingPlatform: Send + Sync {
+    // ... existing methods ...
+    async fn shutdown(&self) -> Result<()>;
+}
+```
+
+For Telegram specifically: cancel the long polling task, drop the `Bot` handle. Teloxide handles cleanup internally.
+
+The `gorp start` and `gorp tui` entry points listen for `SIGINT`/`SIGTERM` (via `tokio::signal`) and call `registry.shutdown()` before exiting. The GUI wires its close button to the same path.
+
+## Health Check Model
+
+`PlatformRegistry` aggregates health from all registered platforms:
+
+```rust
+impl PlatformRegistry {
+    pub fn health(&self) -> Vec<PlatformHealth> {
+        self.platforms.iter().map(|(id, p)| PlatformHealth {
+            platform_id: id.clone(),
+            state: p.connection_state(),
+        }).collect()
+    }
+}
+```
+
+This feeds into:
+- **TUI Dashboard** — platform connection indicators (green/yellow/red dots)
+- **Web Admin Dashboard** — gateway status cards
+- **`/admin/health` endpoint** — JSON health response for monitoring
+
+## Logging & Observability
+
+All platform modules use `tracing` (already a gorp dependency) with structured fields:
+
+```rust
+tracing::info!(platform = "telegram", chat_id = %chat_id, "Message received");
+tracing::warn!(platform = "telegram", "Rate limited by Telegram API, retrying in {}s", delay);
+tracing::error!(platform = "whatsapp", "Sidecar crashed, attempt {}/5", attempt);
+```
+
+Convention: every log line includes `platform = "<id>"` so the TUI Logs view and web admin can filter by platform. Workspace-scoped operations additionally include `workspace = "<name>"`.
+
+The TUI Logs view subscribes to a `tracing` layer that sends formatted log events through the TUI event channel. The web admin's `/admin/health` endpoint exposes structured health data (not raw logs).
 
 ## Dependencies
 

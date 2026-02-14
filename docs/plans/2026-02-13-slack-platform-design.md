@@ -116,7 +116,7 @@ pub struct IncomingMessage {
 }
 ```
 
-`ChatPlatform` gains optional accessors:
+`ChatPlatform` gains optional accessors with default `None` implementations. Non-Slack platforms inherit the defaults and don't need to implement these:
 
 ```rust
 pub trait ChatPlatform: MessagingPlatform {
@@ -126,6 +126,32 @@ pub trait ChatPlatform: MessagingPlatform {
     fn rich_formatter(&self) -> Option<&dyn RichFormatter> { None }
 }
 ```
+
+### Trait Casting Pattern
+
+The message handler accesses extension traits through the `ChatPlatform` accessors — no `Any`-based downcasting required:
+
+```rust
+async fn handle_message(msg: IncomingMessage, platform: &dyn ChatPlatform, ...) {
+    // Generate response from agent
+    let response = agent.prompt(&msg.body).await?;
+
+    // Use threaded replies if the platform supports it AND we're in a thread
+    if let (Some(threading), Some(thread_id)) = (platform.threading(), &msg.thread_id) {
+        threading.send_threaded(&msg.channel_id, thread_id, response).await?;
+    } else {
+        platform.send(&msg.channel_id, response).await?;
+    }
+
+    // Use rich formatting if available
+    if let Some(formatter) = platform.rich_formatter() {
+        let blocks = formatter.format_as_blocks(&text);
+        // blocks used by Slack's send() internally
+    }
+}
+```
+
+This pattern means the message handler stays generic — it doesn't import `SlackPlatform` directly. Matrix and Telegram return `None` for all three accessors, so the fallback paths execute.
 
 ## SlackPlatform Implementation
 
@@ -193,11 +219,13 @@ impl SlashCommandProvider for SlackPlatform {
 
 ### RichFormatter (Block Kit)
 
+`format_as_blocks` is infallible — it always returns valid Block Kit JSON. On parse failure, it falls back to a single `section` block with raw mrkdwn text. This means callers never need error handling for formatting:
+
 ```rust
 impl RichFormatter for SlackPlatform {
     fn format_as_blocks(&self, content: &str) -> serde_json::Value {
         // Parse markdown → Block Kit blocks
-        // Fallback: single section block with mrkdwn text
+        // Infallible: always returns valid blocks, falls back to raw mrkdwn
         match parse_markdown_to_blocks(content) {
             Ok(blocks) => blocks,
             Err(_) => fallback_mrkdwn_block(content),

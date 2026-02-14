@@ -1,0 +1,12 @@
+change_id = "9c13db9faa13e7d02afc10e4ea15faff"
+type = "behavioral"
+intent = "docs: add single binary build and packaging design document"
+files = [
+    ".agent/changes/81b1ac62add1a61671e57f4f81ec9730.toml",
+    "docs/plans/2026-02-13-single-binary-design.md",
+]
+breaking = false
+
+[invariants]
+checked = []
+status = "skipped"

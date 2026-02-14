@@ -466,6 +466,18 @@ Same layout as Workspace view but routes through the platform's `ChatChannel::se
 | `Ctrl+C` | Workspace / Chat | Cancel streaming response |
 | `PgUp/PgDn` | Chat / Workspace | Scroll conversation history |
 
+## Graceful Shutdown
+
+When `q` is pressed or `SIGINT` received:
+
+1. Set `app.should_quit = true` — breaks the main loop
+2. Cancel any in-progress agent stream (`handle.cancel()`)
+3. Call `registry.shutdown()` (defined in Telegram spec — shuts down all platforms with 10s timeout)
+4. Call `ratatui::restore()` to return terminal to normal mode
+5. Exit
+
+The terminal restore step is critical — if skipped (e.g., panic), the terminal is left in raw mode. A `std::panic::set_hook` wrapper ensures `ratatui::restore()` runs even on panic.
+
 ## Files Created
 
 | File | Purpose |

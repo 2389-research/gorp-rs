@@ -279,15 +279,18 @@ impl ChatPlatform for WhatsAppPlatform {
 
 ### Message Handler Routing
 
+WhatsApp routing is in the message handler, same code path as all platforms. The `dispatch_handler::handle_text` function is shared with the Coven DISPATCH agent — both call the same underlying function:
+
 ```rust
-async fn handle_message(msg: IncomingMessage, platform: &dyn ChatPlatform, ...) {
+async fn handle_message(msg: IncomingMessage, platform: &dyn ChatPlatform, server: &ServerState, ...) {
     if msg.platform_id == "whatsapp" {
         if msg.is_direct {
-            // Tier 1: route to DISPATCH
-            dispatch_handler::handle(msg, ...).await;
+            // Tier 1: route to DISPATCH control plane
+            let response = dispatch_handler::handle_text(&msg.body, server).await?;
+            platform.send(&msg.channel_id, MessageContent::Text(response)).await?;
         } else if let Some(workspace) = config.whatsapp.group_workspaces.get(&msg.channel_id) {
             // Tier 2: route to workspace
-            workspace_handler::handle(msg, workspace, ...).await;
+            workspace_handler::handle(msg, workspace, server).await?;
         } else {
             // Unknown group, ignore
             return;
@@ -296,6 +299,8 @@ async fn handle_message(msg: IncomingMessage, platform: &dyn ChatPlatform, ...) 
     // ... existing platform routing
 }
 ```
+
+The `dispatch_handler::handle_text(content: &str, server: &ServerState) -> Result<String>` signature is canonical — used by WhatsApp DMs, Coven DISPATCH, and any future dispatch entry point.
 
 ## WhatsAppChannel Implementation
 
@@ -514,6 +519,18 @@ Additive to the Telegram + Slack specs:
 ## Dependencies
 
 Rust side — no new crate dependencies. Communication is raw JSON over stdin/stdout using `serde_json` (already a dependency).
+
+## Graceful Shutdown
+
+WhatsApp shutdown is the most involved of all platforms:
+
+1. `WhatsAppPlatform::shutdown()` sends `{"method": "shutdown"}` to the sidecar
+2. Sidecar calls `sock.logout()` for clean WhatsApp disconnect (preserves session state)
+3. Sidecar exits cleanly after logout completes
+4. If sidecar doesn't exit within 5 seconds, `SidecarHandle` kills the child process
+5. Rate limiter state is not persisted (reconstructed on restart from config)
+
+The `PlatformRegistry::shutdown()` timeout (10s) covers the sidecar's 5s grace period plus margin.
 
 ## Files Untouched
 

@@ -23,7 +23,7 @@ whatsapp = ["dep:rust-embed"]
 # Interfaces
 gui = ["dep:iced", "dep:tray-icon", "dep:global-hotkey"]
 tui = ["dep:ratatui", "dep:crossterm"]
-admin = ["dep:askama", "dep:tower-sessions", "dep:argon2"]
+admin = ["dep:askama", "dep:tower-sessions", "dep:argon2"]  # argon2 for password hashing (setup wizard)
 
 # Providers (outbound)
 coven = ["dep:tonic", "dep:prost"]
@@ -248,7 +248,7 @@ iced (GUI) is the heaviest dependency at ~15-20MB. Most server deployments won't
 | `gui` (iced) | Requires windowing system libs (X11/Wayland on Linux, Cocoa on macOS). Not available on musl/Alpine. |
 | `whatsapp` | Requires Node.js at runtime (not at build time). |
 | `coven` | Requires protobuf compiler (`protoc`) at build time for tonic-build. |
-| `matrix` | matrix-sdk requires OpenSSL or rustls. Default to rustls for easier cross-compilation. |
+| `matrix` | matrix-sdk requires OpenSSL or rustls. Default to `rustls` via `matrix-sdk = { features = ["rustls-tls"], default-features = false }` for easier cross-compilation and no system OpenSSL dependency. |
 
 ## Docker
 
@@ -270,11 +270,14 @@ RUN cargo build --release --features "$FEATURES"
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install Node.js for WhatsApp sidecar (only if whatsapp feature enabled)
+# Install Node.js for WhatsApp sidecar (set to false if whatsapp feature not in FEATURES)
 ARG INSTALL_NODE=true
 RUN if [ "$INSTALL_NODE" = "true" ]; then \
       apt-get update && apt-get install -y nodejs npm && rm -rf /var/lib/apt/lists/*; \
     fi
+# Note: INSTALL_NODE must be explicitly set to "false" when building without
+# the whatsapp feature. There's no way to auto-detect features from the binary.
+# The build variants section below shows the correct flag combinations.
 
 RUN useradd --create-home --shell /bin/bash gorp
 WORKDIR /home/gorp
@@ -407,3 +410,15 @@ fn main() {
 | Coven | Pure Rust (protobuf generated) | None | `coven` |
 
 One binary. One `cargo build`. Feature flags control what's included. WhatsApp is the only component with a runtime dependency (Node.js), and even its source code is embedded in the binary.
+
+## Cross-Cutting Concerns
+
+These apply across all features and are defined in their respective design docs:
+
+| Concern | Defined In | Summary |
+|---|---|---|
+| Graceful shutdown | Telegram (PlatformRegistry), each platform doc, Coven doc | `SIGINT`/`SIGTERM` → `PlatformRegistry::shutdown()` + `CovenProvider::shutdown()`, 10s timeout |
+| Health checks | Telegram (PlatformConnectionState) | Each platform reports `PlatformConnectionState`, aggregated by `PlatformRegistry::health()` |
+| Shared types | Telegram (IncomingMessage, AttachmentInfo, EventStream) | Canonical type definitions in `gorp-core/src/traits.rs` |
+| Extension traits | Slack (ThreadedPlatform, SlashCommandProvider, RichFormatter) | Optional capabilities, accessed via `ChatPlatform` accessors, no downcasting |
+| Dispatch handler | WhatsApp + Coven | `dispatch_handler::handle_text(&str, &ServerState) -> Result<String>` — shared by WhatsApp DMs and Coven DISPATCH |

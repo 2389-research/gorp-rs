@@ -331,6 +331,8 @@ DISPATCH routes through the existing `dispatch_handler` — the same code path t
 
 ```rust
 if self.workspace_name == "dispatch" {
+    // Same dispatch_handler::handle_text used by WhatsApp DMs
+    // Canonical signature: handle_text(content: &str, server: &ServerState) -> Result<String>
     let response = dispatch_handler::handle_text(
         &req.content,
         &self.server,
@@ -363,6 +365,41 @@ The `admin` capability tells coven-gateway this agent can do privileged operatio
 | Auth | Bot tokens, QR codes | SSH key fingerprint |
 | Lifecycle | Platforms are consumers | Coven is a provider |
 
+## Proto Sync Strategy
+
+`proto/coven.proto` is the source of truth for gRPC types. It's synced from the coven-gateway repo:
+
+```bash
+# Manual sync (developer runs this when coven-gateway updates its proto)
+cp ../coven-gateway/proto/agent.proto proto/coven.proto
+```
+
+The proto file is checked into the gorp-rs repo — not fetched at build time. This avoids build-time network dependencies and ensures reproducible builds. When the coven-gateway team updates the proto:
+
+1. Developer copies the updated proto into `proto/coven.proto`
+2. `cargo build` regenerates Rust types via `tonic-build` in `build.rs`
+3. Compiler errors surface any breaking changes
+4. Developer updates `AgentStream` message handling to match
+
+Proto version compatibility is tracked via a comment at the top of `proto/coven.proto`:
+
+```protobuf
+// Synced from coven-gateway v0.x.x — <date>
+syntax = "proto3";
+```
+
+## Graceful Shutdown
+
+When gorp shuts down:
+
+1. `CovenProvider::shutdown()` is called (from `main.rs` signal handler, alongside `PlatformRegistry::shutdown()`)
+2. Each `AgentStream` sends a `Goodbye` message to the gateway
+3. Gateway marks the agent as disconnected
+4. gRPC channels are dropped, streams close
+5. Heartbeat tasks are cancelled via `tokio::select!` / `CancellationToken`
+
+The coven provider runs independently from the platform registry — both shut down concurrently during the shutdown sequence.
+
 ## Files Created
 
 | File | Purpose |
@@ -371,7 +408,7 @@ The `admin` capability tells coven-gateway this agent can do privileged operatio
 | `src/coven/stream.rs` | `AgentStream` — per-agent gRPC stream, heartbeat, message handling |
 | `src/coven/proto.rs` | Generated protobuf types (via tonic-build) |
 | `src/coven/reconnect.rs` | Exponential backoff reconnection logic |
-| `proto/coven.proto` | Protobuf service definition (synced from coven-gateway) |
+| `proto/coven.proto` | Protobuf service definition (synced from coven-gateway, checked in) |
 
 ## Files Modified
 
