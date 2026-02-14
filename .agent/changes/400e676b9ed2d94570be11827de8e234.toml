@@ -1,0 +1,12 @@
+change_id = "400e676b9ed2d94570be11827de8e234"
+type = "behavioral"
+intent = "docs: add Slack platform support design document"
+files = [
+    ".agent/changes/96b14416393b5532d04f669aeaf46d9c.toml",
+    "docs/plans/2026-02-13-slack-platform-design.md",
+]
+breaking = false
+
+[invariants]
+checked = []
+status = "skipped"
