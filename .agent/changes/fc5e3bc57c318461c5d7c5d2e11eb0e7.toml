@@ -1,0 +1,12 @@
+change_id = "fc5e3bc57c318461c5d7c5d2e11eb0e7"
+type = "behavioral"
+intent = "docs: add TUI interface design document"
+files = [
+    ".agent/changes/be9dc600314aac86d62bf7d93432061d.toml",
+    "docs/plans/2026-02-13-tui-design.md",
+]
+breaking = false
+
+[invariants]
+checked = []
+status = "skipped"
