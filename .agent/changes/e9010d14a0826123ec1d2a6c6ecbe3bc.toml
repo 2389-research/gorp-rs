@@ -1,0 +1,12 @@
+change_id = "e9010d14a0826123ec1d2a6c6ecbe3bc"
+type = "behavioral"
+intent = "docs: add web interface expansion design document"
+files = [
+    ".agent/changes/fc5e3bc57c318461c5d7c5d2e11eb0e7.toml",
+    "docs/plans/2026-02-13-web-interface-design.md",
+]
+breaking = false
+
+[invariants]
+checked = []
+status = "skipped"
