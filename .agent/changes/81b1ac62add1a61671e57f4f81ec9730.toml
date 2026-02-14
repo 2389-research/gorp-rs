@@ -1,0 +1,12 @@
+change_id = "81b1ac62add1a61671e57f4f81ec9730"
+type = "behavioral"
+intent = "docs: add coven-gateway agent provider design document"
+files = [
+    ".agent/changes/e9010d14a0826123ec1d2a6c6ecbe3bc.toml",
+    "docs/plans/2026-02-13-coven-gateway-design.md",
+]
+breaking = false
+
+[invariants]
+checked = []
+status = "skipped"
