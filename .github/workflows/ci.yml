@@ -65,9 +65,14 @@ jobs:
           restore-keys: |
             rust-cache-${{ runner.os }}-
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run clippy
         # Skip GUI features on Linux CI (requires system libs)
-        run: cargo clippy --all-targets --no-default-features --features admin -- -D warnings
+        run: cargo clippy --all-targets --no-default-features --features matrix,telegram,slack,admin,coven -- -D warnings
 
   test:
     name: Test Suite
@@ -95,6 +100,11 @@ jobs:
           restore-keys: |
             rust-cache-${{ runner.os }}-
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run tests
         # Skip GUI features on Linux CI (requires system libs)
-        run: cargo test --no-default-features --features admin
+        run: cargo test --no-default-features --features matrix,telegram,slack,admin,coven

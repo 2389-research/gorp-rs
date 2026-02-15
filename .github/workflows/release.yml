@@ -19,6 +19,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             platform: Linux x86_64
             artifact_name: gorp-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: Linux ARM64
+            artifact_name: gorp-linux-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
             platform: macOS x86_64
@@ -31,6 +35,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
+      - name: Configure git for private repos
+        run: git config --global url."https://${{ secrets.PRIVATE_REPO_PAT }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify version matches tag
         run: |
@@ -61,7 +73,7 @@ jobs:
             rust-cache-${{ matrix.os }}-${{ matrix.target }}-
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features --features matrix,telegram,slack,admin,coven
 
       - name: Strip binary (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -146,6 +158,7 @@ jobs:
           body: ${{ steps.changelog.outputs.changelog }}
           files: |
             ./artifacts/gorp-linux-x86_64/gorp-linux-x86_64
+            ./artifacts/gorp-linux-arm64/gorp-linux-arm64
             ./artifacts/gorp-macos-x86_64/gorp-macos-x86_64
             ./artifacts/gorp-macos-arm64/gorp-macos-arm64
           fail_on_unmatched_files: true
