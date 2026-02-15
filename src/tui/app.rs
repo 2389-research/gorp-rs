@@ -703,6 +703,28 @@ mod tests {
     }
 
     #[test]
+    fn test_uptime_increments_after_10_ticks() {
+        let mut app = TuiApp::new();
+        assert_eq!(app.uptime_secs, 0);
+
+        // 9 ticks should not increment uptime
+        for _ in 0..9 {
+            app.handle_event(TuiEvent::Tick);
+        }
+        assert_eq!(app.uptime_secs, 0);
+
+        // 10th tick increments uptime
+        app.handle_event(TuiEvent::Tick);
+        assert_eq!(app.uptime_secs, 1);
+
+        // 20th tick increments to 2
+        for _ in 0..10 {
+            app.handle_event(TuiEvent::Tick);
+        }
+        assert_eq!(app.uptime_secs, 2);
+    }
+
+    #[test]
     fn test_nav_arrow_keys() {
         let mut app = TuiApp::new();
         assert_eq!(app.nav_selected, 0);

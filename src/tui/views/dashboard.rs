@@ -240,4 +240,19 @@ mod tests {
     fn test_truncate_str_empty() {
         assert_eq!(truncate_str("", 10), "");
     }
+
+    #[test]
+    fn test_truncate_str_multibyte_utf8() {
+        // Should not panic on multi-byte characters (emoji, CJK, etc.)
+        let emoji = "Hello 🌍🌎🌏 World";
+        let result = truncate_str(emoji, 10);
+        assert!(result.ends_with("..."));
+        // Verify it's valid UTF-8 (no panic)
+        assert!(result.len() <= 13); // 10 + "..." overhead from char boundary
+
+        // CJK characters (3 bytes each)
+        let cjk = "你好世界这是一个测试";
+        let result = truncate_str(cjk, 10);
+        assert!(result.ends_with("..."));
+    }
 }

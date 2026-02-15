@@ -93,16 +93,16 @@ pub struct ChatErrorData {
     pub error: String,
 }
 
-/// Extract the channel identifier from a server message for subscription filtering.
-/// Returns the platform name for feed/status messages, or workspace for chat messages.
-fn message_channel(msg: &ServerMessage) -> Option<&str> {
+/// Map a server message to its logical channel name for subscription filtering.
+/// Clients subscribe to logical channels: "feed", "status", "chat".
+fn message_channel(msg: &ServerMessage) -> &'static str {
     match msg {
-        ServerMessage::FeedMessage { data, .. } => Some(&data.platform),
-        ServerMessage::StatusPlatform { data } => Some(&data.platform),
-        ServerMessage::ChatChunk { data } => Some(&data.workspace),
-        ServerMessage::ChatToolUse { data } => Some(&data.workspace),
-        ServerMessage::ChatComplete { data } => Some(&data.workspace),
-        ServerMessage::ChatError { data } => Some(&data.workspace),
+        ServerMessage::FeedMessage { .. } => "feed",
+        ServerMessage::StatusPlatform { .. } => "status",
+        ServerMessage::ChatChunk { .. } => "chat",
+        ServerMessage::ChatToolUse { .. } => "chat",
+        ServerMessage::ChatComplete { .. } => "chat",
+        ServerMessage::ChatError { .. } => "chat",
     }
 }
 
@@ -190,10 +190,9 @@ async fn handle_ws(socket: WebSocket, state: AdminState) {
                     // Check if client has subscriptions; if so, filter
                     let subs = writer_subs.lock().await;
                     if !subs.is_empty() {
-                        if let Some(channel) = message_channel(&msg) {
-                            if !subs.contains(channel) {
-                                continue;
-                            }
+                        let channel = message_channel(&msg);
+                        if !subs.contains(channel) {
+                            continue;
                         }
                     }
                     drop(subs);
@@ -447,5 +446,63 @@ mod tests {
         let json = r#"{"type": "unknown", "data": {}}"#;
         let result = serde_json::from_str::<ClientMessage>(json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_message_channel_feed() {
+        let msg = ServerMessage::FeedMessage {
+            html: "<div>test</div>".to_string(),
+            data: FeedMessageData {
+                platform: "matrix".to_string(),
+                channel_id: "!abc:matrix.org".to_string(),
+            },
+        };
+        assert_eq!(message_channel(&msg), "feed");
+    }
+
+    #[test]
+    fn test_message_channel_status() {
+        let msg = ServerMessage::StatusPlatform {
+            data: PlatformStatusData {
+                platform: "telegram".to_string(),
+                state: "connected".to_string(),
+            },
+        };
+        assert_eq!(message_channel(&msg), "status");
+    }
+
+    #[test]
+    fn test_message_channel_chat_variants() {
+        let chunk = ServerMessage::ChatChunk {
+            data: ChatChunkData {
+                workspace: "research".to_string(),
+                text: "hi".to_string(),
+            },
+        };
+        assert_eq!(message_channel(&chunk), "chat");
+
+        let tool = ServerMessage::ChatToolUse {
+            data: ChatToolUseData {
+                workspace: "research".to_string(),
+                tool: "Read".to_string(),
+                input: "{}".to_string(),
+            },
+        };
+        assert_eq!(message_channel(&tool), "chat");
+
+        let complete = ServerMessage::ChatComplete {
+            data: ChatCompleteData {
+                workspace: "research".to_string(),
+            },
+        };
+        assert_eq!(message_channel(&complete), "chat");
+
+        let error = ServerMessage::ChatError {
+            data: ChatErrorData {
+                workspace: "research".to_string(),
+                error: "timeout".to_string(),
+            },
+        };
+        assert_eq!(message_channel(&error), "chat");
     }
 }
