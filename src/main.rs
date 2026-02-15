@@ -222,7 +222,7 @@ const ASCII_BANNER: &str = r#"
 #[derive(Parser)]
 #[command(name = "gorp")]
 #[command(author, version)]
-#[command(about = "Matrix-Claude bridge - connect Claude to Matrix rooms")]
+#[command(about = "Multi-platform Claude bridge - connect Claude to Matrix, Telegram, Slack, and more")]
 #[command(before_help = ASCII_BANNER)]
 #[command(after_help = "Admin panel available at http://localhost:13000/admin when running.")]
 struct Cli {
@@ -726,15 +726,15 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // No subcommand - launch GUI (desktop app mode)
+            // No subcommand - launch GUI if available, otherwise start headless
             #[cfg(feature = "gui")]
             {
                 gorp::gui::run_gui()
             }
             #[cfg(not(feature = "gui"))]
             {
-                eprintln!("GUI not available. Use 'gorp start' for headless mode or build with --features gui");
-                std::process::exit(1);
+                // Fall through to headless start when GUI is not compiled
+                run_start().await
             }
         }
         Some(Commands::Start) => run_start().await,
@@ -745,7 +745,7 @@ async fn main() -> Result<()> {
             }
             #[cfg(not(feature = "tui"))]
             {
-                eprintln!("TUI not available - compile with --features tui");
+                eprintln!("TUI not available. Build with: cargo build --features tui");
                 std::process::exit(1);
             }
         }
