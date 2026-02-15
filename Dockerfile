@@ -1,9 +1,23 @@
-# ABOUTME: Multi-stage Dockerfile for gorp Matrix-Claude bridge
-# ABOUTME: Uses dependency caching for fast rebuilds, creates minimal runtime image
+# ABOUTME: Multi-stage Dockerfile for gorp multi-platform Claude bridge
+# ABOUTME: Uses dependency caching for fast rebuilds, configurable features via build args
+#
+# Build variants:
+#   docker build .                                        # default: matrix + admin (headless server)
+#   docker build --build-arg FEATURES="all" .             # everything (telegram, slack, coven, etc.)
+#   docker build --build-arg FEATURES="matrix,coven" .    # matrix + coven gateway
+#   docker build --build-arg FEATURES="telegram,admin" .  # telegram + admin panel
+#   docker build --build-arg INSTALL_NODE=false .         # skip Node.js (no ACP backend)
+
+# Configurable cargo features for the gorp binary
+ARG FEATURES="matrix,admin"
+# Whether to install Node.js in runtime (needed for Claude Code ACP backend)
+ARG INSTALL_NODE=true
 
 # Build stage - cache dependencies separately from source
 # Using Rust 1.85+ which has edition 2024 stabilized
 FROM rust:bookworm AS builder
+
+ARG FEATURES
 
 WORKDIR /app
 
@@ -14,11 +28,18 @@ COPY Cargo.toml Cargo.lock ./
 COPY gorp-agent ./gorp-agent
 COPY gorp-core ./gorp-core
 
+# Copy proto definitions (needed by build.rs for coven feature)
+COPY proto ./proto
+
 # Create dummy source to build dependencies only
 RUN mkdir src && \
     echo 'fn main() { println!("dummy"); }' > src/main.rs && \
     mkdir templates && \
     echo '' > templates/.gitkeep
+
+# Install protoc for coven proto compilation
+RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler && \
+    rm -rf /var/lib/apt/lists/*
 
 # SSH setup for private git dependencies (mux-rs)
 # Configure cargo to use git CLI for SSH-based fetches
@@ -30,13 +51,13 @@ RUN mkdir -p ~/.ssh && \
 
 # Build dependencies (this layer is cached unless Cargo.toml/lock changes)
 # Uses SSH agent forwarding for private git repos
-# Build headless (no GUI/admin) for server deployment
-RUN --mount=type=ssh cargo build --release --no-default-features && \
+RUN --mount=type=ssh cargo build --release --no-default-features --features "${FEATURES}" && \
     rm -rf src templates
 
-# Now copy real source code, templates, and docs
+# Now copy real source code, templates, proto definitions, and docs
 COPY src ./src
 COPY templates ./templates
+COPY proto ./proto
 COPY docs ./docs
 COPY config.toml.example ./config.toml.example
 
@@ -45,13 +66,14 @@ RUN touch src/main.rs
 
 # Build the actual binary (deps are already cached)
 # Uses SSH agent forwarding for private git repos
-# Build headless (no GUI/admin) for server deployment
-RUN --mount=type=ssh cargo build --release --no-default-features
+RUN --mount=type=ssh cargo build --release --no-default-features --features "${FEATURES}"
 
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies, Node.js, vim, and Chromium for Claude Code
+ARG INSTALL_NODE
+
+# Install runtime dependencies, vim, and Chromium for Claude Code
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
@@ -71,11 +93,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatk-bridge2.0-0 \
     libgtk-3-0 \
     locales \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen
+
+# Conditionally install Node.js (needed for Claude Code ACP backend)
+RUN if [ "${INSTALL_NODE}" = "true" ]; then \
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+        apt-get install -y nodejs && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Configure Chromium for headless Docker environment
 # Create symlinks so tools can find Chrome at common paths
@@ -142,11 +169,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 RUN curl https://mise.run | sh && \
     mv /root/.local/bin/mise /usr/local/bin/mise
 
-# Install Claude Code CLI globally
-RUN npm install -g @anthropic-ai/claude-code
-
-# Install Claude Code ACP (Anthropic Computer Protocol) support
-RUN npm install -g @zed-industries/claude-code-acp
+# Install Claude Code CLI and ACP support (requires Node.js)
+RUN if command -v npm > /dev/null 2>&1; then \
+        npm install -g @anthropic-ai/claude-code && \
+        npm install -g @zed-industries/claude-code-acp; \
+    fi
 
 # Install MCP tools and CLI utilities via script
 # Edit scripts/tools.yaml to add/update tools
@@ -192,7 +219,9 @@ USER gorp
 WORKDIR /home/gorp
 
 # Configure npm to use user-writable directory for global installs
-RUN npm config set prefix '/home/gorp/.npm-global'
+RUN if command -v npm > /dev/null 2>&1; then \
+        npm config set prefix '/home/gorp/.npm-global'; \
+    fi
 
 # Set up .bashrc with PATH for interactive shells
 RUN echo 'export PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"' >> /home/gorp/.bashrc && \
