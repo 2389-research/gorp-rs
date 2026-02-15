@@ -84,6 +84,7 @@ pub async fn start_webhook_server(
     matrix_client: Client,
     config: Arc<Config>,
     warm_manager: SharedWarmSessionManager,
+    registry: crate::platform::SharedPlatformRegistry,
 ) -> Result<()> {
     let worker_session_store = session_store.clone();
     let job_tx = spawn_webhook_worker(worker_session_store, warm_manager);
@@ -149,8 +150,54 @@ pub async fn start_webhook_server(
         session_store: state.session_store.clone(),
         scheduler_store: scheduler_store.clone(),
         auth_config,
-        ws_hub,
+        ws_hub: ws_hub.clone(),
+        registry: Some(registry.clone()),
     };
+
+    // Spawn platform status monitor — polls registry every 5 seconds
+    // and broadcasts status changes via WebSocket
+    #[cfg(feature = "admin")]
+    {
+        let monitor_registry = registry.clone();
+        let monitor_hub = ws_hub;
+        tokio::spawn(async move {
+            use crate::admin::websocket::{PlatformStatusData, ServerMessage};
+            use gorp_core::PlatformConnectionState;
+
+            let mut prev_states: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+                let health = monitor_registry.read().await.health();
+                for h in &health {
+                    let state_str = match &h.state {
+                        PlatformConnectionState::Connected => "connected",
+                        PlatformConnectionState::Connecting => "connecting",
+                        PlatformConnectionState::Disconnected { .. } => "disconnected",
+                        PlatformConnectionState::AuthRequired => "auth_required",
+                        PlatformConnectionState::RateLimited { .. } => "rate_limited",
+                    };
+
+                    let changed = prev_states
+                        .get(&h.platform_id)
+                        .map_or(true, |prev| prev != state_str);
+
+                    if changed {
+                        prev_states
+                            .insert(h.platform_id.clone(), state_str.to_string());
+                        monitor_hub.broadcast(ServerMessage::StatusPlatform {
+                            data: PlatformStatusData {
+                                platform: h.platform_id.clone(),
+                                state: state_str.to_string(),
+                            },
+                        });
+                    }
+                }
+            }
+        });
+    }
 
     #[cfg(feature = "admin")]
     let admin_routes = admin_router()

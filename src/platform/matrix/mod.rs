@@ -203,6 +203,13 @@ impl MessagingPlatform for MatrixPlatform {
         });
         Ok(())
     }
+
+    fn connection_state(&self) -> PlatformConnectionState {
+        self.connection_state
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(PlatformConnectionState::Connected)
+    }
 }
 
 #[async_trait]
@@ -229,13 +236,6 @@ impl ChatPlatform for MatrixPlatform {
 
     fn channel_manager(&self) -> Option<&dyn ChannelManager> {
         Some(self)
-    }
-
-    fn connection_state(&self) -> PlatformConnectionState {
-        self.connection_state
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or(PlatformConnectionState::Connected)
     }
 }
 

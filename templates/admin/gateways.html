@@ -11,15 +11,16 @@
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         {% for gw in gateways %}
-        <div class="border rounded-lg p-4 {% if gw.connected %}border-green-200 bg-green-50{% else %}border-gray-200{% endif %}">
+        <div id="gw-{{ gw.platform_id }}" data-platform="{{ gw.platform_id }}" data-configured="{{ gw.configured }}"
+             class="border rounded-lg p-4 {% if gw.connected %}border-green-200 bg-green-50{% else %}border-gray-200{% endif %}">
             <div class="flex justify-between items-center mb-3">
                 <div class="flex items-center space-x-2">
-                    <span class="text-lg {% if gw.connected %}text-green-500{% else %}text-gray-400{% endif %}">
+                    <span class="gw-indicator text-lg {% if gw.connected %}text-green-500{% else %}text-gray-400{% endif %}">
                         {% if gw.connected %}&#9679;{% else %}&#9675;{% endif %}
                     </span>
                     <h2 class="text-lg font-semibold capitalize">{{ gw.platform_id }}</h2>
                 </div>
-                <span class="text-sm {% if gw.connected %}text-green-600{% else %}text-gray-500{% endif %}">
+                <span class="gw-status-text text-sm {% if gw.connected %}text-green-600{% else %}text-gray-500{% endif %}">
                     {% if gw.connected %}Connected{% else %}{% if gw.configured %}Disconnected{% else %}Not configured{% endif %}{% endif %}
                 </span>
             </div>
@@ -54,4 +55,5 @@
         {% endfor %}
     </div>
 </div>
+<script src="/static/gateways.js"></script>
 {% endblock %}

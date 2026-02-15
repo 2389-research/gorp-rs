@@ -1,6 +1,7 @@
 // ABOUTME: Platform abstraction module for gorp
 // ABOUTME: Re-exports platform implementations (Matrix, Telegram, Slack)
 
+pub mod factory;
 pub mod matrix;
 pub mod registry;
 #[cfg(feature = "slack")]
@@ -9,7 +10,7 @@ pub mod slack;
 pub mod telegram;
 
 // Re-export registry types
-pub use registry::{PlatformHealth, PlatformRegistry};
+pub use registry::{PlatformHealth, PlatformRegistry, SharedPlatformRegistry};
 
 // Re-export platform implementations for convenient access
 pub use matrix::{

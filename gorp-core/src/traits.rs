@@ -171,6 +171,12 @@ pub trait MessagingPlatform: Send + Sync {
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Report current connection state for health monitoring.
+    /// Platforms that support richer state tracking should override this.
+    fn connection_state(&self) -> PlatformConnectionState {
+        PlatformConnectionState::Connected
+    }
 }
 
 // =============================================================================
@@ -207,11 +213,6 @@ pub trait ChatPlatform: MessagingPlatform {
     /// Optional: encryption support
     fn encryption(&self) -> Option<&dyn EncryptedPlatform> {
         None
-    }
-
-    /// Report current connection state for health monitoring
-    fn connection_state(&self) -> PlatformConnectionState {
-        PlatformConnectionState::Connected
     }
 
     /// Optional: threaded conversation support
@@ -710,5 +711,14 @@ mod tests {
     fn test_chat_platform_rich_formatter_default_none() {
         let platform = StubPlatform;
         assert!(platform.rich_formatter().is_none());
+    }
+
+    #[test]
+    fn test_messaging_platform_connection_state_default() {
+        let platform = StubPlatform;
+        assert!(matches!(
+            platform.connection_state(),
+            PlatformConnectionState::Connected
+        ));
     }
 }

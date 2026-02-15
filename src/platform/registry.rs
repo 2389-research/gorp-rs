@@ -5,7 +5,11 @@ use anyhow::Result;
 use futures_util::stream::SelectAll;
 use gorp_core::{EventStream, IncomingMessage, MessagingPlatform, PlatformConnectionState};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Thread-safe shared registry for use across admin, websocket, and main tasks
+pub type SharedPlatformRegistry = Arc<tokio::sync::RwLock<PlatformRegistry>>;
 
 /// Health status for a single platform
 #[derive(Debug, Clone)]
@@ -53,6 +57,16 @@ impl PlatformRegistry {
         self.platforms.keys().cloned().collect()
     }
 
+    /// Remove and shut down a platform by its ID.
+    pub async fn unregister(&mut self, platform_id: &str) -> Option<Box<dyn MessagingPlatform>> {
+        if let Some(platform) = self.platforms.remove(platform_id) {
+            let _ = platform.shutdown().await;
+            Some(platform)
+        } else {
+            None
+        }
+    }
+
     /// Create a merged event stream from all registered platforms.
     /// Uses futures_util SelectAll to combine streams from all platforms into one.
     pub async fn merged_event_stream(&self) -> Result<EventStream> {
@@ -78,15 +92,13 @@ impl PlatformRegistry {
     }
 
     /// Aggregate health from all registered platforms.
-    /// Since we store Box<dyn MessagingPlatform>, we cannot access connection_state()
-    /// which lives on the ChatPlatform trait. For MessagingPlatform-only platforms,
-    /// we report Connected by default.
+    /// Calls connection_state() on each platform through the MessagingPlatform trait.
     pub fn health(&self) -> Vec<PlatformHealth> {
         self.platforms
             .iter()
-            .map(|(id, _p)| PlatformHealth {
+            .map(|(id, p)| PlatformHealth {
                 platform_id: id.clone(),
-                state: PlatformConnectionState::Connected,
+                state: p.connection_state(),
             })
             .collect()
     }
@@ -119,6 +131,34 @@ mod tests {
 
         fn platform_id(&self) -> &'static str {
             self.id
+        }
+    }
+
+    struct MockPlatformWithState {
+        id: &'static str,
+        state: PlatformConnectionState,
+    }
+
+    #[async_trait]
+    impl MessagingPlatform for MockPlatformWithState {
+        async fn event_stream(&self) -> Result<EventStream> {
+            Ok(Box::pin(tokio_stream::empty()))
+        }
+
+        async fn send(&self, _channel_id: &str, _content: MessageContent) -> Result<()> {
+            Ok(())
+        }
+
+        fn bot_user_id(&self) -> &str {
+            "bot"
+        }
+
+        fn platform_id(&self) -> &'static str {
+            self.id
+        }
+
+        fn connection_state(&self) -> PlatformConnectionState {
+            self.state.clone()
         }
     }
 
@@ -263,5 +303,63 @@ mod tests {
         let cloned = health.clone();
         assert_eq!(cloned.platform_id, "matrix");
         assert!(matches!(cloned.state, PlatformConnectionState::Connected));
+    }
+
+    #[test]
+    fn test_connection_state_default_returns_connected() {
+        let platform = MockPlatform { id: "test" };
+        assert!(matches!(
+            platform.connection_state(),
+            PlatformConnectionState::Connected
+        ));
+    }
+
+    #[test]
+    fn test_health_returns_actual_platform_state() {
+        let mut registry = PlatformRegistry::new();
+        registry.register(Box::new(MockPlatformWithState {
+            id: "disconnected_one",
+            state: PlatformConnectionState::Disconnected {
+                reason: "timeout".to_string(),
+            },
+        }));
+        registry.register(Box::new(MockPlatformWithState {
+            id: "connected_one",
+            state: PlatformConnectionState::Connected,
+        }));
+
+        let health = registry.health();
+        assert_eq!(health.len(), 2);
+
+        let disconnected = health.iter().find(|h| h.platform_id == "disconnected_one").unwrap();
+        assert!(matches!(
+            disconnected.state,
+            PlatformConnectionState::Disconnected { .. }
+        ));
+
+        let connected = health.iter().find(|h| h.platform_id == "connected_one").unwrap();
+        assert!(matches!(connected.state, PlatformConnectionState::Connected));
+    }
+
+    #[tokio::test]
+    async fn test_unregister_removes_platform() {
+        let mut registry = PlatformRegistry::new();
+        registry.register(Box::new(MockPlatform { id: "matrix" }));
+        registry.register(Box::new(MockPlatform { id: "slack" }));
+        assert_eq!(registry.len(), 2);
+
+        let removed = registry.unregister("matrix").await;
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().platform_id(), "matrix");
+        assert_eq!(registry.len(), 1);
+        assert!(registry.get("matrix").is_none());
+        assert!(registry.get("slack").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_unregister_nonexistent_returns_none() {
+        let mut registry = PlatformRegistry::new();
+        let removed = registry.unregister("nonexistent").await;
+        assert!(removed.is_none());
     }
 }

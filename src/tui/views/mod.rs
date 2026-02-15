@@ -4,6 +4,7 @@
 pub mod chat;
 pub mod dashboard;
 pub mod feed;
+pub mod gateways;
 pub mod logs;
 pub mod schedules;
 pub mod workspace;

@@ -21,6 +21,7 @@ pub enum View {
     Feed,
     Workspace { name: String },
     Channels,
+    Gateways,
     Schedules,
     Logs,
 }
@@ -32,6 +33,7 @@ impl View {
             View::Feed => "Feed",
             View::Workspace { .. } => "Workspace",
             View::Channels => "Channels",
+            View::Gateways => "Gateways",
             View::Schedules => "Schedules",
             View::Logs => "Logs",
         }
@@ -131,6 +133,18 @@ pub struct ChatMessage {
 }
 
 // =============================================================================
+// Gateway info for gateways view
+// =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct GatewayInfo {
+    pub platform_id: String,
+    pub configured: bool,
+    pub connected: bool,
+    pub state_text: String,
+}
+
+// =============================================================================
 // TuiApp — main application state
 // =============================================================================
 
@@ -163,6 +177,8 @@ pub struct TuiApp {
     pub chat_messages: Vec<ChatMessage>,
     pub chat_scroll: usize,
     pub chat_channel_name: Option<String>,
+    pub gateway_infos: Vec<GatewayInfo>,
+    pub gateway_selected: usize,
 }
 
 /// Maximum number of feed messages to keep in memory
@@ -201,12 +217,14 @@ impl TuiApp {
             chat_messages: Vec::new(),
             chat_scroll: 0,
             chat_channel_name: None,
+            gateway_infos: Vec::new(),
+            gateway_selected: 0,
         }
     }
 
     /// Navigation items in order
     pub fn nav_items() -> &'static [&'static str] {
-        &["Dashboard", "Feed", "Workspace", "Channels", "Schedules", "Logs"]
+        &["Dashboard", "Feed", "Workspace", "Channels", "Gateways", "Schedules", "Logs"]
     }
 
     /// Handle a TUI event and return whether to continue
@@ -287,11 +305,11 @@ impl TuiApp {
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 self.view = View::Schedules;
-                self.nav_selected = 4;
+                self.nav_selected = 5;
             }
             KeyCode::Char('l') | KeyCode::Char('L') => {
                 self.view = View::Logs;
-                self.nav_selected = 5;
+                self.nav_selected = 6;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.nav_selected > 0 {
@@ -429,8 +447,9 @@ impl TuiApp {
                 name: String::new(),
             },
             3 => View::Channels,
-            4 => View::Schedules,
-            5 => View::Logs,
+            4 => View::Gateways,
+            5 => View::Schedules,
+            6 => View::Logs,
             _ => return,
         };
     }
@@ -456,7 +475,26 @@ impl TuiApp {
         if let Some(status) = self.platform_statuses.iter_mut().find(|s| s.name == name) {
             status.connected = connected;
         } else {
-            self.platform_statuses.push(PlatformStatus { name, connected });
+            self.platform_statuses
+                .push(PlatformStatus { name: name.clone(), connected });
+        }
+
+        // Keep gateway_infos in sync
+        let state_text = if connected {
+            "Connected".to_string()
+        } else {
+            "Disconnected".to_string()
+        };
+        if let Some(gw) = self.gateway_infos.iter_mut().find(|g| g.platform_id == name) {
+            gw.connected = connected;
+            gw.state_text = state_text;
+        } else {
+            self.gateway_infos.push(GatewayInfo {
+                platform_id: name,
+                configured: true,
+                connected,
+                state_text,
+            });
         }
     }
 
@@ -493,6 +531,7 @@ impl TuiApp {
             View::Feed => views::feed::render_feed(frame, area, self),
             View::Workspace { .. } => views::workspace::render_workspace(frame, area, self),
             View::Channels => views::chat::render_chat(frame, area, self),
+            View::Gateways => views::gateways::render_gateways(frame, area, self),
             View::Schedules => views::schedules::render_schedules(frame, area, self),
             View::Logs => views::logs::render_logs(frame, area, self),
         }
@@ -548,6 +587,7 @@ mod tests {
             "Workspace"
         );
         assert_eq!(View::Channels.label(), "Channels");
+        assert_eq!(View::Gateways.label(), "Gateways");
         assert_eq!(View::Schedules.label(), "Schedules");
         assert_eq!(View::Logs.label(), "Logs");
     }
@@ -692,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_nav_items_count() {
-        assert_eq!(TuiApp::nav_items().len(), 6);
+        assert_eq!(TuiApp::nav_items().len(), 7);
     }
 
     #[test]

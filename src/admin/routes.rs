@@ -34,6 +34,7 @@ pub struct AdminState {
     pub scheduler_store: SchedulerStore,
     pub auth_config: Option<super::auth::AuthConfig>,
     pub ws_hub: super::websocket::WsHub,
+    pub registry: Option<crate::platform::SharedPlatformRegistry>,
 }
 
 #[derive(Deserialize)]
@@ -2187,14 +2188,25 @@ fn list_workspace_names(workspace_dir: &str) -> Vec<String> {
 const PLATFORM_IDS: &[&str] = &["matrix", "telegram", "slack", "whatsapp"];
 
 async fn gateways_overview(State(state): State<AdminState>) -> GatewaysTemplate {
+    // Get live platform health from registry
+    let live_health = if let Some(ref reg) = state.registry {
+        let reg = reg.read().await;
+        reg.health()
+    } else {
+        vec![]
+    };
+
     let gateways = PLATFORM_IDS
         .iter()
         .map(|id| {
             let (configured, config_summary) = platform_config_summary(&state.config, id);
+            let connected = live_health
+                .iter()
+                .any(|h| h.platform_id == *id && matches!(h.state, gorp_core::PlatformConnectionState::Connected));
             GatewayRow {
                 platform_id: id.to_string(),
                 configured,
-                connected: false, // Runtime status would come from PlatformRegistry
+                connected,
                 config_summary,
             }
         })
@@ -2218,12 +2230,21 @@ async fn gateway_config(
         .into_response();
     }
 
+    let connected = if let Some(ref reg) = state.registry {
+        let reg = reg.read().await;
+        reg.health()
+            .iter()
+            .any(|h| h.platform_id == platform && matches!(h.state, gorp_core::PlatformConnectionState::Connected))
+    } else {
+        false
+    };
+
     let fields = platform_config_fields(&state.config, &platform);
 
     GatewayConfigTemplate {
         title: format!("{} Config - gorp", platform),
         platform_id: platform,
-        connected: false,
+        connected,
         fields,
     }
     .into_response()
@@ -2254,27 +2275,113 @@ async fn gateway_save(
     }
 }
 
-async fn gateway_connect(AxumPath(platform): AxumPath<String>) -> ToastTemplate {
-    // Hot-connect would require Arc<Mutex<PlatformRegistry>> access
-    // For now, inform the user to restart
+async fn gateway_connect(
+    State(state): State<AdminState>,
+    AxumPath(platform): AxumPath<String>,
+) -> ToastTemplate {
     tracing::info!(platform = %platform, "Gateway connect requested");
-    ToastTemplate {
-        message: format!(
-            "{} connection requested. Restart gorp to connect with saved config.",
-            platform
-        ),
-        is_error: false,
+
+    // Matrix and WhatsApp cannot be hot-connected
+    if platform == "matrix" {
+        return ToastTemplate {
+            message: "Matrix requires complex setup (encryption, device verification). Please restart gorp to connect Matrix.".to_string(),
+            is_error: true,
+        };
+    }
+    if platform == "whatsapp" {
+        return ToastTemplate {
+            message: "WhatsApp uses a sidecar process. Please restart gorp to connect.".to_string(),
+            is_error: true,
+        };
+    }
+
+    let Some(ref registry) = state.registry else {
+        return ToastTemplate {
+            message: "Registry not available. Restart gorp to connect.".to_string(),
+            is_error: true,
+        };
+    };
+
+    // Check if already connected
+    {
+        let reg = registry.read().await;
+        if reg.get(&platform).is_some() {
+            return ToastTemplate {
+                message: format!("{} is already connected.", platform),
+                is_error: true,
+            };
+        }
+    }
+
+    // Create platform from config
+    match crate::platform::factory::create_platform(&state.config, &platform).await {
+        Ok(new_platform) => {
+            let mut reg = registry.write().await;
+            reg.register(new_platform);
+            tracing::info!(platform = %platform, "Hot-connected platform");
+
+            // Broadcast status update
+            state.ws_hub.broadcast(
+                super::websocket::ServerMessage::StatusPlatform {
+                    data: super::websocket::PlatformStatusData {
+                        platform: platform.clone(),
+                        state: "connected".to_string(),
+                    },
+                },
+            );
+
+            ToastTemplate {
+                message: format!("{} connected successfully.", platform),
+                is_error: false,
+            }
+        }
+        Err(e) => {
+            tracing::error!(platform = %platform, error = %e, "Failed to connect platform");
+            ToastTemplate {
+                message: format!("Failed to connect {}: {}", platform, e),
+                is_error: true,
+            }
+        }
     }
 }
 
-async fn gateway_disconnect(AxumPath(platform): AxumPath<String>) -> ToastTemplate {
+async fn gateway_disconnect(
+    State(state): State<AdminState>,
+    AxumPath(platform): AxumPath<String>,
+) -> ToastTemplate {
     tracing::info!(platform = %platform, "Gateway disconnect requested");
-    ToastTemplate {
-        message: format!(
-            "{} disconnection requested. Restart gorp to apply.",
-            platform
-        ),
-        is_error: false,
+
+    let Some(ref registry) = state.registry else {
+        return ToastTemplate {
+            message: "Registry not available.".to_string(),
+            is_error: true,
+        };
+    };
+
+    let mut reg = registry.write().await;
+    match reg.unregister(&platform).await {
+        Some(_) => {
+            tracing::info!(platform = %platform, "Disconnected platform");
+
+            // Broadcast status update
+            state.ws_hub.broadcast(
+                super::websocket::ServerMessage::StatusPlatform {
+                    data: super::websocket::PlatformStatusData {
+                        platform: platform.clone(),
+                        state: "disconnected".to_string(),
+                    },
+                },
+            );
+
+            ToastTemplate {
+                message: format!("{} disconnected.", platform),
+                is_error: false,
+            }
+        }
+        None => ToastTemplate {
+            message: format!("{} is not connected.", platform),
+            is_error: true,
+        },
     }
 }
 

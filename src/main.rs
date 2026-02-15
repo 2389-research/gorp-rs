@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use gorp::{
     config::Config,
     matrix_client, message_handler, paths,
-    platform::{MatrixPlatform, PlatformRegistry},
+    platform::{MatrixPlatform, PlatformRegistry, SharedPlatformRegistry},
     scheduler::{start_scheduler, SchedulerStore},
     session::SessionStore,
     task_executor::start_task_executor,
@@ -1217,13 +1217,14 @@ async fn run_start() -> Result<()> {
     );
 
     // Wire graceful shutdown to registry
-    let registry = Arc::new(registry);
+    let registry: SharedPlatformRegistry =
+        Arc::new(tokio::sync::RwLock::new(registry));
     let shutdown_registry = Arc::clone(&registry);
     tokio::spawn(async move {
         match tokio::signal::ctrl_c().await {
             Ok(()) => {
                 tracing::info!("Received shutdown signal, shutting down platforms...");
-                shutdown_registry.shutdown().await;
+                shutdown_registry.read().await.shutdown().await;
                 tracing::info!("All platforms shut down");
                 std::process::exit(0);
             }
@@ -1239,6 +1240,7 @@ async fn run_start() -> Result<()> {
     let webhook_client = client.clone();
     let webhook_config_arc = Arc::clone(&config_arc);
     let webhook_warm_manager = warm_manager.clone();
+    let webhook_registry = Arc::clone(&registry);
     tokio::spawn(async move {
         if let Err(e) = webhook::start_webhook_server(
             webhook_port,
@@ -1246,6 +1248,7 @@ async fn run_start() -> Result<()> {
             webhook_client,
             webhook_config_arc,
             webhook_warm_manager,
+            webhook_registry,
         )
         .await
         {
