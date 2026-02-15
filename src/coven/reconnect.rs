@@ -64,10 +64,11 @@ impl BackoffState {
         let delay = self.current_delay;
 
         // Calculate next delay with exponential backoff, capped at max_delay
-        self.current_delay = std::cmp::min(
-            self.current_delay * self.config.multiplier,
-            self.config.max_delay,
-        );
+        self.current_delay = self
+            .current_delay
+            .checked_mul(self.config.multiplier)
+            .map(|d| std::cmp::min(d, self.config.max_delay))
+            .unwrap_or(self.config.max_delay);
 
         Some(delay)
     }

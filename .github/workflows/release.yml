@@ -76,11 +76,11 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }} --no-default-features --features matrix,telegram,slack,admin,coven
 
       - name: Strip binary (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: strip target/${{ matrix.target }}/release/gorp
 
       - name: Strip binary (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         run: strip target/${{ matrix.target }}/release/gorp
 
       - name: Rename binary

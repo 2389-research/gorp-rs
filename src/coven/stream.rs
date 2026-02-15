@@ -60,10 +60,10 @@ pub fn map_event_to_responses(request_id: &str, event: AgentEvent) -> Vec<AgentM
                 messages.push(response_msg(
                     request_id,
                     Event::Usage(proto::TokenUsage {
-                        input_tokens: u.input_tokens as i32,
-                        output_tokens: u.output_tokens as i32,
-                        cache_read_tokens: u.cache_read_tokens.unwrap_or(0) as i32,
-                        cache_write_tokens: u.cache_write_tokens.unwrap_or(0) as i32,
+                        input_tokens: u.input_tokens.min(i32::MAX as u64) as i32,
+                        output_tokens: u.output_tokens.min(i32::MAX as u64) as i32,
+                        cache_read_tokens: u.cache_read_tokens.unwrap_or(0).min(i32::MAX as u64) as i32,
+                        cache_write_tokens: u.cache_write_tokens.unwrap_or(0).min(i32::MAX as u64) as i32,
                         thinking_tokens: 0,
                     }),
                 ));
@@ -185,6 +185,15 @@ pub async fn handle_dispatch_message(
                 "Created new DISPATCH session for coven thread"
             );
             sessions.insert(thread_id.to_string(), sid.clone());
+
+            // Notify gateway of session initialization
+            let init = response_msg(
+                request_id,
+                Event::SessionInit(proto::SessionInit {
+                    session_id: sid.clone(),
+                }),
+            );
+            let _ = tx.send(init).await;
             sid
         }
     };

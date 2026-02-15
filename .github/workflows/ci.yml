@@ -105,6 +105,9 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run tests
+      - name: Run tests (default features)
+        run: cargo test
+
+      - name: Run tests (all server features)
         # Skip GUI features on Linux CI (requires system libs)
         run: cargo test --no-default-features --features matrix,telegram,slack,admin,coven

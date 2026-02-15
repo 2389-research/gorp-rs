@@ -474,7 +474,7 @@ async fn run_stream_loop(
             msg = inbound.message() => {
                 match msg {
                     Ok(Some(server_msg)) => {
-                        handle_server_message(
+                        let should_shutdown = handle_server_message(
                             agent_id,
                             workspace,
                             is_dispatch,
@@ -484,6 +484,9 @@ async fn run_stream_loop(
                             session_store,
                             tx,
                         ).await;
+                        if should_shutdown {
+                            return true; // Gateway requested shutdown — don't reconnect
+                        }
                     }
                     Ok(None) => {
                         tracing::info!(agent_id = %agent_id, "Server closed stream");
@@ -499,7 +502,8 @@ async fn run_stream_loop(
     }
 }
 
-/// Handle an incoming server message by routing to the appropriate handler
+/// Handle an incoming server message by routing to the appropriate handler.
+/// Returns true if the stream should be shut down (don't reconnect).
 async fn handle_server_message(
     agent_id: &str,
     workspace: &str,
@@ -509,7 +513,7 @@ async fn handle_server_message(
     sessions: &mut HashMap<String, String>,
     session_store: &SessionStore,
     tx: &tokio::sync::mpsc::Sender<AgentMessage>,
-) {
+) -> bool {
     use proto::server_message::Payload as SP;
 
     match msg.payload {
@@ -565,16 +569,18 @@ async fn handle_server_message(
             tracing::info!(
                 agent_id = %agent_id,
                 reason = %shutdown.reason,
-                "Gateway requested shutdown"
+                "Gateway requested shutdown — stopping stream"
             );
+            return true;
         }
         Some(SP::RegistrationError(err)) => {
             tracing::error!(
                 agent_id = %agent_id,
                 reason = %err.reason,
                 suggested_id = %err.suggested_id,
-                "Registration rejected by gateway"
+                "Registration rejected by gateway — stopping stream"
             );
+            return true;
         }
         Some(SP::CancelRequest(cancel)) => {
             tracing::info!(
@@ -601,6 +607,8 @@ async fn handle_server_message(
         }
         Some(SP::ToolApproval(_)) | Some(SP::PackToolResult(_)) | None => {}
     }
+
+    false
 }
 
 /// Get the system hostname

@@ -59,6 +59,8 @@ class Gorp < Formula
 
   test do
     assert_match "gorp", shell_output("#{bin}/gorp --version")
-    assert_match "Valid", shell_output("#{bin}/gorp config check 2>&1", 1)
+    # config check fails without a config file (exit 1), verify it runs
+    output = shell_output("#{bin}/gorp config check 2>&1", 1)
+    assert_match(/Invalid|Error|parse/, output)
   end
 end
