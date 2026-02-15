@@ -1,49 +1,64 @@
-# ABOUTME: Homebrew cask formula for gorp desktop app
-# ABOUTME: Install via: brew install --cask 2389-research/tap/gorp
+# ABOUTME: Homebrew formula for gorp CLI (builds from source with cargo)
+# ABOUTME: Install via: brew install 2389-research/tap/gorp
 
-cask "gorp" do
-  version "0.3.1"
-  sha256 "PLACEHOLDER_SHA256"
-
-  url "https://github.com/2389-research/gorp-rs/releases/download/v#{version}/gorp-#{version}-macos.dmg"
-  name "gorp"
-  desc "Personal AI agent desktop for Matrix-Claude bridge"
+class Gorp < Formula
+  desc "Multi-platform Claude bridge - connect Claude to Matrix, Telegram, Slack"
   homepage "https://github.com/2389-research/gorp-rs"
+  url "https://github.com/2389-research/gorp-rs/archive/refs/tags/v0.3.2.tar.gz"
+  sha256 "PLACEHOLDER_SHA256"
+  license "MIT"
+  head "https://github.com/2389-research/gorp-rs.git", branch: "main"
 
   livecheck do
-    url :url
+    url :stable
     strategy :github_latest
   end
 
-  depends_on macos: ">= :big_sur"
+  depends_on "rust" => :build
+  depends_on "protobuf" => :build
+  depends_on "pkg-config" => :build
+  depends_on "openssl@3"
 
-  app "gorp.app"
+  # Node.js for ACP backend (Claude Code CLI)
+  depends_on "node" => :recommended
 
-  # Also install CLI binary to PATH
-  binary "#{appdir}/gorp.app/Contents/MacOS/gorp"
+  def install
+    # Build with server-appropriate features (no GUI on headless install)
+    features = %w[matrix telegram slack admin coven]
+    system "cargo", "build", "--release",
+           "--no-default-features",
+           "--features", features.join(",")
 
-  zap trash: [
-    "~/.config/gorp",
-    "~/.local/share/gorp",
-    "~/Library/Application Support/gorp",
-    "~/Library/Caches/gorp",
-    "~/Library/Preferences/com.2389.gorp.plist",
-  ]
+    bin.install "target/release/gorp"
 
-  caveats <<~EOS
-    gorp runs as a menu bar app by default.
+    # Install example config
+    (share/"gorp").install "config.toml.example"
+  end
 
-    To configure, create a config file:
-      mkdir -p ~/.config/gorp
-      cp /Applications/gorp.app/Contents/Resources/config.toml.example ~/.config/gorp/config.toml
+  def post_install
+    # Create config directory
+    (var/"lib/gorp").mkpath
+  end
 
-    Or set environment variables:
-      export MATRIX_HOME_SERVER="https://matrix.org"
-      export MATRIX_USER_ID="@yourbot:matrix.org"
-      export MATRIX_PASSWORD="your-password"
-      export ALLOWED_USERS="@you:matrix.org"
+  def caveats
+    <<~EOS
+      To get started, copy the example config:
+        mkdir -p ~/.config/gorp
+        cp #{share}/gorp/config.toml.example ~/.config/gorp/config.toml
 
-    To start at login, enable in System Settings > General > Login Items
-    or run: gorp --headless (for daemon mode)
-  EOS
+      Edit the config with your platform credentials, then run:
+        gorp start
+
+      Available features (compiled into this build):
+        Matrix, Telegram, Slack, Admin panel, Coven gateway
+
+      For headless server deployment, see:
+        https://github.com/2389-research/gorp-rs
+    EOS
+  end
+
+  test do
+    assert_match "gorp", shell_output("#{bin}/gorp --version")
+    assert_match "Valid", shell_output("#{bin}/gorp config check 2>&1", 1)
+  end
 end
