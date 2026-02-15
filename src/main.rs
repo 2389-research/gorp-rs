@@ -251,12 +251,28 @@ enum Commands {
         #[command(subcommand)]
         action: RoomsAction,
     },
+    /// Gateway (platform) management
+    Gateways {
+        #[command(subcommand)]
+        action: GatewaysAction,
+    },
 }
 
 #[derive(Subcommand)]
 enum RoomsAction {
     /// Sync all room names to match current prefix
     Sync,
+}
+
+#[derive(Subcommand)]
+enum GatewaysAction {
+    /// List all gateways and their configuration status
+    List,
+    /// Show detailed status for a specific gateway
+    Status {
+        /// Platform name (matrix, telegram, slack, whatsapp)
+        platform: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -752,6 +768,7 @@ async fn main() -> Result<()> {
         Some(Commands::Config { action }) => run_config(action),
         Some(Commands::Schedule { action }) => run_schedule(action),
         Some(Commands::Rooms { action }) => run_rooms(action).await,
+        Some(Commands::Gateways { action }) => run_gateways(action),
     }
 }
 
@@ -1022,6 +1039,118 @@ async fn run_rooms(action: RoomsAction) -> Result<()> {
             println!("\nDone. Renamed {} room(s).", channels.len());
             Ok(())
         }
+    }
+}
+
+/// Known platform identifiers
+const PLATFORM_IDS: &[&str] = &["matrix", "telegram", "slack", "whatsapp"];
+
+/// Handle gateways subcommands
+fn run_gateways(action: GatewaysAction) -> Result<()> {
+    dotenvy::dotenv().ok();
+    let config = Config::load()?;
+
+    match action {
+        GatewaysAction::List => {
+            println!(
+                "{:<12} {:<14} {}",
+                "Platform", "Configured", "Details"
+            );
+            println!("{}", "-".repeat(56));
+            for id in PLATFORM_IDS {
+                let (configured, summary) = platform_config_status(&config, id);
+                let indicator = if configured { "●" } else { "○" };
+                let status_text = if configured { "yes" } else { "no" };
+                println!(
+                    "  {} {:<10} {:<14} {}",
+                    indicator, id, status_text, summary
+                );
+            }
+            println!(
+                "\nUse `gorp gateways status <platform>` for details."
+            );
+            println!("Connect/disconnect live gateways via the admin panel or TUI.");
+            Ok(())
+        }
+        GatewaysAction::Status { platform } => {
+            if !PLATFORM_IDS.contains(&platform.as_str()) {
+                eprintln!("Unknown platform: {}", platform);
+                eprintln!("Available platforms: {}", PLATFORM_IDS.join(", "));
+                std::process::exit(1);
+            }
+
+            let (configured, _) = platform_config_status(&config, &platform);
+            println!("Gateway: {}", platform);
+            println!("Configured: {}", if configured { "yes" } else { "no" });
+
+            match platform.as_str() {
+                "matrix" => {
+                    if let Some(ref m) = config.matrix {
+                        println!("\n  Homeserver:    {}", m.home_server);
+                        println!("  User ID:       {}", m.user_id);
+                        println!("  Device:        {}", m.device_name);
+                        println!("  Room prefix:   {}", m.room_prefix);
+                        println!("  Allowed users: {}", m.allowed_users.len());
+                        println!("  Password:      {}", if m.password.is_some() { "set" } else { "not set" });
+                        println!("  Access token:  {}", if m.access_token.is_some() { "set" } else { "not set" });
+                        println!("  Hot-connect:   no (requires encryption/device setup)");
+                    }
+                }
+                "telegram" => {
+                    if let Some(ref t) = config.telegram {
+                        println!("\n  Bot token:     {}", if t.bot_token.is_empty() { "not set" } else { "set (redacted)" });
+                        println!("  Allowed chats: {}", t.allowed_chats.len());
+                        println!("  Allowed users: {}", t.allowed_users.len());
+                        println!("  Hot-connect:   yes");
+                    }
+                }
+                "slack" => {
+                    if let Some(ref s) = config.slack {
+                        println!("\n  Bot token:     {}", if s.bot_token.is_empty() { "not set" } else { "set (redacted)" });
+                        println!("  App token:     {}", if s.app_token.is_empty() { "not set" } else { "set (redacted)" });
+                        println!("  Allowed chans: {}", s.allowed_channels.len());
+                        println!("  Allowed users: {}", s.allowed_users.len());
+                        println!("  Hot-connect:   yes");
+                    }
+                }
+                "whatsapp" => {
+                    if let Some(ref _w) = config.whatsapp {
+                        println!("\n  Hot-connect:   no (uses sidecar process)");
+                    }
+                }
+                _ => {}
+            }
+
+            if !configured {
+                println!("\nNot configured. Edit your config file:");
+                println!("  {}", paths::config_file().display());
+            }
+
+            Ok(())
+        }
+    }
+}
+
+/// Get configuration status and summary for a platform
+fn platform_config_status(config: &Config, platform_id: &str) -> (bool, String) {
+    match platform_id {
+        "matrix" => match &config.matrix {
+            Some(m) => (true, format!("{}@{}", m.user_id, m.home_server)),
+            None => (false, "not configured".to_string()),
+        },
+        "telegram" => match &config.telegram {
+            Some(t) => (true, if t.bot_token.is_empty() { "token missing".to_string() } else { "token set".to_string() }),
+            None => (false, "not configured".to_string()),
+        },
+        "slack" => match &config.slack {
+            Some(s) => (true, if s.bot_token.is_empty() { "token missing".to_string() } else { "token set".to_string() }),
+            None => (false, "not configured".to_string()),
+        },
+        "whatsapp" => match &config.whatsapp {
+            Some(_) => (true, "sidecar mode".to_string()),
+            None => (false, "not configured".to_string()),
+        },
+        _ => (false, "unknown platform".to_string()),
     }
 }
 
