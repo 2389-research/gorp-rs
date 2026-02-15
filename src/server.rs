@@ -118,20 +118,24 @@ impl ServerState {
         tracing::info!("Scheduler store initialized");
 
         // Create Matrix client
+        let matrix_config = config
+            .matrix
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Matrix configuration is required"))?;
         let client = matrix_client::create_client(
-            &config.matrix.home_server,
-            &config.matrix.user_id,
-            &config.matrix.device_name,
+            &matrix_config.home_server,
+            &matrix_config.user_id,
+            &matrix_config.device_name,
         )
         .await?;
 
         // Login
         matrix_client::login(
             &client,
-            &config.matrix.user_id,
-            config.matrix.password.as_deref(),
-            config.matrix.access_token.as_deref(),
-            &config.matrix.device_name,
+            &matrix_config.user_id,
+            matrix_config.password.as_deref(),
+            matrix_config.access_token.as_deref(),
+            &matrix_config.device_name,
         )
         .await?;
 

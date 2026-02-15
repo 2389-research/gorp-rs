@@ -1,0 +1,26 @@
+change_id = "bea04927bb4df00a7f08cb53bc76fea8"
+type = "behavioral"
+intent = """
+docs: fix cross-doc inconsistencies and add missing cross-cutting concerns
+
+Canonicalize IncomingMessage with thread_id across all platform specs.
+Define AttachmentInfo, EventStream, PlatformConnectionState types explicitly.
+Align dispatch_handler signature between WhatsApp and Coven specs.
+Add trait casting pattern documentation for Slack extension traits.
+Add graceful shutdown sections to all relevant specs.
+Add health check model and logging/observability conventions.
+Document coven.proto sync strategy and fix single-binary minor issues."""
+files = [
+    ".agent/changes/9c13db9faa13e7d02afc10e4ea15faff.toml",
+    "docs/plans/2026-02-13-coven-gateway-design.md",
+    "docs/plans/2026-02-13-single-binary-design.md",
+    "docs/plans/2026-02-13-slack-platform-design.md",
+    "docs/plans/2026-02-13-telegram-platform-design.md",
+    "docs/plans/2026-02-13-tui-design.md",
+    "docs/plans/2026-02-13-whatsapp-platform-design.md",
+]
+breaking = false
+
+[invariants]
+checked = []
+status = "skipped"

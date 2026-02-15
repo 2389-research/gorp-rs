@@ -1,7 +1,11 @@
 // ABOUTME: Matrix platform implementation for gorp chat abstraction
 // ABOUTME: Implements Tier 2 ChatPlatform with full channel management and encryption
 
+pub mod channel;
 pub mod client;
+
+// Re-export channel type
+pub use channel::MatrixChannel;
 
 // Re-export client functions for convenience
 pub use client::{create_client, create_dm_room, create_room, invite_user, login};
@@ -9,175 +13,20 @@ pub use client::{create_client, create_dm_room, create_room, invite_user, login}
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use gorp_core::traits::{
-    AttachmentHandler, AttachmentInfo, ChannelCreator, ChannelManager, ChatChannel, ChatPlatform,
-    ChatUser, EventStream, IncomingMessage, MessageContent, MessagingPlatform, TypingIndicator,
+    AttachmentInfo, ChannelCreator, ChannelManager, ChatChannel, ChatPlatform, ChatUser,
+    EventStream, IncomingMessage, MessageContent, MessagingPlatform, PlatformConnectionState,
 };
 use matrix_sdk::{
-    media::{MediaFormat, MediaRequestParameters},
     room::Room,
     ruma::{
-        events::room::{
-            message::{FileMessageEventContent, MessageType, RoomMessageEventContent},
-            MediaSource,
-        },
+        events::room::message::MessageType,
         OwnedRoomId, OwnedUserId,
     },
     Client,
 };
-use std::fmt;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-
-// =============================================================================
-// MatrixChannel - Implements ChatChannel (Tier 2)
-// =============================================================================
-
-/// Matrix-specific implementation of ChatChannel
-#[derive(Clone)]
-pub struct MatrixChannel {
-    room: Room,
-    client: Client,
-}
-
-impl MatrixChannel {
-    pub fn new(room: Room, client: Client) -> Self {
-        Self { room, client }
-    }
-
-    /// Get the underlying Matrix room
-    pub fn inner(&self) -> &Room {
-        &self.room
-    }
-
-    /// Get the underlying Matrix client
-    pub fn client(&self) -> &Client {
-        &self.client
-    }
-}
-
-impl fmt::Debug for MatrixChannel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MatrixChannel")
-            .field("room_id", &self.room.room_id().as_str())
-            .finish()
-    }
-}
-
-#[async_trait]
-impl ChatChannel for MatrixChannel {
-    fn id(&self) -> &str {
-        self.room.room_id().as_str()
-    }
-
-    fn name(&self) -> Option<String> {
-        self.room.name()
-    }
-
-    async fn is_direct(&self) -> bool {
-        self.room.is_direct().await.unwrap_or(false)
-    }
-
-    async fn send(&self, content: MessageContent) -> Result<()> {
-        let msg_content = match content {
-            MessageContent::Plain(text) => RoomMessageEventContent::text_plain(text),
-            MessageContent::Html { plain, html } => RoomMessageEventContent::text_html(plain, html),
-            MessageContent::Attachment {
-                filename,
-                data,
-                mime_type,
-                caption,
-            } => {
-                let content_type: mime_guess::mime::Mime = mime_type
-                    .parse()
-                    .unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM);
-
-                // Upload the file to Matrix media server
-                let response = self
-                    .client
-                    .media()
-                    .upload(&content_type, data, None)
-                    .await
-                    .context("Failed to upload attachment")?;
-
-                // Create file message with the MXC URI
-                let body = caption.unwrap_or_else(|| filename.clone());
-                let source = MediaSource::Plain(response.content_uri);
-                let file_content = FileMessageEventContent::new(body, source);
-
-                RoomMessageEventContent::new(MessageType::File(file_content))
-            }
-        };
-
-        self.room
-            .send(msg_content)
-            .await
-            .context("Failed to send message")?;
-
-        Ok(())
-    }
-
-    fn typing_indicator(&self) -> Option<&dyn TypingIndicator> {
-        Some(self)
-    }
-
-    fn attachment_handler(&self) -> Option<&dyn AttachmentHandler> {
-        Some(self)
-    }
-
-    async fn member_count(&self) -> Result<usize> {
-        let members = self
-            .room
-            .members(matrix_sdk::RoomMemberships::ACTIVE)
-            .await
-            .context("Failed to get room members")?;
-        Ok(members.len())
-    }
-}
-
-#[async_trait]
-impl TypingIndicator for MatrixChannel {
-    async fn set_typing(&self, typing: bool) -> Result<()> {
-        self.room
-            .typing_notice(typing)
-            .await
-            .context("Failed to set typing indicator")?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl AttachmentHandler for MatrixChannel {
-    async fn download(&self, source_id: &str) -> Result<(String, Vec<u8>, String)> {
-        let source: MediaSource = serde_json::from_str(source_id)
-            .context("source_id must be a JSON-serialized MediaSource")?;
-
-        let request = MediaRequestParameters {
-            source: source.clone(),
-            format: MediaFormat::File,
-        };
-
-        let data = self
-            .client
-            .media()
-            .get_media_content(&request, true)
-            .await
-            .context("Failed to download attachment")?;
-
-        // Extract filename from the source or use a default
-        let filename = match &source {
-            MediaSource::Plain(uri) => uri.as_str().rsplit('/').next().unwrap_or("attachment"),
-            MediaSource::Encrypted(file) => {
-                file.url.as_str().rsplit('/').next().unwrap_or("attachment")
-            }
-        }
-        .to_string();
-
-        // Default mime type - caller should detect from content if needed
-        let mime_type = "application/octet-stream".to_string();
-
-        Ok((filename, data, mime_type))
-    }
-}
 
 // =============================================================================
 // MatrixPlatform - Implements MessagingPlatform + ChatPlatform (Tier 2)
@@ -188,6 +37,8 @@ pub struct MatrixPlatform {
     client: Client,
     /// Cached user ID - stored at construction to avoid Option handling
     user_id: String,
+    /// Tracked connection state for health monitoring
+    connection_state: Arc<Mutex<PlatformConnectionState>>,
 }
 
 impl MatrixPlatform {
@@ -201,12 +52,24 @@ impl MatrixPlatform {
             .user_id()
             .expect("MatrixPlatform requires a logged-in client")
             .to_string();
-        Self { client, user_id }
+        Self {
+            client,
+            user_id,
+            connection_state: Arc::new(Mutex::new(PlatformConnectionState::Connected)),
+        }
     }
 
     /// Get the underlying Matrix client
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// Update the platform's connection state.
+    /// Called by sync loop or error handlers to reflect actual connectivity.
+    pub fn set_connection_state(&self, state: PlatformConnectionState) {
+        if let Ok(mut current) = self.connection_state.lock() {
+            *current = state;
+        }
     }
 
     /// Register the event stream handler and return a receiver for incoming messages.
@@ -275,7 +138,9 @@ impl MatrixPlatform {
                     let is_direct = room.is_direct().await.unwrap_or(false);
 
                     let msg = IncomingMessage {
+                        platform_id: "matrix".to_string(),
                         channel_id: room.room_id().to_string(),
+                        thread_id: None,
                         sender: ChatUser {
                             id: original.sender.to_string(),
                             display_name: room
@@ -330,6 +195,14 @@ impl MessagingPlatform for MatrixPlatform {
     fn platform_id(&self) -> &'static str {
         "matrix"
     }
+
+    async fn shutdown(&self) -> Result<()> {
+        tracing::info!("Shutting down Matrix platform");
+        self.set_connection_state(PlatformConnectionState::Disconnected {
+            reason: "shutdown".to_string(),
+        });
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -356,6 +229,13 @@ impl ChatPlatform for MatrixPlatform {
 
     fn channel_manager(&self) -> Option<&dyn ChannelManager> {
         Some(self)
+    }
+
+    fn connection_state(&self) -> PlatformConnectionState {
+        self.connection_state
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(PlatformConnectionState::Connected)
     }
 }
 

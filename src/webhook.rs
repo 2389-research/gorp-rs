@@ -24,7 +24,10 @@ use tokio::{
 use tower_http::trace::TraceLayer;
 
 #[cfg(feature = "admin")]
-use crate::admin::{admin_router, auth_middleware, AdminState};
+use crate::admin::{
+    admin_router, auth_middleware, login_router, setup_guard_middleware, setup_router, ws_handler,
+    AdminState, WsHub,
+};
 use crate::{
     config::Config,
     mcp::{mcp_handler, McpState},
@@ -125,10 +128,28 @@ pub async fn start_webhook_server(
     metrics::set_active_schedules(active_schedule_count as u64);
 
     #[cfg(feature = "admin")]
+    let auth_config = {
+        let data_dir = crate::paths::data_dir();
+        let data_dir_str = data_dir.to_string_lossy();
+        match crate::admin::AuthConfig::load(&data_dir_str) {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load auth config, starting without auth");
+                None
+            }
+        }
+    };
+
+    #[cfg(feature = "admin")]
+    let ws_hub = WsHub::new();
+
+    #[cfg(feature = "admin")]
     let admin_state = AdminState {
         config: Arc::clone(&state.config),
         session_store: state.session_store.clone(),
         scheduler_store: scheduler_store.clone(),
+        auth_config,
+        ws_hub,
     };
 
     #[cfg(feature = "admin")]
@@ -137,7 +158,11 @@ pub async fn start_webhook_server(
             admin_state.clone(),
             auth_middleware,
         ))
-        .with_state(admin_state);
+        .layer(middleware::from_fn_with_state(
+            admin_state.clone(),
+            setup_guard_middleware,
+        ))
+        .with_state(admin_state.clone());
 
     // Create MCP state with scheduler store and Matrix client
     let mcp_state = McpState {
@@ -146,7 +171,7 @@ pub async fn start_webhook_server(
         matrix_client: state.matrix_client.clone(),
         timezone: state.config.scheduler.timezone.clone(),
         workspace_path: state.config.workspace.path.clone(),
-        room_prefix: state.config.matrix.room_prefix.clone(),
+        room_prefix: state.config.matrix.as_ref().map(|m| m.room_prefix.clone()).unwrap_or_else(|| "Claude".to_string()),
     };
 
     let mcp_routes = Router::new()
@@ -158,13 +183,46 @@ pub async fn start_webhook_server(
         .route("/metrics", get(metrics_handler))
         .with_state(Arc::new(metrics_handle));
 
+    // Setup and login routes are outside auth middleware (unauthenticated access)
+    #[cfg(feature = "admin")]
+    let setup_routes = setup_router().with_state(admin_state.clone());
+    #[cfg(feature = "admin")]
+    let login_routes = login_router().with_state(admin_state.clone());
+
+    // WebSocket route (authenticated via session layer, not auth middleware)
+    #[cfg(feature = "admin")]
+    let ws_routes = Router::new()
+        .route("/admin/ws", get(ws_handler))
+        .with_state(admin_state.clone());
+
+    // Session layer for cookie-based authentication
+    #[cfg(feature = "admin")]
+    let session_store = tower_sessions::MemoryStore::default();
+    #[cfg(feature = "admin")]
+    let session_layer = tower_sessions::SessionManagerLayer::new(session_store)
+        .with_secure(false) // Allow HTTP for local dev; production should use HTTPS
+        .with_same_site(tower_sessions::cookie::SameSite::Lax);
+
     #[cfg(feature = "admin")]
     let app = Router::new()
         .route("/", get(|| async { Redirect::permanent("/admin") }))
+        .route(
+            "/static/ws.js",
+            get(|| async {
+                (
+                    [("content-type", "application/javascript")],
+                    include_str!("../static/ws.js"),
+                )
+            }),
+        )
         .nest("/admin", admin_routes)
+        .nest("/setup", setup_routes)
+        .nest("/login", login_routes)
+        .merge(ws_routes)
         .merge(mcp_routes)
         .merge(webhook_routes)
         .merge(metrics_routes)
+        .layer(session_layer)
         .layer(TraceLayer::new_for_http());
 
     #[cfg(not(feature = "admin"))]

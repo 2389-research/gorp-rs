@@ -256,6 +256,36 @@ pub struct SearchTemplate {
     pub search_performed: bool,
 }
 
+// =============================================================================
+// Setup Wizard & Login Templates
+// =============================================================================
+
+#[derive(Template)]
+#[template(path = "setup/step1.html")]
+pub struct SetupStep1Template {
+    pub error_message: Option<String>,
+    pub prefill_username: String,
+}
+
+#[derive(Template)]
+#[template(path = "setup/step2.html")]
+pub struct SetupStep2Template {
+    pub api_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "setup/step3.html")]
+pub struct SetupStep3Template {
+    pub matrix_configured: bool,
+    pub telegram_configured: bool,
+}
+
+#[derive(Template)]
+#[template(path = "login.html")]
+pub struct LoginTemplate {
+    pub error_message: Option<String>,
+}
+
 // Implement IntoResponse for all template types
 impl_into_response!(
     DashboardTemplate,
@@ -273,6 +303,10 @@ impl_into_response!(
     MarkdownTemplate,
     MatrixDirTemplate,
     SearchTemplate,
+    SetupStep1Template,
+    SetupStep2Template,
+    SetupStep3Template,
+    LoginTemplate,
 );
 
 #[cfg(test)]

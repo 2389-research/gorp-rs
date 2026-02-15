@@ -238,16 +238,19 @@ mod tests {
     #[test]
     fn test_incoming_message_creation() {
         let msg = IncomingMessage {
-            room_id: "!test:example.com".to_string(),
+            platform_id: "matrix".to_string(),
+            channel_id: "!test:example.com".to_string(),
+            thread_id: None,
             sender: ChatUser::with_name("@user:test.com", "Test User"),
             body: "Hello, bot!".to_string(),
+            is_direct: false,
             formatted: false,
             attachment: None,
             event_id: "$event123".to_string(),
             timestamp: 1234567890,
         };
 
-        assert_eq!(msg.room_id, "!test:example.com");
+        assert_eq!(msg.room_id(), "!test:example.com");
         assert_eq!(msg.sender.id, "@user:test.com");
         assert_eq!(msg.sender.display_name, Some("Test User".to_string()));
     }

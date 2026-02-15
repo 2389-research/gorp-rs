@@ -1,11 +1,12 @@
-// ABOUTME: Message handler that processes Matrix room messages with authentication and Claude invocation.
-// ABOUTME: Checks room ID and user whitelist, manages typing indicators, streams tool usage to Matrix.
+// ABOUTME: Message handler with platform-agnostic entry point and Matrix-specific legacy path.
+// ABOUTME: Routes incoming messages through whitelist, command parsing, and Claude invocation.
 
 // Submodules
 pub mod attachments;
 pub mod chat;
 pub mod commands;
 pub mod context;
+pub mod generic_channel;
 pub mod helpers;
 pub mod matrix_commands;
 pub mod schedule_import;
@@ -14,11 +15,13 @@ pub mod traits;
 // Re-exports from submodules for backward compatibility
 pub use attachments::download_attachment;
 pub use context::{route_to_dispatch, write_context_file};
+pub use generic_channel::GenericChannel;
 pub use helpers::{is_debug_enabled, looks_like_cron, truncate_str, validate_channel_name};
 pub use schedule_import::parse_schedule_input;
 pub use traits::MockChannel;
 
 use anyhow::Result;
+use gorp_core::traits::{IncomingMessage, MessageContent, MessagingPlatform};
 use matrix_sdk::{
     room::Room, ruma::events::room::message::RoomMessageEventContent, Client, RoomState,
 };
@@ -29,10 +32,315 @@ use crate::{
     matrix_client, metrics, onboarding,
     platform::MatrixChannel,
     scheduler::SchedulerStore,
+    server::ServerState,
     session::SessionStore,
     utils::markdown_to_html,
     warm_session::SharedWarmSessionManager,
 };
+
+/// Platform-agnostic message handler entry point.
+///
+/// Processes an incoming message from any platform:
+/// 1. Checks platform-aware whitelist
+/// 2. Parses commands and routes to appropriate handler
+/// 3. Gates platform-specific commands behind platform_id check
+/// 4. For chat messages, invokes Claude and sends response via the platform
+pub async fn handle_incoming(
+    msg: &IncomingMessage,
+    platform: &dyn MessagingPlatform,
+    state: &ServerState,
+) -> Result<()> {
+    let start_time = std::time::Instant::now();
+
+    // Check platform-aware whitelist
+    if !state.config.is_user_allowed(&msg.platform_id, &msg.sender.id) {
+        tracing::debug!(
+            sender = %msg.sender.id,
+            platform = %msg.platform_id,
+            "Ignoring message from unauthorized user"
+        );
+        return Ok(());
+    }
+
+    // Safe preview generation (respects UTF-8 boundaries)
+    let message_preview: String = msg.body.chars().take(50).collect();
+    tracing::info!(
+        sender = %msg.sender.id,
+        platform = %msg.platform_id,
+        channel = %msg.channel_id,
+        message_preview,
+        "Processing incoming message"
+    );
+
+    // Parse message using gorp-core command parsing
+    let parse_result = parse_message(&msg.body, "!claude");
+
+    if let ParseResult::Command(cmd) = parse_result {
+        metrics::record_message_received("command");
+        let result = handle_incoming_command(msg, platform, state, &cmd).await;
+        let duration = start_time.elapsed().as_secs_f64();
+        metrics::record_message_processing_duration(duration);
+        return result;
+    }
+
+    // Check for escape sequence (!! prefix)
+    if let ParseResult::Ignore = parse_result {
+        return Ok(());
+    }
+
+    // Non-command message handling
+    metrics::record_message_received("chat");
+
+    // Check if this is a DISPATCH activation (DM only)
+    if msg.is_direct {
+        let body_lower = msg.body.to_lowercase();
+        if body_lower.starts_with("!dispatch") || body_lower == "dispatch" {
+            tracing::info!(
+                channel = %msg.channel_id,
+                platform = %msg.platform_id,
+                "DISPATCH activated"
+            );
+            // DISPATCH is only implemented for Matrix currently
+            if msg.platform_id == "matrix" {
+                metrics::record_message_received("dispatch");
+                // Fall through to Matrix-specific path
+            } else {
+                platform
+                    .send(
+                        &msg.channel_id,
+                        MessageContent::plain("DISPATCH is not yet available on this platform."),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        }
+    }
+
+    // Check if channel is attached
+    let session_store = &*state.session_store;
+    if let Some(channel) = session_store.get_by_room(&msg.channel_id)? {
+        // Channel exists — invoke Claude via handle_text and send response
+        let response = handle_text(
+            &msg.body,
+            &channel,
+            session_store,
+            &state.warm_manager,
+        )
+        .await?;
+
+        if !response.is_empty() {
+            let chunks = crate::utils::chunk_message(&response, crate::utils::MAX_CHUNK_SIZE);
+            for chunk in chunks {
+                let html = markdown_to_html(&chunk);
+                platform
+                    .send(&msg.channel_id, MessageContent::html(&chunk, &html))
+                    .await?;
+            }
+        }
+
+        let duration = start_time.elapsed().as_secs_f64();
+        metrics::record_message_processing_duration(duration);
+        return Ok(());
+    }
+
+    // No channel attached
+    if msg.is_direct {
+        // On non-Matrix platforms, give a simple response
+        platform
+            .send(
+                &msg.channel_id,
+                MessageContent::plain(
+                    "No channel attached. Use !help to see available commands.",
+                ),
+            )
+            .await?;
+    } else {
+        platform
+            .send(
+                &msg.channel_id,
+                MessageContent::plain(
+                    "No Claude channel attached to this room. DM me to create one with: !create <name>",
+                ),
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Handle a parsed command from any platform.
+async fn handle_incoming_command(
+    msg: &IncomingMessage,
+    platform: &dyn MessagingPlatform,
+    state: &ServerState,
+    cmd: &Command,
+) -> Result<()> {
+    let channel = GenericChannel::new(platform, &msg.channel_id, msg.is_direct);
+
+    // Try the platform-agnostic command handler
+    match commands::handle_command(
+        &channel,
+        cmd,
+        &state.session_store,
+        &state.scheduler_store,
+        None, // No Matrix client in generic path
+        &msg.sender.id,
+        msg.is_direct,
+        &state.config,
+        &state.warm_manager,
+    )
+    .await
+    {
+        Ok(()) => return Ok(()),
+        Err(e) => {
+            let err_msg = e.to_string();
+            if err_msg.starts_with("DELEGATE_TO_MATRIX:") {
+                // Matrix-specific command — check platform
+                if msg.platform_id != "matrix" {
+                    let cmd_name = err_msg
+                        .strip_prefix("DELEGATE_TO_MATRIX:")
+                        .unwrap_or("unknown");
+                    platform
+                        .send(
+                            &msg.channel_id,
+                            MessageContent::plain(format!(
+                                "The !{} command is only available on Matrix.",
+                                cmd_name
+                            )),
+                        )
+                        .await?;
+                    return Ok(());
+                }
+                // On Matrix, fall through — the caller should use handle_message directly
+                return Err(e);
+            }
+            // Real error
+            return Err(e);
+        }
+    }
+}
+
+/// Core text-to-response function for Claude invocation.
+///
+/// Takes a text prompt and a channel, invokes the Claude agent backend,
+/// and returns the response as a String. This is the canonical dispatch
+/// entry point shared by all platforms and the DISPATCH agent.
+///
+/// Does NOT handle platform I/O (typing indicators, message sending).
+pub async fn handle_text(
+    content: &str,
+    channel: &crate::session::Channel,
+    session_store: &SessionStore,
+    warm_manager: &SharedWarmSessionManager,
+) -> Result<String> {
+    use gorp_agent::AgentEvent;
+
+    // Prepare session
+    let (session_handle, session_id, is_new_session) =
+        crate::warm_session::prepare_session_async(warm_manager, channel).await?;
+
+    // Update session store if a new session was created
+    if is_new_session {
+        if let Err(e) = session_store.update_session_id(&channel.room_id, &session_id) {
+            tracing::warn!(error = %e, "Failed to update session ID in store");
+        }
+    }
+
+    // Send prompt and stream events
+    let mut event_rx =
+        crate::warm_session::send_prompt_with_handle(&session_handle, &session_id, content)
+            .await?;
+
+    let mut response_text = String::new();
+    let mut session_id_from_event: Option<String> = None;
+
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            AgentEvent::Text(text) => {
+                response_text.push_str(&text);
+            }
+            AgentEvent::Result { text, .. } => {
+                if response_text.is_empty() {
+                    response_text = text;
+                }
+                break;
+            }
+            AgentEvent::Error { code, message, .. } => {
+                if code == gorp_agent::ErrorCode::SessionOrphaned {
+                    if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
+                        tracing::error!(error = %e, "Failed to reset invalid session");
+                    }
+                    {
+                        let mut session = session_handle.lock().await;
+                        session.set_invalidated(true);
+                    }
+                    let evicted = {
+                        let mut mgr = warm_manager.write().await;
+                        mgr.evict(&channel.channel_name)
+                    };
+                    tracing::info!(
+                        channel = %channel.channel_name,
+                        evicted = evicted,
+                        "Evicted warm session after orphaned session"
+                    );
+                    return Ok(
+                        "Session was reset (conversation data was lost). Please send your message again."
+                            .to_string(),
+                    );
+                }
+                return Err(anyhow::anyhow!("Agent error: {}", message));
+            }
+            AgentEvent::SessionInvalid { reason } => {
+                tracing::warn!(reason = %reason, "Session invalid");
+                if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
+                    tracing::error!(error = %e, "Failed to reset invalid session");
+                }
+                {
+                    let mut session = session_handle.lock().await;
+                    session.set_invalidated(true);
+                }
+                let evicted = {
+                    let mut mgr = warm_manager.write().await;
+                    mgr.evict(&channel.channel_name)
+                };
+                tracing::info!(
+                    channel = %channel.channel_name,
+                    evicted = evicted,
+                    "Evicted warm session after invalid session"
+                );
+                return Ok(
+                    "Session was reset (conversation data was lost). Please send your message again."
+                        .to_string(),
+                );
+            }
+            AgentEvent::SessionChanged { new_session_id } => {
+                session_id_from_event = Some(new_session_id);
+            }
+            AgentEvent::ToolStart { name, .. } => {
+                metrics::record_tool_used(&name);
+            }
+            _ => {}
+        }
+    }
+
+    // Update session ID if changed
+    if let Some(ref new_session_id) = session_id_from_event {
+        if let Err(e) = session_store.update_session_id(&channel.room_id, new_session_id) {
+            tracing::error!(error = %e, "Failed to update session ID after prompt");
+        } else {
+            let mut session = session_handle.lock().await;
+            session.set_session_id(new_session_id.clone());
+        }
+    }
+
+    // Mark session as started
+    session_store.mark_started(&channel.room_id)?;
+
+    // Strip XML function call blocks
+    let response = crate::utils::strip_function_calls(&response_text);
+
+    Ok(response)
+}
 
 pub async fn handle_message(
     room: Room,
@@ -197,7 +505,8 @@ pub async fn handle_message(
                 }
 
                 // Create Matrix room
-                let room_name = format!("{}: {}", config.matrix.room_prefix, channel_name);
+                let room_prefix = config.matrix.as_ref().map(|m| m.room_prefix.as_str()).unwrap_or("Claude");
+                let room_name = format!("{}: {}", room_prefix, channel_name);
                 let new_room_id = match matrix_client::create_room(&client, &room_name).await {
                     Ok(id) => id,
                     Err(e) => {

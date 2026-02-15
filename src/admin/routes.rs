@@ -31,6 +31,8 @@ pub struct AdminState {
     pub config: Arc<Config>,
     pub session_store: SessionStore,
     pub scheduler_store: SchedulerStore,
+    pub auth_config: Option<super::auth::AuthConfig>,
+    pub ws_hub: super::websocket::WsHub,
 }
 
 #[derive(Deserialize)]
@@ -131,21 +133,22 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
 
 async fn config_view(State(state): State<AdminState>) -> ConfigTemplate {
     let config = &state.config;
+    let matrix = config.matrix.as_ref();
     ConfigTemplate {
         title: "Configuration - gorp Admin".to_string(),
-        home_server: config.matrix.home_server.clone(),
-        user_id: config.matrix.user_id.clone(),
-        device_name: config.matrix.device_name.clone(),
-        room_prefix: config.matrix.room_prefix.clone(),
-        allowed_users: config.matrix.allowed_users.join(", "),
+        home_server: matrix.map(|m| m.home_server.clone()).unwrap_or_default(),
+        user_id: matrix.map(|m| m.user_id.clone()).unwrap_or_default(),
+        device_name: matrix.map(|m| m.device_name.clone()).unwrap_or_default(),
+        room_prefix: matrix.map(|m| m.room_prefix.clone()).unwrap_or_default(),
+        allowed_users: matrix.map(|m| m.allowed_users.join(", ")).unwrap_or_default(),
         webhook_port: config.webhook.port,
         webhook_host: config.webhook.host.clone(),
         webhook_api_key_set: config.webhook.api_key.is_some(),
         workspace_path: config.workspace.path.clone(),
         scheduler_timezone: config.scheduler.timezone.clone(),
-        password_set: config.matrix.password.is_some(),
-        access_token_set: config.matrix.access_token.is_some(),
-        recovery_key_set: config.matrix.recovery_key.is_some(),
+        password_set: matrix.and_then(|m| m.password.as_ref()).is_some(),
+        access_token_set: matrix.and_then(|m| m.access_token.as_ref()).is_some(),
+        recovery_key_set: matrix.and_then(|m| m.recovery_key.as_ref()).is_some(),
     }
 }
 
@@ -192,11 +195,23 @@ async fn config_save(
 
     // Build new config preserving secrets from current config
     let mut new_config = (*state.config).clone();
-    new_config.matrix.home_server = form.home_server;
-    new_config.matrix.user_id = form.user_id;
-    new_config.matrix.device_name = form.device_name;
-    new_config.matrix.room_prefix = form.room_prefix;
-    new_config.matrix.allowed_users = allowed_users;
+    let matrix = new_config.matrix.get_or_insert_with(|| {
+        gorp_core::config::MatrixConfig {
+            home_server: String::new(),
+            user_id: String::new(),
+            password: None,
+            access_token: None,
+            device_name: String::new(),
+            allowed_users: Vec::new(),
+            room_prefix: String::new(),
+            recovery_key: None,
+        }
+    });
+    matrix.home_server = form.home_server;
+    matrix.user_id = form.user_id;
+    matrix.device_name = form.device_name;
+    matrix.room_prefix = form.room_prefix;
+    matrix.allowed_users = allowed_users;
     new_config.webhook.port = form.webhook_port;
     new_config.webhook.host = form.webhook_host;
     new_config.workspace.path = form.workspace_path;
@@ -807,11 +822,12 @@ async fn health_view(State(state): State<AdminState>) -> HealthTemplate {
     recent_errors.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent_errors.truncate(10);
 
+    let matrix = state.config.matrix.as_ref();
     HealthTemplate {
         title: "Health - gorp Admin".to_string(),
-        homeserver: state.config.matrix.home_server.clone(),
-        bot_user_id: state.config.matrix.user_id.clone(),
-        device_name: state.config.matrix.device_name.clone(),
+        homeserver: matrix.map(|m| m.home_server.clone()).unwrap_or_default(),
+        bot_user_id: matrix.map(|m| m.user_id.clone()).unwrap_or_default(),
+        device_name: matrix.map(|m| m.device_name.clone()).unwrap_or_default(),
         webhook_port: state.config.webhook.port,
         webhook_host: state.config.webhook.host.clone(),
         timezone: state.config.scheduler.timezone.clone(),

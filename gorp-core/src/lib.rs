@@ -38,6 +38,14 @@ pub use traits::{
     LocalInterface,
     MessageContent,
     MessagingPlatform,
+    // Health & Lifecycle
+    PlatformConnectionState,
+    // Extension Traits (optional platform capabilities)
+    RichFormatter,
+    SlashCommandDef,
+    SlashCommandInvocation,
+    SlashCommandProvider,
+    ThreadedPlatform,
     TypingIndicator,
     WorkspaceInfo,
 };

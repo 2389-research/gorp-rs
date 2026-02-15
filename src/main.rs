@@ -1,4 +1,4 @@
-// ABOUTME: Main entry point for gorp - Matrix-Claude bridge
+// ABOUTME: Main entry point for gorp - multi-platform Claude bridge
 // ABOUTME: CLI interface with subcommands for start, config, and schedule management
 
 use anyhow::{Context, Result};
@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 use gorp::{
     config::Config,
     matrix_client, message_handler, paths,
+    platform::{MatrixPlatform, PlatformRegistry},
     scheduler::{start_scheduler, SchedulerStore},
     session::SessionStore,
     task_executor::start_task_executor,
@@ -233,6 +234,8 @@ struct Cli {
 enum Commands {
     /// Start the Matrix-Claude bridge
     Start,
+    /// Launch the terminal user interface
+    Tui,
     /// Configuration management
     Config {
         #[command(subcommand)]
@@ -410,7 +413,8 @@ async fn notify_ready(client: &Client, config: &Config) {
         .unwrap_or(0);
     let ready_message = ready_messages[idx];
 
-    for user_id_str in &config.matrix.allowed_users {
+    let allowed_users = config.matrix.as_ref().map(|m| &m.allowed_users[..]).unwrap_or(&[]);
+    for user_id_str in allowed_users {
         let user_id: OwnedUserId = match user_id_str.parse() {
             Ok(id) => id,
             Err(e) => {
@@ -596,7 +600,11 @@ async fn check_and_rename_rooms_for_prefix_change(
     config: &Config,
     session_store: &SessionStore,
 ) {
-    let current_prefix = &config.matrix.room_prefix;
+    let matrix_config = match config.matrix.as_ref() {
+        Some(m) => m,
+        None => return,
+    };
+    let current_prefix = &matrix_config.room_prefix;
     let stored_prefix = session_store
         .get_setting(SETTING_ROOM_PREFIX)
         .ok()
@@ -730,6 +738,17 @@ async fn main() -> Result<()> {
             }
         }
         Some(Commands::Start) => run_start().await,
+        Some(Commands::Tui) => {
+            #[cfg(feature = "tui")]
+            {
+                gorp::tui::run_tui().await
+            }
+            #[cfg(not(feature = "tui"))]
+            {
+                eprintln!("TUI not available - compile with --features tui");
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Config { action }) => run_config(action),
         Some(Commands::Schedule { action }) => run_schedule(action),
         Some(Commands::Rooms { action }) => run_rooms(action).await,
@@ -771,9 +790,13 @@ fn run_config(action: ConfigAction) -> Result<()> {
                 Ok(config) => {
                     println!("✓ Valid");
                     println!("\nConfiguration summary:");
-                    println!("  Homeserver:    {}", config.matrix.home_server);
-                    println!("  User ID:       {}", config.matrix.user_id);
-                    println!("  Allowed users: {}", config.matrix.allowed_users.len());
+                    if let Some(ref matrix) = config.matrix {
+                        println!("  Homeserver:    {}", matrix.home_server);
+                        println!("  User ID:       {}", matrix.user_id);
+                        println!("  Allowed users: {}", matrix.allowed_users.len());
+                    } else {
+                        println!("  Matrix:        <not configured>");
+                    }
                     println!("  Workspace:     {}", config.workspace.path);
                     println!("  Webhook port:  {}", config.webhook.port);
                     println!("  Timezone:      {}", config.scheduler.timezone);
@@ -788,35 +811,40 @@ fn run_config(action: ConfigAction) -> Result<()> {
         }
         ConfigAction::Show => {
             let config = Config::load()?;
-            println!("[matrix]");
-            println!("home_server = \"{}\"", config.matrix.home_server);
-            println!("user_id = \"{}\"", config.matrix.user_id);
-            println!("device_name = \"{}\"", config.matrix.device_name);
-            println!(
-                "password = \"{}\"",
-                if config.matrix.password.is_some() {
-                    "********"
-                } else {
-                    "<not set>"
-                }
-            );
-            println!(
-                "access_token = \"{}\"",
-                if config.matrix.access_token.is_some() {
-                    "********"
-                } else {
-                    "<not set>"
-                }
-            );
-            println!(
-                "recovery_key = \"{}\"",
-                if config.matrix.recovery_key.is_some() {
-                    "********"
-                } else {
-                    "<not set>"
-                }
-            );
-            println!("allowed_users = {:?}", config.matrix.allowed_users);
+            if let Some(ref matrix) = config.matrix {
+                println!("[matrix]");
+                println!("home_server = \"{}\"", matrix.home_server);
+                println!("user_id = \"{}\"", matrix.user_id);
+                println!("device_name = \"{}\"", matrix.device_name);
+                println!(
+                    "password = \"{}\"",
+                    if matrix.password.is_some() {
+                        "********"
+                    } else {
+                        "<not set>"
+                    }
+                );
+                println!(
+                    "access_token = \"{}\"",
+                    if matrix.access_token.is_some() {
+                        "********"
+                    } else {
+                        "<not set>"
+                    }
+                );
+                println!(
+                    "recovery_key = \"{}\"",
+                    if matrix.recovery_key.is_some() {
+                        "********"
+                    } else {
+                        "<not set>"
+                    }
+                );
+                println!("allowed_users = {:?}", matrix.allowed_users);
+            } else {
+                println!("[matrix]");
+                println!("# Matrix is not configured");
+            }
             println!("\n[workspace]");
             println!("path = \"{}\"", config.workspace.path);
             println!("\n[backend]");
@@ -918,25 +946,26 @@ async fn run_rooms(action: RoomsAction) -> Result<()> {
 
     match action {
         RoomsAction::Sync => {
+            let matrix = config.matrix_config()?;
             println!(
                 "Syncing room names to prefix: {}",
-                config.matrix.room_prefix
+                matrix.room_prefix
             );
 
             // Need to login to Matrix to rename rooms
             let client = matrix_client::create_client(
-                &config.matrix.home_server,
-                &config.matrix.user_id,
-                &config.matrix.device_name,
+                &matrix.home_server,
+                &matrix.user_id,
+                &matrix.device_name,
             )
             .await?;
 
             matrix_client::login(
                 &client,
-                &config.matrix.user_id,
-                config.matrix.password.as_deref(),
-                config.matrix.access_token.as_deref(),
-                &config.matrix.device_name,
+                &matrix.user_id,
+                matrix.password.as_deref(),
+                matrix.access_token.as_deref(),
+                &matrix.device_name,
             )
             .await?;
 
@@ -950,7 +979,7 @@ async fn run_rooms(action: RoomsAction) -> Result<()> {
 
             // Get all channels and rename their rooms
             let channels = session_store.list_all()?;
-            let prefix = &config.matrix.room_prefix;
+            let prefix = &matrix.room_prefix;
 
             for channel in &channels {
                 let room_id: OwnedRoomId = match channel.room_id.parse() {
@@ -1060,14 +1089,22 @@ async fn run_start() -> Result<()> {
     dotenvy::dotenv().ok();
     let config = Config::load()?;
 
-    tracing::info!(
-        homeserver = %config.matrix.home_server,
-        user_id = %config.matrix.user_id,
-        allowed_users = config.matrix.allowed_users.len(),
-        workspace = %config.workspace.path,
-        webhook_port = config.webhook.port,
-        "Configuration loaded"
-    );
+    if let Some(ref matrix) = config.matrix {
+        tracing::info!(
+            homeserver = %matrix.home_server,
+            user_id = %matrix.user_id,
+            allowed_users = matrix.allowed_users.len(),
+            workspace = %config.workspace.path,
+            webhook_port = config.webhook.port,
+            "Configuration loaded"
+        );
+    } else {
+        tracing::info!(
+            workspace = %config.workspace.path,
+            webhook_port = config.webhook.port,
+            "Configuration loaded (no Matrix config)"
+        );
+    }
 
     // Initialize server state (single source of truth - shared with GUI mode)
     let server = gorp::server::ServerState::initialize(config).await?;
@@ -1079,6 +1116,80 @@ async fn run_start() -> Result<()> {
     let warm_manager = server.warm_manager.clone();
     let client = server.matrix_client.clone();
     let sync_token = server.sync_token.clone();
+
+    // ── Platform Registry ────────────────────────────────────────
+    // Conditionally initialize platforms based on config and register them.
+    let mut registry = PlatformRegistry::new();
+
+    if config_arc.matrix.is_some() {
+        let matrix_platform = MatrixPlatform::new(client.clone());
+        registry.register(Box::new(matrix_platform));
+        tracing::info!("Matrix platform registered");
+    }
+
+    if let Some(ref tg_config) = config_arc.telegram {
+        match gorp::platform::TelegramPlatform::new(tg_config.clone()).await {
+            Ok(telegram_platform) => {
+                registry.register(Box::new(telegram_platform));
+                tracing::info!("Telegram platform registered");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to initialize Telegram platform");
+                anyhow::bail!("Telegram platform initialization failed: {}", e);
+            }
+        }
+    }
+
+    if let Some(ref slack_config) = config_arc.slack {
+        match gorp::platform::SlackPlatform::new(slack_config.clone()).await {
+            Ok(slack_platform) => {
+                registry.register(Box::new(slack_platform));
+                tracing::info!("Slack platform registered");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to initialize Slack platform");
+                anyhow::bail!("Slack platform initialization failed: {}", e);
+            }
+        }
+    }
+
+    if config_arc.whatsapp.is_some() {
+        tracing::warn!("WhatsApp config present but platform not yet implemented");
+    }
+
+    if config_arc.coven.is_some() {
+        tracing::warn!("Coven config present but provider not yet implemented");
+    }
+
+    if registry.is_empty() {
+        anyhow::bail!(
+            "No platforms configured. Add at least one platform section \
+             (e.g. [matrix], [telegram], [slack]) to config.toml"
+        );
+    }
+
+    tracing::info!(
+        platforms = ?registry.platform_ids(),
+        count = registry.len(),
+        "Platform registry initialized"
+    );
+
+    // Wire graceful shutdown to registry
+    let registry = Arc::new(registry);
+    let shutdown_registry = Arc::clone(&registry);
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                tracing::info!("Received shutdown signal, shutting down platforms...");
+                shutdown_registry.shutdown().await;
+                tracing::info!("All platforms shut down");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to listen for ctrl+c signal");
+            }
+        }
+    });
 
     // Start webhook server in background (can run before initial sync)
     let webhook_port = config_arc.webhook.port;
@@ -1140,7 +1251,7 @@ async fn run_start() -> Result<()> {
 
     // Set up cross-signing for device verification
     // Only recover with valid recovery key - never auto-bootstrap (creates new keys silently)
-    let cross_signing_ready = if let Some(recovery_key) = &config_arc.matrix.recovery_key {
+    let cross_signing_ready = if let Some(recovery_key) = config_arc.matrix.as_ref().and_then(|m| m.recovery_key.as_ref()) {
         let cleaned_key = recovery_key.trim();
 
         if cleaned_key.is_empty() {

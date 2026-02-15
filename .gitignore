@@ -27,3 +27,4 @@ app-data-*/
 workspace.tgz
 gorp-core/target/
 gorp-core/Cargo.lock
+.workgraph

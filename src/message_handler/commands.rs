@@ -416,7 +416,7 @@ mod tests {
 
     fn make_test_config(workspace_path: &str) -> Config {
         Config {
-            matrix: MatrixConfig {
+            matrix: Some(MatrixConfig {
                 home_server: "https://matrix.example.com".to_string(),
                 user_id: "@bot:matrix.example.com".to_string(),
                 password: None,
@@ -425,7 +425,11 @@ mod tests {
                 allowed_users: vec!["@user:matrix.example.com".to_string()],
                 room_prefix: "Test".to_string(),
                 recovery_key: None,
-            },
+            }),
+            telegram: None,
+            slack: None,
+            whatsapp: None,
+            coven: None,
             backend: BackendConfig::default(),
             webhook: WebhookConfig {
                 port: 13000,

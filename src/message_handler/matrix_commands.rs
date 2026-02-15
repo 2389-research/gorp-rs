@@ -97,7 +97,8 @@ pub async fn handle_matrix_command(
             }
 
             // Create Matrix room
-            let room_name = format!("{}: {}", config.matrix.room_prefix, channel_name);
+            let room_prefix = config.matrix.as_ref().map(|m| m.room_prefix.as_str()).unwrap_or("Claude");
+            let room_name = format!("{}: {}", room_prefix, channel_name);
             let new_room_id = matrix_client::create_room(client, &room_name).await?;
             metrics::record_room_created();
 
@@ -543,7 +544,8 @@ pub async fn handle_matrix_command(
                 }
 
                 // Create Matrix room for this workspace
-                let room_name = format!("{}: {}", config.matrix.room_prefix, channel_name);
+                let room_prefix = config.matrix.as_ref().map(|m| m.room_prefix.as_str()).unwrap_or("Claude");
+                let room_name = format!("{}: {}", room_prefix, channel_name);
                 match matrix_client::create_room(client, &room_name).await {
                     Ok(new_room_id) => {
                         // Invite user to the room

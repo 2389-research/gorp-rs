@@ -87,8 +87,8 @@ pub fn view(server: Option<&Arc<ServerState>>) -> Element<'static, Message> {
             .map(|id| id.to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        let homeserver = server.config.matrix.home_server.clone();
-        let device_name = server.config.matrix.device_name.clone();
+        let homeserver = server.config.matrix.as_ref().map(|m| m.home_server.clone()).unwrap_or_default();
+        let device_name = server.config.matrix.as_ref().map(|m| m.device_name.clone()).unwrap_or_default();
 
         // Get counts
         let session_count = server

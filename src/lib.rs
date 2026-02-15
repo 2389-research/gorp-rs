@@ -8,6 +8,10 @@ pub mod server;
 #[cfg(feature = "gui")]
 pub mod gui;
 
+// TUI module (terminal interface) - only available with `tui` feature
+#[cfg(feature = "tui")]
+pub mod tui;
+
 // Platform abstraction layer
 pub mod platform;
 

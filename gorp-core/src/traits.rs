@@ -5,6 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::pin::Pin;
+use std::time::Duration;
 use tokio_stream::Stream;
 
 // =============================================================================
@@ -89,8 +90,12 @@ impl ChatUser {
 /// Incoming message from a chat platform
 #[derive(Debug, Clone)]
 pub struct IncomingMessage {
+    /// Which platform this message came from (e.g., "matrix", "telegram", "slack")
+    pub platform_id: String,
     /// The channel/room this message was sent in
     pub channel_id: String,
+    /// Thread identifier for platforms that support threading (Slack thread_ts, WhatsApp quoted message ID)
+    pub thread_id: Option<String>,
     /// The user who sent the message
     pub sender: ChatUser,
     /// Message body (text content)
@@ -121,6 +126,21 @@ impl IncomingMessage {
 /// Boxed stream type for platform events
 pub type EventStream = Pin<Box<dyn Stream<Item = IncomingMessage> + Send>>;
 
+/// Connection state reported by each platform for health checks and monitoring
+#[derive(Debug, Clone)]
+pub enum PlatformConnectionState {
+    /// Platform is connected and processing events
+    Connected,
+    /// Platform is establishing connection
+    Connecting,
+    /// Platform lost connection
+    Disconnected { reason: String },
+    /// Platform requires authentication (e.g., WhatsApp QR scan, Matrix device verify)
+    AuthRequired,
+    /// Platform is rate-limited by the upstream API
+    RateLimited { retry_after: Duration },
+}
+
 /// Tier 1: Minimum platform interface for control plane access.
 ///
 /// Platforms implementing only this trait can receive messages and send responses,
@@ -145,6 +165,11 @@ pub trait MessagingPlatform: Send + Sync {
     /// Check if a user ID is the bot itself
     fn is_self(&self, user_id: &str) -> bool {
         user_id == self.bot_user_id()
+    }
+
+    /// Gracefully shut down the platform connection
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -181,6 +206,26 @@ pub trait ChatPlatform: MessagingPlatform {
 
     /// Optional: encryption support
     fn encryption(&self) -> Option<&dyn EncryptedPlatform> {
+        None
+    }
+
+    /// Report current connection state for health monitoring
+    fn connection_state(&self) -> PlatformConnectionState {
+        PlatformConnectionState::Connected
+    }
+
+    /// Optional: threaded conversation support
+    fn threading(&self) -> Option<&dyn ThreadedPlatform> {
+        None
+    }
+
+    /// Optional: slash command support
+    fn slash_commands(&self) -> Option<&dyn SlashCommandProvider> {
+        None
+    }
+
+    /// Optional: rich formatting support
+    fn rich_formatter(&self) -> Option<&dyn RichFormatter> {
         None
     }
 }
@@ -309,6 +354,62 @@ pub trait EncryptedPlatform: Send + Sync {
 }
 
 // =============================================================================
+// Extension Traits (optional platform capabilities)
+// =============================================================================
+
+/// Platforms that support threaded conversations (e.g., Slack)
+#[async_trait]
+pub trait ThreadedPlatform: Send + Sync {
+    /// Send a message as a reply within a specific thread
+    async fn send_threaded(
+        &self,
+        channel_id: &str,
+        thread_ts: &str,
+        content: MessageContent,
+    ) -> Result<()>;
+}
+
+/// Definition of a slash command supported by a platform
+#[derive(Debug, Clone)]
+pub struct SlashCommandDef {
+    /// Command name (e.g., "/gorp")
+    pub name: String,
+    /// Human-readable description
+    pub description: String,
+}
+
+/// Invocation of a slash command from a user
+#[derive(Debug, Clone)]
+pub struct SlashCommandInvocation {
+    /// The command that was invoked (e.g., "/gorp")
+    pub command: String,
+    /// Text following the command
+    pub text: String,
+    /// Channel where the command was invoked
+    pub channel_id: String,
+    /// User who invoked the command
+    pub user_id: String,
+    /// URL for deferred response delivery
+    pub response_url: String,
+}
+
+/// Platforms that support slash commands (e.g., Slack)
+#[async_trait]
+pub trait SlashCommandProvider: Send + Sync {
+    /// List registered slash commands
+    fn registered_commands(&self) -> Vec<SlashCommandDef>;
+    /// Handle a slash command invocation
+    async fn handle_command(&self, cmd: SlashCommandInvocation) -> Result<MessageContent>;
+}
+
+/// Platforms that support rich formatted output (e.g., Slack Block Kit)
+/// format_as_blocks is infallible -- always returns valid formatted output, falling back to raw text on parse failure
+pub trait RichFormatter: Send + Sync {
+    /// Convert content to platform-specific rich format (e.g., Block Kit JSON)
+    fn format_as_blocks(&self, content: &str) -> serde_json::Value;
+}
+
+// =============================================================================
 // Backwards Compatibility - Deprecated Traits
 // =============================================================================
 
@@ -373,7 +474,9 @@ mod tests {
     #[test]
     fn test_incoming_message_room_id_compat() {
         let msg = IncomingMessage {
+            platform_id: "matrix".to_string(),
             channel_id: "!room:example.com".to_string(),
+            thread_id: None,
             sender: ChatUser::new("@user:example.com"),
             body: "test".to_string(),
             is_direct: false,
@@ -383,5 +486,229 @@ mod tests {
             timestamp: 0,
         };
         assert_eq!(msg.room_id(), "!room:example.com");
+    }
+
+    #[test]
+    fn test_incoming_message_platform_id() {
+        let msg = IncomingMessage {
+            platform_id: "telegram".to_string(),
+            channel_id: "12345".to_string(),
+            thread_id: None,
+            sender: ChatUser::new("67890"),
+            body: "hello".to_string(),
+            is_direct: true,
+            formatted: false,
+            attachment: None,
+            event_id: "msg_1".to_string(),
+            timestamp: 1700000000,
+        };
+        assert_eq!(msg.platform_id, "telegram");
+        assert!(msg.thread_id.is_none());
+    }
+
+    #[test]
+    fn test_incoming_message_thread_id() {
+        let msg = IncomingMessage {
+            platform_id: "slack".to_string(),
+            channel_id: "C123".to_string(),
+            thread_id: Some("1700000000.000100".to_string()),
+            sender: ChatUser::new("U456"),
+            body: "threaded reply".to_string(),
+            is_direct: false,
+            formatted: false,
+            attachment: None,
+            event_id: "msg_2".to_string(),
+            timestamp: 1700000001,
+        };
+        assert_eq!(msg.thread_id.as_deref(), Some("1700000000.000100"));
+    }
+
+    #[test]
+    fn test_platform_connection_state_variants() {
+        let connected = PlatformConnectionState::Connected;
+        assert!(matches!(connected, PlatformConnectionState::Connected));
+
+        let connecting = PlatformConnectionState::Connecting;
+        assert!(matches!(connecting, PlatformConnectionState::Connecting));
+
+        let disconnected = PlatformConnectionState::Disconnected {
+            reason: "timeout".to_string(),
+        };
+        assert!(
+            matches!(disconnected, PlatformConnectionState::Disconnected { reason } if reason == "timeout")
+        );
+
+        let auth = PlatformConnectionState::AuthRequired;
+        assert!(matches!(auth, PlatformConnectionState::AuthRequired));
+
+        let rate_limited = PlatformConnectionState::RateLimited {
+            retry_after: std::time::Duration::from_secs(30),
+        };
+        assert!(
+            matches!(rate_limited, PlatformConnectionState::RateLimited { retry_after } if retry_after.as_secs() == 30)
+        );
+    }
+
+    #[test]
+    fn test_platform_connection_state_debug() {
+        let state = PlatformConnectionState::Connected;
+        let debug = format!("{:?}", state);
+        assert!(debug.contains("Connected"));
+    }
+
+    // =========================================================================
+    // Extension Trait Tests
+    // =========================================================================
+
+    #[test]
+    fn test_slash_command_def_construction() {
+        let def = SlashCommandDef {
+            name: "/gorp".to_string(),
+            description: "Talk to gorp".to_string(),
+        };
+        assert_eq!(def.name, "/gorp");
+        assert_eq!(def.description, "Talk to gorp");
+    }
+
+    #[test]
+    fn test_slash_command_def_clone() {
+        let def = SlashCommandDef {
+            name: "/status".to_string(),
+            description: "Check status".to_string(),
+        };
+        let cloned = def.clone();
+        assert_eq!(cloned.name, def.name);
+        assert_eq!(cloned.description, def.description);
+    }
+
+    #[test]
+    fn test_slash_command_def_debug() {
+        let def = SlashCommandDef {
+            name: "/gorp".to_string(),
+            description: "Talk to gorp".to_string(),
+        };
+        let debug = format!("{:?}", def);
+        assert!(debug.contains("/gorp"));
+        assert!(debug.contains("Talk to gorp"));
+    }
+
+    #[test]
+    fn test_slash_command_invocation_construction() {
+        let inv = SlashCommandInvocation {
+            command: "/gorp".to_string(),
+            text: "hello there".to_string(),
+            channel_id: "C12345".to_string(),
+            user_id: "U67890".to_string(),
+            response_url: "https://hooks.slack.com/commands/T123/456/abc".to_string(),
+        };
+        assert_eq!(inv.command, "/gorp");
+        assert_eq!(inv.text, "hello there");
+        assert_eq!(inv.channel_id, "C12345");
+        assert_eq!(inv.user_id, "U67890");
+        assert_eq!(
+            inv.response_url,
+            "https://hooks.slack.com/commands/T123/456/abc"
+        );
+    }
+
+    #[test]
+    fn test_slash_command_invocation_clone() {
+        let inv = SlashCommandInvocation {
+            command: "/ask".to_string(),
+            text: "what is rust".to_string(),
+            channel_id: "C999".to_string(),
+            user_id: "U111".to_string(),
+            response_url: "https://example.com/respond".to_string(),
+        };
+        let cloned = inv.clone();
+        assert_eq!(cloned.command, inv.command);
+        assert_eq!(cloned.text, inv.text);
+        assert_eq!(cloned.channel_id, inv.channel_id);
+        assert_eq!(cloned.user_id, inv.user_id);
+        assert_eq!(cloned.response_url, inv.response_url);
+    }
+
+    #[test]
+    fn test_slash_command_invocation_debug() {
+        let inv = SlashCommandInvocation {
+            command: "/gorp".to_string(),
+            text: "test".to_string(),
+            channel_id: "C1".to_string(),
+            user_id: "U1".to_string(),
+            response_url: "https://example.com".to_string(),
+        };
+        let debug = format!("{:?}", inv);
+        assert!(debug.contains("/gorp"));
+        assert!(debug.contains("test"));
+    }
+
+    /// Test that ChatPlatform default extension accessors return None.
+    /// Uses a minimal stub implementing ChatPlatform to verify the defaults.
+    #[derive(Debug, Clone)]
+    struct StubChannel {
+        id: String,
+    }
+
+    #[async_trait]
+    impl ChatChannel for StubChannel {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn name(&self) -> Option<String> {
+            None
+        }
+        async fn is_direct(&self) -> bool {
+            false
+        }
+        async fn send(&self, _content: MessageContent) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct StubPlatform;
+
+    #[async_trait]
+    impl MessagingPlatform for StubPlatform {
+        async fn event_stream(&self) -> Result<EventStream> {
+            anyhow::bail!("stub")
+        }
+        async fn send(&self, _channel_id: &str, _content: MessageContent) -> Result<()> {
+            Ok(())
+        }
+        fn bot_user_id(&self) -> &str {
+            "bot"
+        }
+        fn platform_id(&self) -> &'static str {
+            "stub"
+        }
+    }
+
+    #[async_trait]
+    impl ChatPlatform for StubPlatform {
+        type Channel = StubChannel;
+        async fn get_channel(&self, _id: &str) -> Option<StubChannel> {
+            None
+        }
+        async fn joined_channels(&self) -> Vec<StubChannel> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn test_chat_platform_threading_default_none() {
+        let platform = StubPlatform;
+        assert!(platform.threading().is_none());
+    }
+
+    #[test]
+    fn test_chat_platform_slash_commands_default_none() {
+        let platform = StubPlatform;
+        assert!(platform.slash_commands().is_none());
+    }
+
+    #[test]
+    fn test_chat_platform_rich_formatter_default_none() {
+        let platform = StubPlatform;
+        assert!(platform.rich_formatter().is_none());
     }
 }

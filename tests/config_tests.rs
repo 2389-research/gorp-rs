@@ -51,12 +51,12 @@ path = "./test-workspace"
 
     let config = gorp::config::Config::load().unwrap();
 
-    assert_eq!(config.matrix.home_server, "https://test.matrix.org");
-    assert_eq!(config.matrix.user_id, "@bot:test.matrix.org");
-    assert_eq!(config.matrix.password, Some("secret123".to_string()));
-    assert_eq!(config.matrix.allowed_users.len(), 2);
-    assert!(config
-        .matrix
+    let matrix = config.matrix.as_ref().expect("matrix config should be present");
+    assert_eq!(matrix.home_server, "https://test.matrix.org");
+    assert_eq!(matrix.user_id, "@bot:test.matrix.org");
+    assert_eq!(matrix.password, Some("secret123".to_string()));
+    assert_eq!(matrix.allowed_users.len(), 2);
+    assert!(matrix
         .allowed_users
         .contains(&"@user1:test.matrix.org".to_string()));
     assert_eq!(config.webhook.port, 8080);
@@ -104,9 +104,10 @@ path = "./workspace"
     let config = gorp::config::Config::load().unwrap();
 
     // Env vars should override TOML values
-    assert_eq!(config.matrix.home_server, "https://override.matrix.org");
+    let matrix = config.matrix.as_ref().expect("matrix config should be present");
+    assert_eq!(matrix.home_server, "https://override.matrix.org");
     assert_eq!(
-        config.matrix.password,
+        matrix.password,
         Some("override-password".to_string())
     );
 

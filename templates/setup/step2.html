@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>gorp setup - step 2/3</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 min-h-screen flex items-center justify-center">
+    <div class="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">gorp setup</h1>
+            <span class="text-sm text-gray-400">step 2/3</span>
+        </div>
+
+        <p class="text-gray-600 mb-4">Your API token (save this somewhere safe):</p>
+
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4 font-mono text-sm break-all select-all">
+            {{ api_token }}
+        </div>
+
+        <button onclick="navigator.clipboard.writeText('{{ api_token }}').then(() => this.textContent = 'Copied!')"
+                class="mb-6 text-sm text-blue-600 hover:text-blue-800 underline cursor-pointer">
+            Copy to clipboard
+        </button>
+
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+            <p class="text-sm text-blue-700 font-medium mb-1">Use this token for API access:</p>
+            <code class="text-xs text-blue-600">X-API-Key: {{ api_token }}</code>
+        </div>
+
+        <a href="/setup/step3"
+           class="block w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium text-center">
+            Next &rarr;
+        </a>
+    </div>
+</body>
+</html>

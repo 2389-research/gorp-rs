@@ -90,16 +90,16 @@ pub fn view(server: Option<&Arc<ServerState>>) -> Element<'static, Message> {
         let config = &server.config;
 
         // Pre-compute all strings
-        let homeserver = config.matrix.home_server.clone();
-        let user_id = config.matrix.user_id.clone();
-        let device_name = config.matrix.device_name.clone();
-        let room_prefix = config.matrix.room_prefix.clone();
-        let allowed_users = if config.matrix.allowed_users.is_empty() {
-            "(none)".to_string()
-        } else {
-            config.matrix.allowed_users.join(", ")
+        let matrix = config.matrix.as_ref();
+        let homeserver = matrix.map(|m| m.home_server.clone()).unwrap_or_default();
+        let user_id = matrix.map(|m| m.user_id.clone()).unwrap_or_default();
+        let device_name = matrix.map(|m| m.device_name.clone()).unwrap_or_default();
+        let room_prefix = matrix.map(|m| m.room_prefix.clone()).unwrap_or_default();
+        let allowed_users = match matrix {
+            Some(m) if !m.allowed_users.is_empty() => m.allowed_users.join(", "),
+            _ => "(none)".to_string(),
         };
-        let auth_method = if config.matrix.access_token.is_some() {
+        let auth_method = if matrix.and_then(|m| m.access_token.as_ref()).is_some() {
             "Access Token".to_string()
         } else {
             "Password".to_string()
