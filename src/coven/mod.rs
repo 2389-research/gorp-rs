@@ -1,6 +1,7 @@
 // ABOUTME: Coven gateway provider for registering workspaces as agents
 // ABOUTME: Manages gRPC streams to coven-gateway with heartbeat and message handling
 
+pub mod reconnect;
 pub mod stream;
 
 use std::collections::HashMap;
@@ -213,7 +214,7 @@ impl CovenProvider {
         Ok(agent_handle)
     }
 
-    /// Spawn a bidirectional gRPC stream for an agent
+    /// Spawn a bidirectional gRPC stream for an agent with automatic reconnection
     async fn spawn_agent_stream(
         &mut self,
         agent_id: String,
@@ -221,10 +222,8 @@ impl CovenProvider {
         register: RegisterAgent,
     ) -> anyhow::Result<()> {
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-        let mut client = self.client.clone();
+        let client = self.client.clone();
         let streams = self.streams.clone();
-        let agent_id_clone = agent_id.clone();
-        let ws_name_clone = workspace_name.clone();
 
         // Create the AgentHandle for this stream
         let is_dispatch = workspace_name == "DISPATCH";
@@ -237,21 +236,8 @@ impl CovenProvider {
         // Clone session_store for DISPATCH routing
         let session_store = Arc::clone(&self.session_store);
 
-        // Create the request stream
-        let (tx, rx) = tokio::sync::mpsc::channel::<AgentMessage>(32);
-
-        // Send registration message
-        tx.send(AgentMessage {
-            payload: Some(Payload::Register(register)),
-        })
-        .await?;
-
-        // Convert mpsc to tonic streaming
-        let request_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-
-        // Start the bidirectional stream
-        let response = client.agent_stream(request_stream).await?;
-        let mut inbound = response.into_inner();
+        // Make the initial connection (fail fast if gateway is unreachable)
+        let (tx, inbound) = connect_stream(&mut client.clone(), &register).await?;
 
         tracing::info!(
             agent_id = %agent_id,
@@ -259,57 +245,93 @@ impl CovenProvider {
             "Agent stream established"
         );
 
-        // Spawn stream handler task
-        let heartbeat_tx = tx.clone();
+        // Spawn reconnecting stream handler task
+        let agent_id_clone = agent_id.clone();
+        let ws_name_clone = workspace_name.clone();
         tokio::spawn(async move {
             let mut cancel_rx = cancel_rx;
-            let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(30));
             let mut sessions: HashMap<String, String> = HashMap::new();
+            let mut backoff = reconnect::BackoffState::new(reconnect::BackoffConfig::default());
+            let mut client = client;
+            let mut tx = tx;
+            let mut inbound = inbound;
 
-            loop {
-                tokio::select! {
-                    // Check for cancellation
-                    _ = cancel_rx.changed() => {
-                        if *cancel_rx.borrow() {
-                            tracing::info!(agent_id = %agent_id_clone, "Agent stream shutting down");
-                            break;
+            'reconnect: loop {
+                // Stream connected — reset backoff
+                backoff.record_success();
+
+                // Run the message loop until stream drops or shutdown
+                let should_shutdown = run_stream_loop(
+                    &agent_id_clone,
+                    &ws_name_clone,
+                    is_dispatch,
+                    &mut cancel_rx,
+                    &mut inbound,
+                    &agent_handle,
+                    &mut sessions,
+                    &session_store,
+                    &tx,
+                )
+                .await;
+
+                if should_shutdown {
+                    break;
+                }
+
+                // Stream dropped — attempt reconnection with backoff
+                loop {
+                    // Check for cancellation before retrying
+                    if *cancel_rx.borrow() {
+                        break 'reconnect;
+                    }
+
+                    match backoff.record_failure() {
+                        Some(delay) => {
+                            tracing::info!(
+                                agent_id = %agent_id_clone,
+                                delay_secs = delay.as_secs(),
+                                attempt = backoff.consecutive_failures(),
+                                "Reconnecting after backoff"
+                            );
+
+                            // Wait for backoff delay, but allow cancellation to interrupt
+                            tokio::select! {
+                                _ = tokio::time::sleep(delay) => {}
+                                _ = cancel_rx.changed() => {
+                                    if *cancel_rx.borrow() {
+                                        break 'reconnect;
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            tracing::error!(
+                                agent_id = %agent_id_clone,
+                                "Max reconnection retries exceeded, giving up"
+                            );
+                            break 'reconnect;
                         }
                     }
-                    // Send heartbeat
-                    _ = heartbeat_interval.tick() => {
-                        let hb = AgentMessage {
-                            payload: Some(Payload::Heartbeat(Heartbeat {
-                                timestamp_ms: chrono::Utc::now().timestamp_millis(),
-                            })),
-                        };
-                        if heartbeat_tx.send(hb).await.is_err() {
-                            tracing::warn!(agent_id = %agent_id_clone, "Heartbeat send failed, stream closed");
-                            break;
+
+                    // Attempt reconnection
+                    match connect_stream(&mut client, &register).await {
+                        Ok((new_tx, new_inbound)) => {
+                            tracing::info!(
+                                agent_id = %agent_id_clone,
+                                workspace = %ws_name_clone,
+                                "Reconnected to coven gateway"
+                            );
+                            tx = new_tx;
+                            inbound = new_inbound;
+                            continue 'reconnect;
                         }
-                    }
-                    // Handle incoming server messages
-                    msg = inbound.message() => {
-                        match msg {
-                            Ok(Some(server_msg)) => {
-                                handle_server_message(
-                                    &agent_id_clone,
-                                    &ws_name_clone,
-                                    is_dispatch,
-                                    server_msg,
-                                    &agent_handle,
-                                    &mut sessions,
-                                    &session_store,
-                                    &tx,
-                                ).await;
-                            }
-                            Ok(None) => {
-                                tracing::info!(agent_id = %agent_id_clone, "Server closed stream");
-                                break;
-                            }
-                            Err(e) => {
-                                tracing::error!(agent_id = %agent_id_clone, error = %e, "Stream error");
-                                break;
-                            }
+                        Err(e) => {
+                            tracing::error!(
+                                agent_id = %agent_id_clone,
+                                error = %e,
+                                "Reconnection attempt failed"
+                            );
+                            // Continue the inner retry loop
                         }
                     }
                 }
@@ -382,6 +404,98 @@ impl CovenProvider {
     /// Get the number of active agent streams
     pub async fn active_streams(&self) -> usize {
         self.streams.lock().await.len()
+    }
+}
+
+/// Establish a gRPC stream connection and send the registration message
+async fn connect_stream(
+    client: &mut CovenControlClient<Channel>,
+    register: &RegisterAgent,
+) -> anyhow::Result<(
+    tokio::sync::mpsc::Sender<AgentMessage>,
+    tonic::Streaming<proto::ServerMessage>,
+)> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<AgentMessage>(32);
+
+    // Send registration message
+    tx.send(AgentMessage {
+        payload: Some(Payload::Register(register.clone())),
+    })
+    .await?;
+
+    // Convert mpsc to tonic streaming
+    let request_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+
+    // Start the bidirectional stream
+    let response = client.agent_stream(request_stream).await?;
+    let inbound = response.into_inner();
+
+    Ok((tx, inbound))
+}
+
+/// Run the message loop for an agent stream.
+/// Returns `true` if shutdown was requested (should NOT reconnect),
+/// `false` if the stream dropped (SHOULD reconnect).
+async fn run_stream_loop(
+    agent_id: &str,
+    workspace: &str,
+    is_dispatch: bool,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+    inbound: &mut tonic::Streaming<proto::ServerMessage>,
+    agent_handle: &AgentHandle,
+    sessions: &mut HashMap<String, String>,
+    session_store: &SessionStore,
+    tx: &tokio::sync::mpsc::Sender<AgentMessage>,
+) -> bool {
+    let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            // Check for cancellation
+            _ = cancel_rx.changed() => {
+                if *cancel_rx.borrow() {
+                    tracing::info!(agent_id = %agent_id, "Agent stream shutting down");
+                    return true; // Shutdown — don't reconnect
+                }
+            }
+            // Send heartbeat
+            _ = heartbeat_interval.tick() => {
+                let hb = AgentMessage {
+                    payload: Some(Payload::Heartbeat(Heartbeat {
+                        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                    })),
+                };
+                if tx.send(hb).await.is_err() {
+                    tracing::warn!(agent_id = %agent_id, "Heartbeat send failed, stream closed");
+                    return false; // Stream dropped — reconnect
+                }
+            }
+            // Handle incoming server messages
+            msg = inbound.message() => {
+                match msg {
+                    Ok(Some(server_msg)) => {
+                        handle_server_message(
+                            agent_id,
+                            workspace,
+                            is_dispatch,
+                            server_msg,
+                            agent_handle,
+                            sessions,
+                            session_store,
+                            tx,
+                        ).await;
+                    }
+                    Ok(None) => {
+                        tracing::info!(agent_id = %agent_id, "Server closed stream");
+                        return false; // Stream dropped — reconnect
+                    }
+                    Err(e) => {
+                        tracing::error!(agent_id = %agent_id, error = %e, "Stream error");
+                        return false; // Stream errored — reconnect
+                    }
+                }
+            }
+        }
     }
 }
 
