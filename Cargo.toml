@@ -69,6 +69,7 @@ teloxide = { version = "0.17", default-features = false, features = ["native-tls
 slack-morphism = { version = "2.17", features = ["hyper"] }
 tonic = { version = "0.12", optional = true }
 prost = { version = "0.13", optional = true }
+toml_edit = "0.25.1"
 
 [build-dependencies]
 tonic-build = { version = "0.12", optional = true }

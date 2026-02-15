@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6">
+    <div class="flex items-center space-x-3 mb-6">
+        <a href="/admin/gateways" class="text-gray-400 hover:text-gray-600">&larr;</a>
+        <h1 class="text-2xl font-bold capitalize">{{ platform_id }} Configuration</h1>
+        {% if connected %}
+        <span class="text-sm px-2 py-1 bg-green-100 text-green-700 rounded">Connected</span>
+        {% endif %}
+    </div>
+
+    <form method="post" action="/admin/gateways/{{ platform_id }}/save"
+          hx-post="/admin/gateways/{{ platform_id }}/save"
+          hx-target="#toast"
+          hx-swap="innerHTML">
+
+        {% for field in fields %}
+        <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700 mb-1">{{ field.label }}</label>
+            {% if field.field_type == "secret" %}
+            <input type="password" name="{{ field.name }}" value="{{ field.value }}"
+                   placeholder="{{ field.placeholder }}"
+                   class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <p class="text-xs text-gray-400 mt-1">
+                {% if field.is_set %}Currently set (leave blank to keep){% else %}Not configured{% endif %}
+            </p>
+            {% else if field.field_type == "textarea" %}
+            <textarea name="{{ field.name }}" rows="3" placeholder="{{ field.placeholder }}"
+                      class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">{{ field.value }}</textarea>
+            {% else if field.field_type == "checkbox" %}
+            <label class="flex items-center space-x-2">
+                <input type="checkbox" name="{{ field.name }}" {% if field.value == "true" %}checked{% endif %}
+                       class="rounded border-gray-300" />
+                <span class="text-sm text-gray-600">{{ field.placeholder }}</span>
+            </label>
+            {% else %}
+            <input type="text" name="{{ field.name }}" value="{{ field.value }}"
+                   placeholder="{{ field.placeholder }}"
+                   class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        <div class="flex space-x-3 mt-6">
+            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
+                Save Configuration
+            </button>
+            <a href="/admin/gateways" class="px-4 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm">
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+{% endblock %}

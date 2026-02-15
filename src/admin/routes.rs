@@ -16,8 +16,9 @@ use std::sync::Arc;
 
 use crate::admin::templates::{
     BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ChatHistoryPartialTemplate,
-    ChatHistoryRow, ChatTemplate, ConfigTemplate, DashboardTemplate, DirectoryTemplate, ErrorEntry,
-    FeedRow, FeedTemplate, FileTemplate, HealthTemplate, LogViewerTemplate, MarkdownTemplate,
+    ChatHistoryRow, ChatTemplate, ConfigField, ConfigTemplate, DashboardTemplate,
+    DirectoryTemplate, ErrorEntry, FeedRow, FeedTemplate, FileTemplate, GatewayConfigTemplate,
+    GatewayRow, GatewaysTemplate, HealthTemplate, LogViewerTemplate, MarkdownTemplate,
     MatrixDirTemplate, MatrixFileEntry, MessageEntry, MessageHistoryTemplate, ScheduleFormTemplate,
     ScheduleRow, SchedulesTemplate, SearchResult, SearchTemplate, ToastTemplate,
 };
@@ -76,6 +77,11 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/feed", get(feed_view))
         .route("/chat", get(chat_view))
         .route("/chat/{workspace}", get(chat_history))
+        .route("/gateways", get(gateways_overview))
+        .route("/gateways/{platform}", get(gateway_config))
+        .route("/gateways/{platform}/save", post(gateway_save))
+        .route("/gateways/{platform}/connect", post(gateway_connect))
+        .route("/gateways/{platform}/disconnect", post(gateway_disconnect))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -2111,4 +2117,342 @@ fn list_workspace_names(workspace_dir: &str) -> Vec<String> {
             Vec::new()
         }
     }
+}
+
+// =============================================================================
+// Gateway Management
+// =============================================================================
+
+/// Known platform IDs in display order
+const PLATFORM_IDS: &[&str] = &["matrix", "telegram", "slack", "whatsapp"];
+
+async fn gateways_overview(State(state): State<AdminState>) -> GatewaysTemplate {
+    let gateways = PLATFORM_IDS
+        .iter()
+        .map(|id| {
+            let (configured, config_summary) = platform_config_summary(&state.config, id);
+            GatewayRow {
+                platform_id: id.to_string(),
+                configured,
+                connected: false, // Runtime status would come from PlatformRegistry
+                config_summary,
+            }
+        })
+        .collect();
+
+    GatewaysTemplate {
+        title: "Gateways - gorp".to_string(),
+        gateways,
+    }
+}
+
+async fn gateway_config(
+    State(state): State<AdminState>,
+    AxumPath(platform): AxumPath<String>,
+) -> Response {
+    if !PLATFORM_IDS.contains(&platform.as_str()) {
+        return ToastTemplate {
+            message: format!("Unknown platform: {}", platform),
+            is_error: true,
+        }
+        .into_response();
+    }
+
+    let fields = platform_config_fields(&state.config, &platform);
+
+    GatewayConfigTemplate {
+        title: format!("{} Config - gorp", platform),
+        platform_id: platform,
+        connected: false,
+        fields,
+    }
+    .into_response()
+}
+
+async fn gateway_save(
+    State(_state): State<AdminState>,
+    AxumPath(platform): AxumPath<String>,
+    Form(form): Form<std::collections::HashMap<String, String>>,
+) -> ToastTemplate {
+    // Save config to file — for now, write to a platform-specific TOML section
+    let config_path = paths::config_file();
+    match save_platform_config(&config_path, &platform, &form) {
+        Ok(()) => {
+            tracing::info!(platform = %platform, "Gateway config saved");
+            ToastTemplate {
+                message: format!("{} configuration saved. Restart to apply.", platform),
+                is_error: false,
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, platform = %platform, "Failed to save gateway config");
+            ToastTemplate {
+                message: format!("Failed to save config: {}", e),
+                is_error: true,
+            }
+        }
+    }
+}
+
+async fn gateway_connect(AxumPath(platform): AxumPath<String>) -> ToastTemplate {
+    // Hot-connect would require Arc<Mutex<PlatformRegistry>> access
+    // For now, inform the user to restart
+    tracing::info!(platform = %platform, "Gateway connect requested");
+    ToastTemplate {
+        message: format!(
+            "{} connection requested. Restart gorp to connect with saved config.",
+            platform
+        ),
+        is_error: false,
+    }
+}
+
+async fn gateway_disconnect(AxumPath(platform): AxumPath<String>) -> ToastTemplate {
+    tracing::info!(platform = %platform, "Gateway disconnect requested");
+    ToastTemplate {
+        message: format!(
+            "{} disconnection requested. Restart gorp to apply.",
+            platform
+        ),
+        is_error: false,
+    }
+}
+
+/// Get config summary for a platform
+fn platform_config_summary(config: &Config, platform_id: &str) -> (bool, String) {
+    match platform_id {
+        "matrix" => match &config.matrix {
+            Some(mc) => (true, format!("{} on {}", mc.user_id, mc.home_server)),
+            None => (false, String::new()),
+        },
+        "telegram" => match &config.telegram {
+            Some(_) => (true, "Bot token configured".to_string()),
+            None => (false, String::new()),
+        },
+        "slack" => match &config.slack {
+            Some(_) => (true, "App and bot tokens configured".to_string()),
+            None => (false, String::new()),
+        },
+        "whatsapp" => match &config.whatsapp {
+            Some(_) => (true, "Sidecar configured".to_string()),
+            None => (false, String::new()),
+        },
+        _ => (false, String::new()),
+    }
+}
+
+/// Generate config form fields for a platform
+fn platform_config_fields(config: &Config, platform_id: &str) -> Vec<ConfigField> {
+    match platform_id {
+        "matrix" => {
+            let mc = config.matrix.as_ref();
+            vec![
+                ConfigField {
+                    name: "home_server".to_string(),
+                    label: "Homeserver URL".to_string(),
+                    value: mc.map_or(String::new(), |c| c.home_server.clone()),
+                    placeholder: "https://matrix.org".to_string(),
+                    field_type: "text".to_string(),
+                    is_set: mc.is_some(),
+                },
+                ConfigField {
+                    name: "user_id".to_string(),
+                    label: "User ID".to_string(),
+                    value: mc.map_or(String::new(), |c| c.user_id.clone()),
+                    placeholder: "@bot:matrix.org".to_string(),
+                    field_type: "text".to_string(),
+                    is_set: mc.is_some(),
+                },
+                ConfigField {
+                    name: "password".to_string(),
+                    label: "Password".to_string(),
+                    value: String::new(),
+                    placeholder: "Matrix account password".to_string(),
+                    field_type: "secret".to_string(),
+                    is_set: mc.map_or(false, |c| c.password.is_some()),
+                },
+                ConfigField {
+                    name: "device_name".to_string(),
+                    label: "Device Name".to_string(),
+                    value: mc.map_or("gorp".to_string(), |c| c.device_name.clone()),
+                    placeholder: "gorp".to_string(),
+                    field_type: "text".to_string(),
+                    is_set: mc.is_some(),
+                },
+                ConfigField {
+                    name: "room_prefix".to_string(),
+                    label: "Room Prefix".to_string(),
+                    value: mc.map_or(String::new(), |c| c.room_prefix.clone()),
+                    placeholder: "GORP".to_string(),
+                    field_type: "text".to_string(),
+                    is_set: mc.is_some(),
+                },
+                ConfigField {
+                    name: "allowed_users".to_string(),
+                    label: "Allowed Users".to_string(),
+                    value: mc.map_or(String::new(), |c| c.allowed_users.join(", ")),
+                    placeholder: "@user1:matrix.org, @user2:matrix.org".to_string(),
+                    field_type: "textarea".to_string(),
+                    is_set: mc.is_some(),
+                },
+            ]
+        }
+        "telegram" => {
+            let tc = config.telegram.as_ref();
+            vec![
+                ConfigField {
+                    name: "bot_token".to_string(),
+                    label: "Bot Token".to_string(),
+                    value: String::new(),
+                    placeholder: "123456:ABC-DEF...".to_string(),
+                    field_type: "secret".to_string(),
+                    is_set: tc.is_some(),
+                },
+                ConfigField {
+                    name: "allowed_users".to_string(),
+                    label: "Allowed User IDs".to_string(),
+                    value: tc.map_or(String::new(), |c| {
+                        c.allowed_users
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }),
+                    placeholder: "123456789, 987654321".to_string(),
+                    field_type: "textarea".to_string(),
+                    is_set: tc.is_some(),
+                },
+                ConfigField {
+                    name: "allowed_chats".to_string(),
+                    label: "Allowed Chat IDs".to_string(),
+                    value: tc.map_or(String::new(), |c| {
+                        c.allowed_chats
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }),
+                    placeholder: "-100123456789".to_string(),
+                    field_type: "textarea".to_string(),
+                    is_set: tc.is_some(),
+                },
+            ]
+        }
+        "slack" => {
+            let sc = config.slack.as_ref();
+            vec![
+                ConfigField {
+                    name: "app_token".to_string(),
+                    label: "App Token (xapp-)".to_string(),
+                    value: String::new(),
+                    placeholder: "xapp-...".to_string(),
+                    field_type: "secret".to_string(),
+                    is_set: sc.is_some(),
+                },
+                ConfigField {
+                    name: "bot_token".to_string(),
+                    label: "Bot Token (xoxb-)".to_string(),
+                    value: String::new(),
+                    placeholder: "xoxb-...".to_string(),
+                    field_type: "secret".to_string(),
+                    is_set: sc.is_some(),
+                },
+                ConfigField {
+                    name: "signing_secret".to_string(),
+                    label: "Signing Secret".to_string(),
+                    value: String::new(),
+                    placeholder: "Slack signing secret".to_string(),
+                    field_type: "secret".to_string(),
+                    is_set: sc.is_some(),
+                },
+                ConfigField {
+                    name: "allowed_users".to_string(),
+                    label: "Allowed Users".to_string(),
+                    value: sc.map_or(String::new(), |c| c.allowed_users.join(", ")),
+                    placeholder: "U12345, U67890".to_string(),
+                    field_type: "textarea".to_string(),
+                    is_set: sc.is_some(),
+                },
+                ConfigField {
+                    name: "allowed_channels".to_string(),
+                    label: "Allowed Channels".to_string(),
+                    value: sc.map_or(String::new(), |c| c.allowed_channels.join(", ")),
+                    placeholder: "C12345, C67890".to_string(),
+                    field_type: "textarea".to_string(),
+                    is_set: sc.is_some(),
+                },
+                ConfigField {
+                    name: "thread_in_channels".to_string(),
+                    label: "Thread in Channels".to_string(),
+                    value: sc
+                        .map_or("true".to_string(), |c| c.thread_in_channels.to_string()),
+                    placeholder: "Reply in threads instead of channel".to_string(),
+                    field_type: "checkbox".to_string(),
+                    is_set: sc.is_some(),
+                },
+            ]
+        }
+        "whatsapp" => {
+            vec![ConfigField {
+                name: "info".to_string(),
+                label: "WhatsApp".to_string(),
+                value: "WhatsApp integration requires a sidecar process. See documentation."
+                    .to_string(),
+                placeholder: String::new(),
+                field_type: "text".to_string(),
+                is_set: config.whatsapp.is_some(),
+            }]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Save platform config to the config file
+fn save_platform_config(
+    config_path: &Path,
+    platform: &str,
+    form: &std::collections::HashMap<String, String>,
+) -> anyhow::Result<()> {
+    // Read existing config
+    let content = if config_path.exists() {
+        std::fs::read_to_string(config_path)?
+    } else {
+        String::new()
+    };
+
+    let mut doc = content
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+
+    // Ensure the platform section exists
+    if doc.get(platform).is_none() {
+        doc[platform] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    // Write non-empty form values to the platform section
+    for (key, value) in form {
+        if key == "info" {
+            continue; // Skip display-only fields
+        }
+        if value.is_empty() {
+            continue; // Don't overwrite with empty values (preserves secrets)
+        }
+
+        // Handle comma-separated list fields
+        if key == "allowed_users" || key == "allowed_channels" || key == "allowed_chats" {
+            let items: Vec<&str> = value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            let mut arr = toml_edit::Array::new();
+            for item in items {
+                arr.push(item);
+            }
+            doc[platform][key] = toml_edit::value(arr);
+        } else if key == "thread_in_channels" {
+            doc[platform][key] = toml_edit::value(value == "on" || value == "true");
+        } else {
+            doc[platform][key] = toml_edit::value(value.as_str());
+        }
+    }
+
+    std::fs::write(config_path, doc.to_string())?;
+    Ok(())
 }

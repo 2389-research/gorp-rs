@@ -257,6 +257,46 @@ pub struct SearchTemplate {
 }
 
 // =============================================================================
+// Gateway Management Templates
+// =============================================================================
+
+/// Gateway card data for overview page
+#[derive(Clone)]
+pub struct GatewayRow {
+    pub platform_id: String,
+    pub configured: bool,
+    pub connected: bool,
+    pub config_summary: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin/gateways.html")]
+pub struct GatewaysTemplate {
+    pub title: String,
+    pub gateways: Vec<GatewayRow>,
+}
+
+/// Config field for platform config form
+#[derive(Clone)]
+pub struct ConfigField {
+    pub name: String,
+    pub label: String,
+    pub value: String,
+    pub placeholder: String,
+    pub field_type: String, // "text", "secret", "textarea", "checkbox"
+    pub is_set: bool,
+}
+
+#[derive(Template)]
+#[template(path = "admin/gateways/platform.html")]
+pub struct GatewayConfigTemplate {
+    pub title: String,
+    pub platform_id: String,
+    pub connected: bool,
+    pub fields: Vec<ConfigField>,
+}
+
+// =============================================================================
 // Feed & Chat Templates
 // =============================================================================
 
@@ -348,6 +388,8 @@ impl_into_response!(
     MarkdownTemplate,
     MatrixDirTemplate,
     SearchTemplate,
+    GatewaysTemplate,
+    GatewayConfigTemplate,
     FeedTemplate,
     ChatTemplate,
     ChatHistoryPartialTemplate,
@@ -600,5 +642,67 @@ mod tests {
             .render()
             .expect("Empty chat history partial should render");
         assert!(rendered.contains("Start chatting"));
+    }
+
+    #[test]
+    fn test_gateways_template_renders() {
+        let template = GatewaysTemplate {
+            title: "Gateways Test".to_string(),
+            gateways: vec![
+                GatewayRow {
+                    platform_id: "matrix".to_string(),
+                    configured: true,
+                    connected: true,
+                    config_summary: "@bot:matrix.org on https://matrix.org".to_string(),
+                },
+                GatewayRow {
+                    platform_id: "telegram".to_string(),
+                    configured: false,
+                    connected: false,
+                    config_summary: String::new(),
+                },
+            ],
+        };
+        let rendered = template
+            .render()
+            .expect("Gateways template should render");
+        assert!(rendered.contains("Gateways Test"));
+        assert!(rendered.contains("matrix"));
+        assert!(rendered.contains("Connected"));
+        assert!(rendered.contains("Not configured"));
+    }
+
+    #[test]
+    fn test_gateway_config_template_renders() {
+        let template = GatewayConfigTemplate {
+            title: "Matrix Config".to_string(),
+            platform_id: "matrix".to_string(),
+            connected: false,
+            fields: vec![
+                ConfigField {
+                    name: "home_server".to_string(),
+                    label: "Homeserver URL".to_string(),
+                    value: "https://matrix.org".to_string(),
+                    placeholder: "https://matrix.org".to_string(),
+                    field_type: "text".to_string(),
+                    is_set: true,
+                },
+                ConfigField {
+                    name: "password".to_string(),
+                    label: "Password".to_string(),
+                    value: String::new(),
+                    placeholder: "Matrix password".to_string(),
+                    field_type: "secret".to_string(),
+                    is_set: true,
+                },
+            ],
+        };
+        let rendered = template
+            .render()
+            .expect("Gateway config template should render");
+        assert!(rendered.contains("Matrix Config"));
+        assert!(rendered.contains("Homeserver URL"));
+        assert!(rendered.contains("Password"));
+        assert!(rendered.contains("Currently set"));
     }
 }

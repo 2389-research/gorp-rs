@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Gateways</h1>
+        <span class="text-sm text-gray-500">Platform connections</span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% for gw in gateways %}
+        <div class="border rounded-lg p-4 {% if gw.connected %}border-green-200 bg-green-50{% else %}border-gray-200{% endif %}">
+            <div class="flex justify-between items-center mb-3">
+                <div class="flex items-center space-x-2">
+                    <span class="text-lg {% if gw.connected %}text-green-500{% else %}text-gray-400{% endif %}">
+                        {% if gw.connected %}&#9679;{% else %}&#9675;{% endif %}
+                    </span>
+                    <h2 class="text-lg font-semibold capitalize">{{ gw.platform_id }}</h2>
+                </div>
+                <span class="text-sm {% if gw.connected %}text-green-600{% else %}text-gray-500{% endif %}">
+                    {% if gw.connected %}Connected{% else %}{% if gw.configured %}Disconnected{% else %}Not configured{% endif %}{% endif %}
+                </span>
+            </div>
+
+            {% if gw.configured %}
+            <p class="text-sm text-gray-500 mb-3">{{ gw.config_summary }}</p>
+            {% else %}
+            <p class="text-sm text-gray-400 mb-3">No configuration found.</p>
+            {% endif %}
+
+            <div class="flex space-x-2">
+                <a href="/admin/gateways/{{ gw.platform_id }}"
+                   class="text-sm px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
+                    Configure
+                </a>
+                {% if gw.configured && !gw.connected %}
+                <form method="post" action="/admin/gateways/{{ gw.platform_id }}/connect" class="inline">
+                    <button type="submit" class="text-sm px-3 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200">
+                        Connect
+                    </button>
+                </form>
+                {% endif %}
+                {% if gw.connected %}
+                <form method="post" action="/admin/gateways/{{ gw.platform_id }}/disconnect" class="inline">
+                    <button type="submit" class="text-sm px-3 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200">
+                        Disconnect
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
