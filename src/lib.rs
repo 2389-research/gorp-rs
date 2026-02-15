@@ -12,6 +12,10 @@ pub mod gui;
 #[cfg(feature = "tui")]
 pub mod tui;
 
+// Coven gateway provider - only available with `coven` feature
+#[cfg(feature = "coven")]
+pub mod coven;
+
 // Platform abstraction layer
 pub mod platform;
 

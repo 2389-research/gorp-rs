@@ -1157,8 +1157,31 @@ async fn run_start() -> Result<()> {
         tracing::warn!("WhatsApp config present but platform not yet implemented");
     }
 
+    #[cfg(feature = "coven")]
+    if let Some(ref coven_config) = config_arc.coven {
+        let workspace_dir = config_arc.workspace.path.clone();
+        match gorp::coven::CovenProvider::new(coven_config.clone(), workspace_dir).await {
+            Ok(mut coven_provider) => {
+                if let Err(e) = coven_provider.start().await {
+                    tracing::error!(error = %e, "Failed to start coven provider");
+                } else {
+                    tracing::info!("Coven provider started");
+                    // Spawn shutdown watcher for coven
+                    tokio::spawn(async move {
+                        tokio::signal::ctrl_c().await.ok();
+                        coven_provider.shutdown().await;
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to connect to coven gateway");
+            }
+        }
+    }
+
+    #[cfg(not(feature = "coven"))]
     if config_arc.coven.is_some() {
-        tracing::warn!("Coven config present but provider not yet implemented");
+        tracing::warn!("Coven config present but binary compiled without 'coven' feature");
     }
 
     if registry.is_empty() {
