@@ -1,6 +1,8 @@
 // ABOUTME: Coven gateway provider for registering workspaces as agents
 // ABOUTME: Manages gRPC streams to coven-gateway with heartbeat and message handling
 
+pub mod stream;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,6 +12,9 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 
 use crate::config::CovenConfig;
+use crate::session::SessionStore;
+use gorp_agent::AgentHandle;
+use gorp_core::warm_session::SharedWarmSessionManager;
 
 /// Generated protobuf types from coven.proto
 pub mod proto {
@@ -26,6 +31,8 @@ pub struct CovenProvider {
     client: CovenControlClient<Channel>,
     streams: Arc<Mutex<HashMap<String, AgentStreamHandle>>>,
     workspace_dir: String,
+    warm_manager: SharedWarmSessionManager,
+    session_store: Arc<SessionStore>,
 }
 
 /// Handle for a single agent stream with cancellation
@@ -37,7 +44,12 @@ struct AgentStreamHandle {
 
 impl CovenProvider {
     /// Create a new CovenProvider and connect to the gateway
-    pub async fn new(config: CovenConfig, workspace_dir: String) -> anyhow::Result<Self> {
+    pub async fn new(
+        config: CovenConfig,
+        workspace_dir: String,
+        warm_manager: SharedWarmSessionManager,
+        session_store: Arc<SessionStore>,
+    ) -> anyhow::Result<Self> {
         let client = CovenControlClient::connect(config.gateway_addr.clone()).await?;
         tracing::info!(
             gateway = %config.gateway_addr,
@@ -49,6 +61,8 @@ impl CovenProvider {
             client,
             streams: Arc::new(Mutex::new(HashMap::new())),
             workspace_dir,
+            warm_manager,
+            session_store,
         })
     }
 
@@ -137,6 +151,68 @@ impl CovenProvider {
             .await
     }
 
+    /// Create an AgentHandle for a workspace using the warm session registry
+    fn create_workspace_handle(&self, workspace_name: &str) -> anyhow::Result<AgentHandle> {
+        let working_dir = Path::new(&self.workspace_dir)
+            .join(workspace_name)
+            .to_string_lossy()
+            .to_string();
+
+        // Use the warm session manager's registry to create the handle
+        // This is synchronous and returns immediately — the backend worker starts in background
+        let mgr = self.warm_manager.blocking_read();
+        let warm_config = mgr.config();
+        let registry = mgr.registry();
+        drop(mgr);
+
+        gorp_core::warm_session::WarmSessionManager::create_agent_handle_with_config(
+            &registry,
+            &working_dir,
+            &warm_config,
+            None,
+        )
+    }
+
+    /// Create an AgentHandle for DISPATCH with dispatch-specific tools
+    fn create_dispatch_handle(&self) -> anyhow::Result<AgentHandle> {
+        use gorp_agent::backends::mux::{MuxBackend, MuxConfig};
+        use std::path::PathBuf;
+
+        let mgr = self.warm_manager.blocking_read();
+        let warm_config = mgr.config();
+        drop(mgr);
+
+        let model = warm_config.model.clone().ok_or_else(|| {
+            anyhow::anyhow!("No model configured for DISPATCH. Set 'model' in config.toml under [mux] section.")
+        })?;
+
+        let dispatch_working_dir = std::env::temp_dir().join("gorp-dispatch");
+        if let Err(e) = std::fs::create_dir_all(&dispatch_working_dir) {
+            tracing::warn!(error = %e, "Failed to create DISPATCH working directory");
+        }
+
+        let mux_config = MuxConfig {
+            model,
+            max_tokens: warm_config.max_tokens.unwrap_or(8192),
+            working_dir: dispatch_working_dir,
+            global_system_prompt_path: warm_config
+                .global_system_prompt_path
+                .clone()
+                .map(PathBuf::from),
+            local_prompt_files: vec![],
+            mcp_servers: vec![],
+        };
+
+        let dispatch_tools =
+            crate::dispatch_tools::create_dispatch_tools(Arc::clone(&self.session_store));
+
+        let agent_handle = MuxBackend::new(mux_config)?
+            .with_tools(dispatch_tools)
+            .into_handle();
+
+        Ok(agent_handle)
+    }
+
     /// Spawn a bidirectional gRPC stream for an agent
     async fn spawn_agent_stream(
         &mut self,
@@ -149,6 +225,17 @@ impl CovenProvider {
         let streams = self.streams.clone();
         let agent_id_clone = agent_id.clone();
         let ws_name_clone = workspace_name.clone();
+
+        // Create the AgentHandle for this stream
+        let is_dispatch = workspace_name == "DISPATCH";
+        let agent_handle = if is_dispatch {
+            self.create_dispatch_handle()?
+        } else {
+            self.create_workspace_handle(&workspace_name)?
+        };
+
+        // Clone session_store for DISPATCH routing
+        let session_store = Arc::clone(&self.session_store);
 
         // Create the request stream
         let (tx, rx) = tokio::sync::mpsc::channel::<AgentMessage>(32);
@@ -177,6 +264,7 @@ impl CovenProvider {
         tokio::spawn(async move {
             let mut cancel_rx = cancel_rx;
             let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(30));
+            let mut sessions: HashMap<String, String> = HashMap::new();
 
             loop {
                 tokio::select! {
@@ -203,7 +291,16 @@ impl CovenProvider {
                     msg = inbound.message() => {
                         match msg {
                             Ok(Some(server_msg)) => {
-                                handle_server_message(&agent_id_clone, &ws_name_clone, server_msg, &tx).await;
+                                handle_server_message(
+                                    &agent_id_clone,
+                                    &ws_name_clone,
+                                    is_dispatch,
+                                    server_msg,
+                                    &agent_handle,
+                                    &mut sessions,
+                                    &session_store,
+                                    &tx,
+                                ).await;
                             }
                             Ok(None) => {
                                 tracing::info!(agent_id = %agent_id_clone, "Server closed stream");
@@ -288,12 +385,16 @@ impl CovenProvider {
     }
 }
 
-/// Handle an incoming server message
+/// Handle an incoming server message by routing to the appropriate handler
 async fn handle_server_message(
     agent_id: &str,
     workspace: &str,
+    is_dispatch: bool,
     msg: proto::ServerMessage,
-    _tx: &tokio::sync::mpsc::Sender<AgentMessage>,
+    agent_handle: &AgentHandle,
+    sessions: &mut HashMap<String, String>,
+    session_store: &SessionStore,
+    tx: &tokio::sync::mpsc::Sender<AgentMessage>,
 ) {
     use proto::server_message::Payload as SP;
 
@@ -314,7 +415,37 @@ async fn handle_server_message(
                 sender = %send_msg.sender,
                 "Received message from gateway"
             );
-            // Message handling will be implemented when AgentHandle integration is added
+
+            let result = if is_dispatch {
+                stream::handle_dispatch_message(
+                    &send_msg,
+                    agent_handle,
+                    sessions,
+                    session_store,
+                    tx,
+                )
+                .await
+            } else {
+                stream::handle_send_message(&send_msg, agent_handle, sessions, tx).await
+            };
+
+            if let Err(e) = result {
+                tracing::error!(
+                    agent_id = %agent_id,
+                    workspace = %workspace,
+                    request_id = %send_msg.request_id,
+                    error = %e,
+                    "Failed to handle message"
+                );
+                // Send error response back to gateway
+                let error_msg = AgentMessage {
+                    payload: Some(Payload::Response(proto::MessageResponse {
+                        request_id: send_msg.request_id,
+                        event: Some(proto::message_response::Event::Error(e.to_string())),
+                    })),
+                };
+                let _ = tx.send(error_msg).await;
+            }
         }
         Some(SP::Shutdown(shutdown)) => {
             tracing::info!(
@@ -337,6 +468,15 @@ async fn handle_server_message(
                 request_id = %cancel.request_id,
                 "Cancel request from gateway"
             );
+            if let Err(e) =
+                stream::handle_cancel_request(&cancel, agent_handle, sessions, tx).await
+            {
+                tracing::error!(
+                    agent_id = %agent_id,
+                    error = %e,
+                    "Failed to handle cancel request"
+                );
+            }
         }
         Some(SP::InjectContext(inject)) => {
             tracing::debug!(

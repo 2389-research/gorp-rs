@@ -1160,7 +1160,14 @@ async fn run_start() -> Result<()> {
     #[cfg(feature = "coven")]
     if let Some(ref coven_config) = config_arc.coven {
         let workspace_dir = config_arc.workspace.path.clone();
-        match gorp::coven::CovenProvider::new(coven_config.clone(), workspace_dir).await {
+        match gorp::coven::CovenProvider::new(
+            coven_config.clone(),
+            workspace_dir,
+            warm_manager.clone(),
+            Arc::clone(&session_store_arc),
+        )
+        .await
+        {
             Ok(mut coven_provider) => {
                 if let Err(e) = coven_provider.start().await {
                     tracing::error!(error = %e, "Failed to start coven provider");
