@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use super::event::TuiEvent;
 use super::sidebar;
 use super::theme;
+use super::views;
 
 // =============================================================================
 // View enum — which screen is active
@@ -72,6 +73,27 @@ pub struct PlatformStatus {
 }
 
 // =============================================================================
+// Conversation message for workspace chat
+// =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct ConversationMessage {
+    pub role: String,
+    pub content: String,
+}
+
+// =============================================================================
+// Workspace info for workspace list
+// =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceInfo {
+    pub name: String,
+    pub path: String,
+    pub active: bool,
+}
+
+// =============================================================================
 // TuiApp — main application state
 // =============================================================================
 
@@ -80,10 +102,19 @@ pub struct TuiApp {
     pub should_quit: bool,
     pub feed_messages: VecDeque<FeedMessage>,
     pub feed_scroll: usize,
+    pub feed_filter: Option<String>,
+    pub feed_selected: usize,
     pub platform_statuses: Vec<PlatformStatus>,
     pub nav_selected: usize,
     pub input_buffer: String,
     pub input_mode: bool,
+    pub uptime_secs: u64,
+    pub workspace_sidebar_open: bool,
+    pub workspaces: Vec<WorkspaceInfo>,
+    pub workspace_selected: usize,
+    pub conversation_messages: Vec<ConversationMessage>,
+    pub conversation_scroll: usize,
+    pub is_streaming: bool,
 }
 
 /// Maximum number of feed messages to keep in memory
@@ -96,10 +127,19 @@ impl TuiApp {
             should_quit: false,
             feed_messages: VecDeque::with_capacity(MAX_FEED_MESSAGES),
             feed_scroll: 0,
+            feed_filter: None,
+            feed_selected: 0,
             platform_statuses: Vec::new(),
             nav_selected: 0,
             input_buffer: String::new(),
             input_mode: false,
+            uptime_secs: 0,
+            workspace_sidebar_open: true,
+            workspaces: Vec::new(),
+            workspace_selected: 0,
+            conversation_messages: Vec::new(),
+            conversation_scroll: 0,
+            is_streaming: false,
         }
     }
 
@@ -112,7 +152,10 @@ impl TuiApp {
     pub fn handle_event(&mut self, event: TuiEvent) -> EventResult {
         match event {
             TuiEvent::Key(key) => self.handle_key(key),
-            TuiEvent::Tick => EventResult::Continue,
+            TuiEvent::Tick => {
+                self.uptime_secs += 1;
+                EventResult::Continue
+            }
             TuiEvent::PlatformMessage(msg) => {
                 self.add_feed_message(msg);
                 EventResult::Continue
@@ -204,6 +247,61 @@ impl TuiApp {
                     self.input_mode = true;
                 }
             }
+            KeyCode::Tab => {
+                // Toggle workspace sidebar
+                if matches!(self.view, View::Workspace { .. }) {
+                    self.workspace_sidebar_open = !self.workspace_sidebar_open;
+                }
+            }
+            KeyCode::Char('g') => {
+                // Scroll to top (feed or conversation)
+                match &self.view {
+                    View::Feed => self.feed_scroll = 0,
+                    View::Workspace { .. } => self.conversation_scroll = 0,
+                    _ => {}
+                }
+            }
+            KeyCode::Char('G') => {
+                // Scroll to bottom (feed or conversation)
+                match &self.view {
+                    View::Feed => {
+                        self.feed_scroll = self.feed_messages.len().saturating_sub(1);
+                    }
+                    View::Workspace { .. } => {
+                        self.conversation_scroll =
+                            self.conversation_messages.len().saturating_sub(1);
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::PageUp => {
+                match &self.view {
+                    View::Feed => {
+                        self.feed_scroll = self.feed_scroll.saturating_sub(10);
+                    }
+                    View::Workspace { .. } => {
+                        self.conversation_scroll = self.conversation_scroll.saturating_sub(10);
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::PageDown => {
+                match &self.view {
+                    View::Feed => {
+                        self.feed_scroll = self
+                            .feed_scroll
+                            .saturating_add(10)
+                            .min(self.feed_messages.len().saturating_sub(1));
+                    }
+                    View::Workspace { .. } => {
+                        self.conversation_scroll = self
+                            .conversation_scroll
+                            .saturating_add(10)
+                            .min(self.conversation_messages.len().saturating_sub(1));
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
 
@@ -223,6 +321,14 @@ impl TuiApp {
             5 => View::Logs,
             _ => return,
         };
+    }
+
+    /// Get the name of the currently active workspace, if any
+    pub fn active_workspace_name(&self) -> Option<&str> {
+        self.workspaces
+            .iter()
+            .find(|ws| ws.active)
+            .map(|ws| ws.name.as_str())
     }
 
     /// Add a message to the feed
@@ -270,24 +376,26 @@ impl TuiApp {
 
     /// Render the main content area based on current view
     fn render_main_content(&self, frame: &mut Frame, area: Rect) {
+        match &self.view {
+            View::Dashboard => views::dashboard::render_dashboard(frame, area, self),
+            View::Feed => views::feed::render_feed(frame, area, self),
+            View::Workspace { .. } => views::workspace::render_workspace(frame, area, self),
+            _ => self.render_placeholder(frame, area),
+        }
+    }
+
+    /// Render a placeholder for views not yet implemented
+    fn render_placeholder(&self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(format!(" {} ", self.view.label()))
             .border_style(Style::default().fg(theme::BORDER_COLOR));
 
         let content = match &self.view {
-            View::Dashboard => "Dashboard view - press D\n\nPlatform connections and statistics will appear here.",
-            View::Feed => "Feed view - press F\n\nCross-platform message feed will appear here.\nj/k to scroll, f to filter.",
-            View::Workspace { name } => {
-                if name.is_empty() {
-                    "Workspace view - press W\n\nSelect a workspace to start chatting with Claude.\nPress i to enter input mode."
-                } else {
-                    "Workspace: active\n\nConversation will appear here."
-                }
-            }
             View::Channels => "Channels view - press C\n\nChannel list and management will appear here.",
             View::Schedules => "Schedules view - press S\n\nSchedule list and management will appear here.",
             View::Logs => "Logs view - press L\n\nLog viewer with filtering will appear here.",
+            _ => "View not implemented.",
         };
 
         let paragraph = Paragraph::new(content)

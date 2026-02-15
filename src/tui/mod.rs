@@ -5,6 +5,7 @@ pub mod app;
 pub mod event;
 pub mod sidebar;
 pub mod theme;
+pub mod views;
 
 use anyhow::Result;
 use crossterm::{
