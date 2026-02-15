@@ -215,6 +215,24 @@ pub async fn start_webhook_server(
                 )
             }),
         )
+        .route(
+            "/static/feed.js",
+            get(|| async {
+                (
+                    [("content-type", "application/javascript")],
+                    include_str!("../static/feed.js"),
+                )
+            }),
+        )
+        .route(
+            "/static/chat.js",
+            get(|| async {
+                (
+                    [("content-type", "application/javascript")],
+                    include_str!("../static/chat.js"),
+                )
+            }),
+        )
         .nest("/admin", admin_routes)
         .nest("/setup", setup_routes)
         .nest("/login", login_routes)

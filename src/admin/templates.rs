@@ -257,6 +257,51 @@ pub struct SearchTemplate {
 }
 
 // =============================================================================
+// Feed & Chat Templates
+// =============================================================================
+
+/// Feed message row for initial page render
+#[derive(Clone)]
+pub struct FeedRow {
+    pub platform: String,
+    pub platform_color: String,
+    pub channel: String,
+    pub sender: String,
+    pub body: String,
+    pub timestamp: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin/feed.html")]
+pub struct FeedTemplate {
+    pub title: String,
+    pub messages: Vec<FeedRow>,
+    pub platforms: Vec<String>,
+}
+
+/// Chat history entry for initial page render
+#[derive(Clone)]
+pub struct ChatHistoryRow {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin/chat.html")]
+pub struct ChatTemplate {
+    pub title: String,
+    pub workspaces: Vec<String>,
+    pub history: Vec<ChatHistoryRow>,
+}
+
+/// Partial template for chat history loaded via HTMX/fetch
+#[derive(Template)]
+#[template(path = "admin/chat/history.html")]
+pub struct ChatHistoryPartialTemplate {
+    pub messages: Vec<ChatHistoryRow>,
+}
+
+// =============================================================================
 // Setup Wizard & Login Templates
 // =============================================================================
 
@@ -303,6 +348,9 @@ impl_into_response!(
     MarkdownTemplate,
     MatrixDirTemplate,
     SearchTemplate,
+    FeedTemplate,
+    ChatTemplate,
+    ChatHistoryPartialTemplate,
     SetupStep1Template,
     SetupStep2Template,
     SetupStep3Template,
@@ -448,5 +496,109 @@ mod tests {
         assert!(rendered.contains("2025-12-11T10:00:00"));
         assert!(rendered.contains("bg-red-50"));
         assert!(!rendered.contains("No Recent Errors"));
+    }
+
+    #[test]
+    fn test_feed_template_renders() {
+        let template = FeedTemplate {
+            title: "Feed Test".to_string(),
+            messages: vec![FeedRow {
+                platform: "matrix".to_string(),
+                platform_color: "blue".to_string(),
+                channel: "#test".to_string(),
+                sender: "alice".to_string(),
+                body: "Hello world".to_string(),
+                timestamp: "14:30".to_string(),
+            }],
+            platforms: vec!["matrix".to_string(), "telegram".to_string()],
+        };
+        let rendered = template
+            .render()
+            .expect("Feed template should render successfully");
+        assert!(rendered.contains("Feed Test"));
+        assert!(rendered.contains("Hello world"));
+        assert!(rendered.contains("alice"));
+        assert!(rendered.contains("matrix"));
+        assert!(rendered.contains("telegram"));
+        assert!(rendered.contains("feed.js"));
+    }
+
+    #[test]
+    fn test_feed_template_empty() {
+        let template = FeedTemplate {
+            title: "Feed".to_string(),
+            messages: vec![],
+            platforms: vec![],
+        };
+        let rendered = template
+            .render()
+            .expect("Empty feed template should render");
+        assert!(rendered.contains("Waiting for messages"));
+    }
+
+    #[test]
+    fn test_chat_template_renders() {
+        let template = ChatTemplate {
+            title: "Chat Test".to_string(),
+            workspaces: vec!["research".to_string(), "dev".to_string()],
+            history: vec![
+                ChatHistoryRow {
+                    role: "user".to_string(),
+                    content: "Hi Claude".to_string(),
+                },
+                ChatHistoryRow {
+                    role: "assistant".to_string(),
+                    content: "Hello!".to_string(),
+                },
+            ],
+        };
+        let rendered = template
+            .render()
+            .expect("Chat template should render successfully");
+        assert!(rendered.contains("Chat Test"));
+        assert!(rendered.contains("research"));
+        assert!(rendered.contains("dev"));
+        assert!(rendered.contains("Hi Claude"));
+        assert!(rendered.contains("Hello!"));
+        assert!(rendered.contains("chat.js"));
+    }
+
+    #[test]
+    fn test_chat_template_empty() {
+        let template = ChatTemplate {
+            title: "Chat".to_string(),
+            workspaces: vec![],
+            history: vec![],
+        };
+        let rendered = template
+            .render()
+            .expect("Empty chat template should render");
+        assert!(rendered.contains("Select a workspace"));
+    }
+
+    #[test]
+    fn test_chat_history_partial_renders() {
+        let template = ChatHistoryPartialTemplate {
+            messages: vec![ChatHistoryRow {
+                role: "user".to_string(),
+                content: "Test message".to_string(),
+            }],
+        };
+        let rendered = template
+            .render()
+            .expect("Chat history partial should render");
+        assert!(rendered.contains("Test message"));
+        assert!(rendered.contains("You"));
+    }
+
+    #[test]
+    fn test_chat_history_partial_empty() {
+        let template = ChatHistoryPartialTemplate {
+            messages: vec![],
+        };
+        let rendered = template
+            .render()
+            .expect("Empty chat history partial should render");
+        assert!(rendered.contains("Start chatting"));
     }
 }

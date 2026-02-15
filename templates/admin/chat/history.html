@@ -1,0 +1,9 @@
+{% for msg in messages %}
+<div class="chat-msg {% if msg.role == "user" %}text-cyan-700{% else %}text-green-700{% endif %}">
+    <span class="font-bold">{% if msg.role == "user" %}You{% else %}Claude{% endif %}:</span>
+    <span class="chat-content whitespace-pre-wrap">{{ msg.content }}</span>
+</div>
+{% endfor %}
+{% if messages.is_empty() %}
+<p id="chat-placeholder" class="text-gray-400 text-center py-8">Start chatting with Claude in this workspace.</p>
+{% endif %}

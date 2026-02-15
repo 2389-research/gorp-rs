@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6">
+    <div class="flex justify-between items-center mb-4">
+        <h1 class="text-2xl font-bold">Feed</h1>
+        <div class="flex items-center space-x-3">
+            <select id="platform-filter" class="text-sm border rounded px-2 py-1">
+                <option value="">All Platforms</option>
+                {% for platform in platforms %}
+                <option value="{{ platform }}">{{ platform }}</option>
+                {% endfor %}
+            </select>
+            <span id="connection-status" class="text-xs text-gray-400">Connecting...</span>
+        </div>
+    </div>
+
+    <div id="feed-messages" class="space-y-1 max-h-[70vh] overflow-y-auto font-mono text-sm">
+        {% for msg in messages %}
+        <div class="feed-msg px-2 py-1 rounded hover:bg-gray-50" data-platform="{{ msg.platform }}">
+            <span class="inline-block w-20 text-xs text-gray-400">{{ msg.timestamp }}</span>
+            <span class="font-semibold text-{{ msg.platform_color }}-600">[{{ msg.platform }}]</span>
+            <span class="text-gray-500">#{{ msg.channel }}</span>
+            <span class="font-bold">{{ msg.sender }}:</span>
+            <span>{{ msg.body }}</span>
+        </div>
+        {% endfor %}
+        {% if messages.is_empty() %}
+        <p class="text-gray-400 text-center py-8">Waiting for messages from connected platforms...</p>
+        {% endif %}
+    </div>
+</div>
+
+<script src="/static/ws.js"></script>
+<script src="/static/feed.js"></script>
+{% endblock %}

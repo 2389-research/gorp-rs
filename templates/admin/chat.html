@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-lg shadow p-6 flex flex-col" style="height: calc(100vh - 140px);">
+    <div class="flex justify-between items-center mb-4">
+        <h1 class="text-2xl font-bold">Chat</h1>
+        <div class="flex items-center space-x-3">
+            <select id="workspace-select" class="text-sm border rounded px-2 py-1">
+                <option value="">Select workspace...</option>
+                {% for ws in workspaces %}
+                <option value="{{ ws }}">{{ ws }}</option>
+                {% endfor %}
+            </select>
+            <span id="chat-status" class="text-xs text-gray-400">Ready</span>
+        </div>
+    </div>
+
+    <div id="chat-history" class="flex-1 overflow-y-auto space-y-3 mb-4 font-mono text-sm border rounded p-3 bg-gray-50">
+        {% for msg in history %}
+        <div class="chat-msg {% if msg.role == "user" %}text-cyan-700{% else %}text-green-700{% endif %}">
+            <span class="font-bold">{% if msg.role == "user" %}You{% else %}Claude{% endif %}:</span>
+            <span class="whitespace-pre-wrap">{{ msg.content }}</span>
+        </div>
+        {% endfor %}
+        {% if history.is_empty() %}
+        <p id="chat-placeholder" class="text-gray-400 text-center py-8">Select a workspace and start chatting.</p>
+        {% endif %}
+    </div>
+
+    <div id="streaming-indicator" class="hidden text-sm text-gray-500 mb-2">
+        <span class="animate-pulse">Claude is thinking...</span>
+        <button id="cancel-btn" class="ml-2 text-red-500 hover:text-red-700 text-xs">Cancel</button>
+    </div>
+
+    <form id="chat-form" class="flex space-x-2">
+        <input id="chat-input" type="text" placeholder="Type a message..."
+               class="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+               autocomplete="off" />
+        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                id="send-btn">Send</button>
+    </form>
+</div>
+
+<script src="/static/ws.js"></script>
+<script src="/static/chat.js"></script>
+{% endblock %}

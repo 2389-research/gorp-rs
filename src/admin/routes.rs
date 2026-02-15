@@ -15,11 +15,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::admin::templates::{
-    BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ConfigTemplate,
-    DashboardTemplate, DirectoryTemplate, ErrorEntry, FileTemplate, HealthTemplate,
-    LogViewerTemplate, MarkdownTemplate, MatrixDirTemplate, MatrixFileEntry, MessageEntry,
-    MessageHistoryTemplate, ScheduleFormTemplate, ScheduleRow, SchedulesTemplate, SearchResult,
-    SearchTemplate, ToastTemplate,
+    BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ChatHistoryPartialTemplate,
+    ChatHistoryRow, ChatTemplate, ConfigTemplate, DashboardTemplate, DirectoryTemplate, ErrorEntry,
+    FeedRow, FeedTemplate, FileTemplate, HealthTemplate, LogViewerTemplate, MarkdownTemplate,
+    MatrixDirTemplate, MatrixFileEntry, MessageEntry, MessageHistoryTemplate, ScheduleFormTemplate,
+    ScheduleRow, SchedulesTemplate, SearchResult, SearchTemplate, ToastTemplate,
 };
 use crate::config::Config;
 use crate::paths;
@@ -73,6 +73,9 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/browse/{*path}", get(browse_path))
         .route("/render/{*path}", get(render_markdown))
         .route("/search", get(search_workspace))
+        .route("/feed", get(feed_view))
+        .route("/chat", get(chat_view))
+        .route("/chat/{workspace}", get(chat_history))
 }
 
 async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
@@ -1925,5 +1928,187 @@ fn search_file_content(
         })
     } else {
         None
+    }
+}
+
+// =============================================================================
+// Feed View
+// =============================================================================
+
+async fn feed_view(State(state): State<AdminState>) -> FeedTemplate {
+    // Collect known platform names from config
+    let mut platforms = Vec::new();
+    if state.config.matrix.is_some() {
+        platforms.push("matrix".to_string());
+    }
+    if state.config.telegram.is_some() {
+        platforms.push("telegram".to_string());
+    }
+    if state.config.slack.is_some() {
+        platforms.push("slack".to_string());
+    }
+
+    // Recent messages from channel message logs
+    let messages = match state.session_store.list_all() {
+        Ok(channels) => {
+            let mut all_msgs = Vec::new();
+            for channel in channels.iter().take(10) {
+                let log_dir = Path::new(&channel.directory);
+                let log_path = log_dir.join("messages.log");
+                if log_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&log_path) {
+                        for line in content.lines().rev().take(5) {
+                            if let Some(row) =
+                                parse_log_line_to_feed_row(line, &channel.channel_name)
+                            {
+                                all_msgs.push(row);
+                            }
+                        }
+                    }
+                }
+            }
+            all_msgs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            all_msgs.truncate(50);
+            all_msgs
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to load feed messages");
+            Vec::new()
+        }
+    };
+
+    FeedTemplate {
+        title: "Feed - gorp".to_string(),
+        messages,
+        platforms,
+    }
+}
+
+/// Parse a log line into a FeedRow for initial page load
+fn parse_log_line_to_feed_row(line: &str, channel_name: &str) -> Option<FeedRow> {
+    if line.trim().is_empty() {
+        return None;
+    }
+
+    // Simple heuristic: extract timestamp if bracketed, sender before colon
+    let (timestamp, rest) = if line.starts_with('[') {
+        if let Some(end) = line.find(']') {
+            (line[1..end].to_string(), line[end + 1..].trim())
+        } else {
+            (String::new(), line)
+        }
+    } else {
+        (String::new(), line)
+    };
+
+    let (sender, body) = if let Some(colon_pos) = rest.find(':') {
+        let sender = rest[..colon_pos].trim().to_string();
+        let body = rest[colon_pos + 1..].trim().to_string();
+        (sender, body)
+    } else {
+        ("system".to_string(), rest.to_string())
+    };
+
+    Some(FeedRow {
+        platform: "matrix".to_string(), // Default; real messages come via WebSocket
+        platform_color: "blue".to_string(),
+        channel: channel_name.to_string(),
+        sender,
+        body,
+        timestamp,
+    })
+}
+
+// =============================================================================
+// Chat View
+// =============================================================================
+
+async fn chat_view(State(state): State<AdminState>) -> ChatTemplate {
+    // List available workspaces from the workspace directory
+    let workspace_dir = &state.config.workspace.path;
+    let workspaces = list_workspace_names(workspace_dir);
+
+    ChatTemplate {
+        title: "Chat - gorp".to_string(),
+        workspaces,
+        history: Vec::new(),
+    }
+}
+
+/// Load chat history for a specific workspace (returns HTML partial)
+async fn chat_history(
+    State(state): State<AdminState>,
+    AxumPath(workspace): AxumPath<String>,
+) -> ChatHistoryPartialTemplate {
+    // Load conversation history from workspace's session file
+    let workspace_dir = &state.config.workspace.path;
+    let history_path = Path::new(workspace_dir)
+        .join(&workspace)
+        .join(".gorp")
+        .join("conversation.jsonl");
+
+    let messages = if history_path.exists() {
+        match std::fs::read_to_string(&history_path) {
+            Ok(content) => parse_conversation_history(&content),
+            Err(e) => {
+                tracing::error!(error = %e, workspace = %workspace, "Failed to read chat history");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    ChatHistoryPartialTemplate { messages }
+}
+
+/// Parse JSONL conversation history into chat rows
+fn parse_conversation_history(content: &str) -> Vec<ChatHistoryRow> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+            let role = parsed.get("role")?.as_str()?.to_string();
+            let content = parsed.get("content")?.as_str()?.to_string();
+            if role == "user" || role == "assistant" {
+                Some(ChatHistoryRow { role, content })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// List workspace directory names
+fn list_workspace_names(workspace_dir: &str) -> Vec<String> {
+    let path = Path::new(workspace_dir);
+    if !path.exists() {
+        return Vec::new();
+    }
+    match std::fs::read_dir(path) {
+        Ok(entries) => {
+            let mut names: Vec<String> = entries
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    if entry.file_type().ok()?.is_dir() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        // Skip hidden directories
+                        if !name.starts_with('.') {
+                            Some(name)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            names.sort();
+            names
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to list workspaces");
+            Vec::new()
+        }
     }
 }
