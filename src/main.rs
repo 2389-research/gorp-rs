@@ -1127,6 +1127,7 @@ async fn run_start() -> Result<()> {
         tracing::info!("Matrix platform registered");
     }
 
+    #[cfg(feature = "telegram")]
     if let Some(ref tg_config) = config_arc.telegram {
         match gorp::platform::TelegramPlatform::new(tg_config.clone()).await {
             Ok(telegram_platform) => {
@@ -1140,6 +1141,12 @@ async fn run_start() -> Result<()> {
         }
     }
 
+    #[cfg(not(feature = "telegram"))]
+    if config_arc.telegram.is_some() {
+        tracing::warn!("Telegram config present but binary compiled without 'telegram' feature");
+    }
+
+    #[cfg(feature = "slack")]
     if let Some(ref slack_config) = config_arc.slack {
         match gorp::platform::SlackPlatform::new(slack_config.clone()).await {
             Ok(slack_platform) => {
@@ -1151,6 +1158,11 @@ async fn run_start() -> Result<()> {
                 anyhow::bail!("Slack platform initialization failed: {}", e);
             }
         }
+    }
+
+    #[cfg(not(feature = "slack"))]
+    if config_arc.slack.is_some() {
+        tracing::warn!("Slack config present but binary compiled without 'slack' feature");
     }
 
     if config_arc.whatsapp.is_some() {

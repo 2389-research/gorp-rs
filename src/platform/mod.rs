@@ -3,7 +3,9 @@
 
 pub mod matrix;
 pub mod registry;
+#[cfg(feature = "slack")]
 pub mod slack;
+#[cfg(feature = "telegram")]
 pub mod telegram;
 
 // Re-export registry types
@@ -22,5 +24,7 @@ pub use matrix::{
     MatrixPlatform,
 };
 
+#[cfg(feature = "slack")]
 pub use slack::{SlackChannel, SlackPlatform};
+#[cfg(feature = "telegram")]
 pub use telegram::{TelegramChannel, TelegramPlatform};
