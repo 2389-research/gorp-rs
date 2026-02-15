@@ -3,7 +3,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use std::collections::VecDeque;
 
 use super::event::TuiEvent;
@@ -94,6 +94,43 @@ pub struct WorkspaceInfo {
 }
 
 // =============================================================================
+// Schedule info for schedules view
+// =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct ScheduleInfo {
+    pub id: String,
+    pub channel_name: String,
+    pub prompt: String,
+    pub next_run: String,
+    pub status: String,
+}
+
+// =============================================================================
+// Log entry for logs view
+// =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+}
+
+// =============================================================================
+// Chat message for platform channel chat view
+// =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub platform_id: String,
+    pub sender: String,
+    pub body: String,
+    pub timestamp: i64,
+}
+
+// =============================================================================
 // TuiApp — main application state
 // =============================================================================
 
@@ -115,10 +152,22 @@ pub struct TuiApp {
     pub conversation_messages: Vec<ConversationMessage>,
     pub conversation_scroll: usize,
     pub is_streaming: bool,
+    pub schedules: Vec<ScheduleInfo>,
+    pub schedule_selected: usize,
+    pub log_entries: VecDeque<LogEntry>,
+    pub log_scroll: usize,
+    pub log_level_filter: String,
+    pub log_workspace_filter: Option<String>,
+    pub chat_messages: Vec<ChatMessage>,
+    pub chat_scroll: usize,
+    pub chat_channel_name: Option<String>,
 }
 
 /// Maximum number of feed messages to keep in memory
 const MAX_FEED_MESSAGES: usize = 500;
+
+/// Maximum number of log entries to keep in memory
+const MAX_LOG_ENTRIES: usize = 1000;
 
 impl TuiApp {
     pub fn new() -> Self {
@@ -140,6 +189,15 @@ impl TuiApp {
             conversation_messages: Vec::new(),
             conversation_scroll: 0,
             is_streaming: false,
+            schedules: Vec::new(),
+            schedule_selected: 0,
+            log_entries: VecDeque::with_capacity(MAX_LOG_ENTRIES),
+            log_scroll: 0,
+            log_level_filter: "INFO".to_string(),
+            log_workspace_filter: None,
+            chat_messages: Vec::new(),
+            chat_scroll: 0,
+            chat_channel_name: None,
         }
     }
 
@@ -243,8 +301,28 @@ impl TuiApp {
             }
             KeyCode::Char('i') => {
                 // Enter input mode (for workspace/chat views)
-                if matches!(self.view, View::Workspace { .. }) {
+                if matches!(self.view, View::Workspace { .. } | View::Channels) {
                     self.input_mode = true;
+                }
+            }
+            KeyCode::Char('1') => {
+                if matches!(self.view, View::Logs) {
+                    self.log_level_filter = "ERROR".to_string();
+                }
+            }
+            KeyCode::Char('2') => {
+                if matches!(self.view, View::Logs) {
+                    self.log_level_filter = "WARN".to_string();
+                }
+            }
+            KeyCode::Char('3') => {
+                if matches!(self.view, View::Logs) {
+                    self.log_level_filter = "INFO".to_string();
+                }
+            }
+            KeyCode::Char('4') => {
+                if matches!(self.view, View::Logs) {
+                    self.log_level_filter = "DEBUG".to_string();
                 }
             }
             KeyCode::Tab => {
@@ -254,15 +332,17 @@ impl TuiApp {
                 }
             }
             KeyCode::Char('g') => {
-                // Scroll to top (feed or conversation)
+                // Scroll to top
                 match &self.view {
                     View::Feed => self.feed_scroll = 0,
                     View::Workspace { .. } => self.conversation_scroll = 0,
+                    View::Channels => self.chat_scroll = 0,
+                    View::Logs => self.log_scroll = 0,
                     _ => {}
                 }
             }
             KeyCode::Char('G') => {
-                // Scroll to bottom (feed or conversation)
+                // Scroll to bottom
                 match &self.view {
                     View::Feed => {
                         self.feed_scroll = self.feed_messages.len().saturating_sub(1);
@@ -270,6 +350,12 @@ impl TuiApp {
                     View::Workspace { .. } => {
                         self.conversation_scroll =
                             self.conversation_messages.len().saturating_sub(1);
+                    }
+                    View::Channels => {
+                        self.chat_scroll = self.chat_messages.len().saturating_sub(1);
+                    }
+                    View::Logs => {
+                        self.log_scroll = self.log_entries.len().saturating_sub(1);
                     }
                     _ => {}
                 }
@@ -281,6 +367,12 @@ impl TuiApp {
                     }
                     View::Workspace { .. } => {
                         self.conversation_scroll = self.conversation_scroll.saturating_sub(10);
+                    }
+                    View::Channels => {
+                        self.chat_scroll = self.chat_scroll.saturating_sub(10);
+                    }
+                    View::Logs => {
+                        self.log_scroll = self.log_scroll.saturating_sub(10);
                     }
                     _ => {}
                 }
@@ -298,6 +390,18 @@ impl TuiApp {
                             .conversation_scroll
                             .saturating_add(10)
                             .min(self.conversation_messages.len().saturating_sub(1));
+                    }
+                    View::Channels => {
+                        self.chat_scroll = self
+                            .chat_scroll
+                            .saturating_add(10)
+                            .min(self.chat_messages.len().saturating_sub(1));
+                    }
+                    View::Logs => {
+                        self.log_scroll = self
+                            .log_scroll
+                            .saturating_add(10)
+                            .min(self.log_entries.len().saturating_sub(1));
                     }
                     _ => {}
                 }
@@ -380,29 +484,10 @@ impl TuiApp {
             View::Dashboard => views::dashboard::render_dashboard(frame, area, self),
             View::Feed => views::feed::render_feed(frame, area, self),
             View::Workspace { .. } => views::workspace::render_workspace(frame, area, self),
-            _ => self.render_placeholder(frame, area),
+            View::Channels => views::chat::render_chat(frame, area, self),
+            View::Schedules => views::schedules::render_schedules(frame, area, self),
+            View::Logs => views::logs::render_logs(frame, area, self),
         }
-    }
-
-    /// Render a placeholder for views not yet implemented
-    fn render_placeholder(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {} ", self.view.label()))
-            .border_style(Style::default().fg(theme::BORDER_COLOR));
-
-        let content = match &self.view {
-            View::Channels => "Channels view - press C\n\nChannel list and management will appear here.",
-            View::Schedules => "Schedules view - press S\n\nSchedule list and management will appear here.",
-            View::Logs => "Logs view - press L\n\nLog viewer with filtering will appear here.",
-            _ => "View not implemented.",
-        };
-
-        let paragraph = Paragraph::new(content)
-            .block(block)
-            .style(Style::default().fg(theme::TEXT_COLOR));
-
-        frame.render_widget(paragraph, area);
     }
 
     /// Render the bottom status bar
