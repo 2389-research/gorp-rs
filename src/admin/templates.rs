@@ -297,6 +297,27 @@ pub struct GatewayConfigTemplate {
 }
 
 // =============================================================================
+// Workspace Templates
+// =============================================================================
+
+/// Workspace row data for list view
+#[derive(Clone)]
+pub struct WorkspaceRow {
+    pub name: String,
+    pub path: String,
+    pub has_channel: bool,
+    pub file_count: usize,
+    pub size_display: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin/workspaces.html")]
+pub struct WorkspacesTemplate {
+    pub title: String,
+    pub workspaces: Vec<WorkspaceRow>,
+}
+
+// =============================================================================
 // Feed & Chat Templates
 // =============================================================================
 
@@ -388,6 +409,7 @@ impl_into_response!(
     MarkdownTemplate,
     MatrixDirTemplate,
     SearchTemplate,
+    WorkspacesTemplate,
     GatewaysTemplate,
     GatewayConfigTemplate,
     FeedTemplate,
@@ -642,6 +664,51 @@ mod tests {
             .render()
             .expect("Empty chat history partial should render");
         assert!(rendered.contains("Start chatting"));
+    }
+
+    #[test]
+    fn test_workspaces_template_renders() {
+        let template = WorkspacesTemplate {
+            title: "Workspaces Test".to_string(),
+            workspaces: vec![
+                WorkspaceRow {
+                    name: "research".to_string(),
+                    path: "/home/test/workspaces/research".to_string(),
+                    has_channel: true,
+                    file_count: 12,
+                    size_display: "4.50 KB".to_string(),
+                },
+                WorkspaceRow {
+                    name: "orphan-ws".to_string(),
+                    path: "/home/test/workspaces/orphan-ws".to_string(),
+                    has_channel: false,
+                    file_count: 3,
+                    size_display: "1.20 KB".to_string(),
+                },
+            ],
+        };
+        let rendered = template
+            .render()
+            .expect("Workspaces template should render");
+        assert!(rendered.contains("Workspaces Test"));
+        assert!(rendered.contains("research"));
+        assert!(rendered.contains("orphan-ws"));
+        assert!(rendered.contains("linked"));
+        assert!(rendered.contains("orphan"));
+        assert!(rendered.contains("2 workspaces"));
+    }
+
+    #[test]
+    fn test_workspaces_template_empty() {
+        let template = WorkspacesTemplate {
+            title: "Workspaces".to_string(),
+            workspaces: vec![],
+        };
+        let rendered = template
+            .render()
+            .expect("Empty workspaces template should render");
+        assert!(rendered.contains("No workspaces found"));
+        assert!(rendered.contains("0 workspaces"));
     }
 
     #[test]

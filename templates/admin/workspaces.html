@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h1 class="text-2xl font-bold text-gray-800">Workspaces</h1>
+        <span class="text-sm text-gray-500">{{ workspaces.len() }} workspace{% if workspaces.len() != 1 %}s{% endif %}</span>
+    </div>
+
+    {% if workspaces.is_empty() %}
+    <div class="bg-white rounded-lg shadow p-8 text-center text-gray-500">
+        <p class="text-lg mb-2">No workspaces found</p>
+        <p class="text-sm">Create a channel to get started. Each channel gets its own workspace directory.</p>
+    </div>
+    {% else %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for ws in workspaces %}
+        <div class="bg-white rounded-lg shadow p-5 hover:shadow-md transition-shadow">
+            <div class="flex justify-between items-start mb-3">
+                <h2 class="text-lg font-semibold text-gray-800">{{ ws.name }}</h2>
+                {% if ws.has_channel %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">linked</span>
+                {% else %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">orphan</span>
+                {% endif %}
+            </div>
+
+            <p class="text-xs text-gray-400 font-mono mb-3 truncate" title="{{ ws.path }}">{{ ws.path }}</p>
+
+            <div class="grid grid-cols-2 gap-2 text-sm text-gray-600 mb-3">
+                <div>
+                    <span class="text-gray-400">Files:</span> {{ ws.file_count }}
+                </div>
+                <div>
+                    <span class="text-gray-400">Size:</span> {{ ws.size_display }}
+                </div>
+            </div>
+
+            <div class="flex space-x-2 text-sm">
+                <a href="/admin/browse/{{ ws.name }}" class="text-blue-600 hover:text-blue-800">Browse</a>
+                <a href="/admin/chat" class="text-blue-600 hover:text-blue-800">Chat</a>
+                {% if ws.has_channel %}
+                <a href="/admin/channels/{{ ws.name }}" class="text-blue-600 hover:text-blue-800">Channel</a>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

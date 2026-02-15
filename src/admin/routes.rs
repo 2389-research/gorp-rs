@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use crate::admin::templates::{
     BrowseEntry, ChannelDetailTemplate, ChannelListTemplate, ChannelRow, ChatHistoryPartialTemplate,
-    ChatHistoryRow, ChatTemplate, ConfigField, ConfigTemplate, DashboardTemplate,
+    ChatHistoryRow, ChatTemplate, ConfigField, ConfigTemplate, DashboardTemplate, WorkspaceRow,
     DirectoryTemplate, ErrorEntry, FeedRow, FeedTemplate, FileTemplate, GatewayConfigTemplate,
-    GatewayRow, GatewaysTemplate, HealthTemplate, LogViewerTemplate, MarkdownTemplate,
+    GatewayRow, GatewaysTemplate, HealthTemplate, LogViewerTemplate, MarkdownTemplate, WorkspacesTemplate,
     MatrixDirTemplate, MatrixFileEntry, MessageEntry, MessageHistoryTemplate, ScheduleFormTemplate,
     ScheduleRow, SchedulesTemplate, SearchResult, SearchTemplate, ToastTemplate,
 };
@@ -75,6 +75,7 @@ pub fn admin_router() -> Router<AdminState> {
         .route("/render/{*path}", get(render_markdown))
         .route("/search", get(search_workspace))
         .route("/feed", get(feed_view))
+        .route("/workspaces", get(workspaces_list))
         .route("/chat", get(chat_view))
         .route("/chat/{workspace}", get(chat_history))
         .route("/gateways", get(gateways_overview))
@@ -1934,6 +1935,65 @@ fn search_file_content(
         })
     } else {
         None
+    }
+}
+
+// =============================================================================
+// Workspace List
+// =============================================================================
+
+async fn workspaces_list(State(state): State<AdminState>) -> WorkspacesTemplate {
+    let workspace_dir = &state.config.workspace.path;
+    let workspace_names = list_workspace_names(workspace_dir);
+
+    // Get channel names for "linked" status
+    let channel_names: std::collections::HashSet<String> = state
+        .session_store
+        .list_all()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.channel_name)
+        .collect();
+
+    let workspaces: Vec<WorkspaceRow> = workspace_names
+        .into_iter()
+        .map(|name| {
+            let path = Path::new(workspace_dir).join(&name);
+            let has_channel = channel_names.contains(&name);
+
+            // Count files and total size (non-recursive, top-level only)
+            let (file_count, total_size) = match std::fs::read_dir(&path) {
+                Ok(entries) => {
+                    let mut count = 0usize;
+                    let mut size = 0u64;
+                    for entry in entries.flatten() {
+                        if let Ok(meta) = entry.metadata() {
+                            if meta.is_file() {
+                                count += 1;
+                                size += meta.len();
+                            } else if meta.is_dir() {
+                                count += 1; // Count dirs as entries too
+                            }
+                        }
+                    }
+                    (count, size)
+                }
+                Err(_) => (0, 0),
+            };
+
+            WorkspaceRow {
+                path: path.to_string_lossy().to_string(),
+                name,
+                has_channel,
+                file_count,
+                size_display: format_file_size(total_size),
+            }
+        })
+        .collect();
+
+    WorkspacesTemplate {
+        title: "Workspaces - gorp".to_string(),
+        workspaces,
     }
 }
 

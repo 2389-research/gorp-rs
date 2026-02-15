@@ -8,20 +8,41 @@
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
-    <nav class="bg-gray-800 text-white p-4">
+    <nav class="bg-gray-800 text-white px-4 py-3">
         <div class="container mx-auto flex justify-between items-center">
-            <a href="/admin" class="text-xl font-bold">gorp</a>
-            <div class="space-x-4">
-                <a href="/admin" class="hover:text-gray-300">Dashboard</a>
-                <a href="/admin/feed" class="hover:text-gray-300">Feed</a>
-                <a href="/admin/chat" class="hover:text-gray-300">Chat</a>
-                <a href="/admin/gateways" class="hover:text-gray-300">Gateways</a>
-                <a href="/admin/channels" class="hover:text-gray-300">Channels</a>
-                <a href="/admin/schedules" class="hover:text-gray-300">Schedules</a>
-                <a href="/admin/browse" class="hover:text-gray-300">Browse</a>
-                <a href="/admin/search" class="hover:text-gray-300">Search</a>
-                <a href="/admin/config" class="hover:text-gray-300">Config</a>
-                <a href="/admin/health" class="hover:text-gray-300">Health</a>
+            <a href="/admin" class="text-xl font-bold tracking-tight">gorp</a>
+            <div class="flex items-center space-x-6 text-sm">
+                <!-- Monitor -->
+                <div class="flex items-center space-x-3">
+                    <span class="text-gray-500 uppercase text-xs font-semibold tracking-wider">Monitor</span>
+                    <a href="/admin" class="hover:text-gray-300">Dashboard</a>
+                    <a href="/admin/feed" class="hover:text-gray-300">Feed</a>
+                    <a href="/admin/messages" class="hover:text-gray-300">Messages</a>
+                </div>
+                <span class="text-gray-600">|</span>
+                <!-- Interact -->
+                <div class="flex items-center space-x-3">
+                    <span class="text-gray-500 uppercase text-xs font-semibold tracking-wider">Interact</span>
+                    <a href="/admin/chat" class="hover:text-gray-300">Chat</a>
+                    <a href="/admin/workspaces" class="hover:text-gray-300">Workspaces</a>
+                </div>
+                <span class="text-gray-600">|</span>
+                <!-- Manage -->
+                <div class="flex items-center space-x-3">
+                    <span class="text-gray-500 uppercase text-xs font-semibold tracking-wider">Manage</span>
+                    <a href="/admin/gateways" class="hover:text-gray-300">Gateways</a>
+                    <a href="/admin/schedules" class="hover:text-gray-300">Schedules</a>
+                    <a href="/admin/channels" class="hover:text-gray-300">Channels</a>
+                </div>
+                <span class="text-gray-600">|</span>
+                <!-- System -->
+                <div class="flex items-center space-x-3">
+                    <span class="text-gray-500 uppercase text-xs font-semibold tracking-wider">System</span>
+                    <a href="/admin/config" class="hover:text-gray-300">Config</a>
+                    <a href="/admin/browse" class="hover:text-gray-300">Browse</a>
+                    <a href="/admin/search" class="hover:text-gray-300">Search</a>
+                    <a href="/admin/health" class="hover:text-gray-300">Health</a>
+                </div>
             </div>
         </div>
     </nav>
@@ -31,5 +52,6 @@
     </main>
 
     <div id="toast" class="fixed bottom-4 right-4"></div>
+    <script src="/static/ws.js"></script>
 </body>
 </html>
