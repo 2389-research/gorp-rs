@@ -1,7 +1,7 @@
 // ABOUTME: TUI event system merging keyboard, tick, and platform events
 // ABOUTME: Three async event sources feed into a single mpsc channel
 
-use crossterm::event::{self, Event, KeyEvent};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -53,7 +53,7 @@ fn spawn_keyboard_task(tx: mpsc::Sender<TuiEvent>) {
             .await;
 
             match event {
-                Ok(Some(Event::Key(key))) => {
+                Ok(Some(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                     if tx.send(TuiEvent::Key(key)).await.is_err() {
                         break;
                     }

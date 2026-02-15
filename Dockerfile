@@ -3,7 +3,7 @@
 #
 # Build variants:
 #   docker build .                                        # default: matrix + admin (headless server)
-#   docker build --build-arg FEATURES="all" .             # everything (telegram, slack, coven, etc.)
+#   docker build --build-arg FEATURES="matrix,telegram,slack,admin,coven" .  # all server features
 #   docker build --build-arg FEATURES="matrix,coven" .    # matrix + coven gateway
 #   docker build --build-arg FEATURES="telegram,admin" .  # telegram + admin panel
 #   docker build --build-arg INSTALL_NODE=false .         # skip Node.js (no ACP backend)

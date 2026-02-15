@@ -131,7 +131,8 @@ fn render_filter_bar(frame: &mut Frame, area: Rect, app: &TuiApp) {
     frame.render_widget(status, area);
 }
 
-/// Truncate message body for display, collapsing newlines
+/// Truncate message body for display, collapsing newlines.
+/// Uses char boundaries to avoid panicking on multi-byte UTF-8.
 fn truncate_body(body: &str, max_len: usize) -> String {
     // Collapse newlines into spaces for single-line display
     let collapsed: String = body
@@ -142,7 +143,9 @@ fn truncate_body(body: &str, max_len: usize) -> String {
     if collapsed.len() <= max_len {
         collapsed
     } else {
-        format!("{}...", &collapsed[..max_len.saturating_sub(3)])
+        let target = max_len.saturating_sub(3);
+        let boundary = collapsed.floor_char_boundary(target);
+        format!("{}...", &collapsed[..boundary])
     }
 }
 

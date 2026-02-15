@@ -152,7 +152,8 @@ fn level_color(level: &str) -> Color {
     }
 }
 
-/// Truncate a target string (e.g. module path) for column display
+/// Truncate a target string (e.g. module path) for column display.
+/// Uses char boundaries to avoid panicking on multi-byte UTF-8.
 fn truncate_target(target: &str, max_len: usize) -> String {
     if target.len() <= max_len {
         target.to_string()
@@ -164,11 +165,14 @@ fn truncate_target(target: &str, max_len: usize) -> String {
                 return suffix.to_string();
             }
         }
-        format!("{}...", &target[..max_len.saturating_sub(3)])
+        let target_len = max_len.saturating_sub(3);
+        let boundary = target.floor_char_boundary(target_len);
+        format!("{}...", &target[..boundary])
     }
 }
 
-/// Truncate a log message for single-line display
+/// Truncate a log message for single-line display.
+/// Uses char boundaries to avoid panicking on multi-byte UTF-8.
 fn truncate_message(msg: &str, max_len: usize) -> String {
     // Collapse newlines into spaces
     let collapsed: String = msg
@@ -179,7 +183,9 @@ fn truncate_message(msg: &str, max_len: usize) -> String {
     if collapsed.len() <= max_len {
         collapsed
     } else {
-        format!("{}...", &collapsed[..max_len.saturating_sub(3)])
+        let target = max_len.saturating_sub(3);
+        let boundary = collapsed.floor_char_boundary(target);
+        format!("{}...", &collapsed[..boundary])
     }
 }
 

@@ -93,6 +93,19 @@ pub struct ChatErrorData {
     pub error: String,
 }
 
+/// Extract the channel identifier from a server message for subscription filtering.
+/// Returns the platform name for feed/status messages, or workspace for chat messages.
+fn message_channel(msg: &ServerMessage) -> Option<&str> {
+    match msg {
+        ServerMessage::FeedMessage { data, .. } => Some(&data.platform),
+        ServerMessage::StatusPlatform { data } => Some(&data.platform),
+        ServerMessage::ChatChunk { data } => Some(&data.workspace),
+        ServerMessage::ChatToolUse { data } => Some(&data.workspace),
+        ServerMessage::ChatComplete { data } => Some(&data.workspace),
+        ServerMessage::ChatError { data } => Some(&data.workspace),
+    }
+}
+
 // =============================================================================
 // WebSocket Hub — broadcasts to connected clients
 // =============================================================================
@@ -152,11 +165,14 @@ async fn handle_ws(socket: WebSocket, state: AdminState) {
     let hub = state.ws_hub.clone();
     let mut broadcast_rx = hub.subscribe();
 
+    // Writer task needs to check subscriptions for broadcast filtering
+    let writer_subs = Arc::clone(&subscriptions);
+
     // Writer task: sends messages to the client
     let writer_task = tokio::spawn(async move {
         loop {
             tokio::select! {
-                // Direct messages (from command handling)
+                // Direct messages (from command handling) — always delivered
                 Some(msg) = rx.recv() => {
                     let json = match serde_json::to_string(&msg) {
                         Ok(j) => j,
@@ -169,8 +185,19 @@ async fn handle_ws(socket: WebSocket, state: AdminState) {
                         break;
                     }
                 }
-                // Broadcast messages (from hub)
+                // Broadcast messages — filtered by client subscriptions
                 Ok(msg) = broadcast_rx.recv() => {
+                    // Check if client has subscriptions; if so, filter
+                    let subs = writer_subs.lock().await;
+                    if !subs.is_empty() {
+                        if let Some(channel) = message_channel(&msg) {
+                            if !subs.contains(channel) {
+                                continue;
+                            }
+                        }
+                    }
+                    drop(subs);
+
                     let json = match serde_json::to_string(&msg) {
                         Ok(j) => j,
                         Err(e) => {

@@ -145,7 +145,8 @@ fn short_status(status: &str) -> &str {
     }
 }
 
-/// Truncate a prompt to a max length for table display
+/// Truncate a prompt to a max length for table display.
+/// Uses char boundaries to avoid panicking on multi-byte UTF-8.
 fn truncate_prompt(prompt: &str, max_len: usize) -> String {
     // Collapse whitespace for single-line display
     let collapsed: String = prompt
@@ -157,7 +158,9 @@ fn truncate_prompt(prompt: &str, max_len: usize) -> String {
     if trimmed.len() <= max_len {
         trimmed.to_string()
     } else {
-        format!("{}...", &trimmed[..max_len.saturating_sub(3)])
+        let target = max_len.saturating_sub(3);
+        let boundary = trimmed.floor_char_boundary(target);
+        format!("{}...", &trimmed[..boundary])
     }
 }
 

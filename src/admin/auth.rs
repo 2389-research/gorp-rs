@@ -251,28 +251,27 @@ pub async fn setup_guard_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    // If setup is complete or no auth config system is used, pass through
-    if let Some(ref auth_config) = state.auth_config {
-        if auth_config.setup_complete {
-            return next.run(request).await;
-        }
-    } else {
-        // No auth config at all — setup hasn't been run
-        let path = request.uri().path();
+    // Check whether setup has been completed
+    let setup_complete = state
+        .auth_config
+        .as_ref()
+        .map_or(false, |c| c.setup_complete);
 
-        // Allow setup routes and health checks through
-        if path.starts_with("/setup")
-            || path.starts_with("/admin/health")
-            || path.starts_with("/static")
-        {
-            return next.run(request).await;
-        }
-
-        // Redirect everything else to setup
-        return Redirect::temporary("/setup").into_response();
+    if setup_complete {
+        return next.run(request).await;
     }
 
-    next.run(request).await
+    // Setup is not complete — allow setup routes and health checks through
+    let path = request.uri().path();
+    if path.starts_with("/setup")
+        || path.starts_with("/admin/health")
+        || path.starts_with("/static")
+    {
+        return next.run(request).await;
+    }
+
+    // Redirect everything else to setup
+    Redirect::temporary("/setup").into_response()
 }
 
 // =============================================================================

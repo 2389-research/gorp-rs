@@ -161,7 +161,8 @@ impl CovenProvider {
 
         // Use the warm session manager's registry to create the handle
         // This is synchronous and returns immediately — the backend worker starts in background
-        let mgr = self.warm_manager.blocking_read();
+        // block_in_place is required because this sync fn is called from async context
+        let mgr = tokio::task::block_in_place(|| self.warm_manager.blocking_read());
         let warm_config = mgr.config();
         let registry = mgr.registry();
         drop(mgr);
@@ -179,7 +180,8 @@ impl CovenProvider {
         use gorp_agent::backends::mux::{MuxBackend, MuxConfig};
         use std::path::PathBuf;
 
-        let mgr = self.warm_manager.blocking_read();
+        // block_in_place is required because this sync fn is called from async context
+        let mgr = tokio::task::block_in_place(|| self.warm_manager.blocking_read());
         let warm_config = mgr.config();
         drop(mgr);
 

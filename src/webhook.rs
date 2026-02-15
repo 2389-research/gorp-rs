@@ -189,10 +189,18 @@ pub async fn start_webhook_server(
     #[cfg(feature = "admin")]
     let login_routes = login_router().with_state(admin_state.clone());
 
-    // WebSocket route (authenticated via session layer, not auth middleware)
+    // WebSocket route (authenticated via same auth middleware as admin routes)
     #[cfg(feature = "admin")]
     let ws_routes = Router::new()
         .route("/admin/ws", get(ws_handler))
+        .layer(middleware::from_fn_with_state(
+            admin_state.clone(),
+            auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            admin_state.clone(),
+            setup_guard_middleware,
+        ))
         .with_state(admin_state.clone());
 
     // Session layer for cookie-based authentication

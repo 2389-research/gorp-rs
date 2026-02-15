@@ -146,6 +146,8 @@ pub struct TuiApp {
     pub input_buffer: String,
     pub input_mode: bool,
     pub uptime_secs: u64,
+    /// Tick counter for uptime tracking (10 ticks = 1 second at 100ms interval)
+    pub tick_count: u32,
     pub workspace_sidebar_open: bool,
     pub workspaces: Vec<WorkspaceInfo>,
     pub workspace_selected: usize,
@@ -183,6 +185,7 @@ impl TuiApp {
             input_buffer: String::new(),
             input_mode: false,
             uptime_secs: 0,
+            tick_count: 0,
             workspace_sidebar_open: true,
             workspaces: Vec::new(),
             workspace_selected: 0,
@@ -211,7 +214,12 @@ impl TuiApp {
         match event {
             TuiEvent::Key(key) => self.handle_key(key),
             TuiEvent::Tick => {
-                self.uptime_secs += 1;
+                self.tick_count += 1;
+                // Tick interval is 100ms, so 10 ticks = 1 second
+                if self.tick_count >= 10 {
+                    self.tick_count = 0;
+                    self.uptime_secs += 1;
+                }
                 EventResult::Continue
             }
             TuiEvent::PlatformMessage(msg) => {

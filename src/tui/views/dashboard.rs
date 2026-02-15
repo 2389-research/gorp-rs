@@ -177,12 +177,15 @@ fn format_uptime(secs: u64) -> String {
     }
 }
 
-/// Truncate a string to a maximum length, adding "..." if truncated
+/// Truncate a string to a maximum display length, adding "..." if truncated.
+/// Uses char boundaries to avoid panicking on multi-byte UTF-8.
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let target = max_len.saturating_sub(3);
+        let boundary = s.floor_char_boundary(target);
+        format!("{}...", &s[..boundary])
     }
 }
 
