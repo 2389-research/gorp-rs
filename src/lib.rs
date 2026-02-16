@@ -16,6 +16,9 @@ pub mod tui;
 #[cfg(feature = "coven")]
 pub mod coven;
 
+// Core message bus types
+pub mod bus;
+
 // Platform abstraction layer
 pub mod platform;
 
