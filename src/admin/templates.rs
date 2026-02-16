@@ -55,7 +55,7 @@ pub struct ToastTemplate {
     pub is_error: bool,
 }
 
-/// Channel row data for list view
+/// Session row data for list view
 #[derive(Clone)]
 pub struct ChannelRow {
     pub name: String,
@@ -429,8 +429,8 @@ mod tests {
         assert!(rendered.contains("Test Dashboard"));
         assert!(rendered.contains("gorp"));
         assert!(rendered.contains("Configuration"));
-        assert!(rendered.contains("Total Channels"));
-        assert!(rendered.contains("Active Channels"));
+        assert!(rendered.contains("Total Sessions"));
+        assert!(rendered.contains("Active Sessions"));
         assert!(rendered.contains("Total Schedules"));
         assert!(rendered.contains("Messages Today"));
     }

@@ -14,12 +14,12 @@
     <div class="analytics-stats grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div class="bg-blue-50 rounded-lg p-4">
             <div class="text-3xl font-bold text-blue-700">{{ total_channels }}</div>
-            <div class="text-sm text-blue-600">Total Channels</div>
+            <div class="text-sm text-blue-600">Total Sessions</div>
             <div class="text-xs text-blue-500 mt-1">{{ active_channels }} active</div>
         </div>
         <div class="bg-green-50 rounded-lg p-4">
             <div class="text-3xl font-bold text-green-700">{{ active_channels }}</div>
-            <div class="text-sm text-green-600">Active Channels</div>
+            <div class="text-sm text-green-600">Active Sessions</div>
             <div class="text-xs text-green-500 mt-1">Currently running</div>
         </div>
         <div class="bg-purple-50 rounded-lg p-4">
@@ -30,7 +30,7 @@
         <div class="bg-orange-50 rounded-lg p-4">
             <div class="text-3xl font-bold text-orange-700">{{ messages_today }}</div>
             <div class="text-sm text-orange-600">Messages Today</div>
-            <div class="text-xs text-orange-500 mt-1">Across all channels</div>
+            <div class="text-xs text-orange-500 mt-1">Across all sessions</div>
         </div>
     </div>
 
@@ -42,8 +42,8 @@
             <p class="text-sm text-blue-600">View and edit settings</p>
         </a>
         <a href="/admin/channels" class="block p-4 bg-green-50 rounded-lg hover:bg-green-100">
-            <h2 class="font-semibold text-green-800">Channels</h2>
-            <p class="text-sm text-green-600">Manage channels and rooms</p>
+            <h2 class="font-semibold text-green-800">Sessions</h2>
+            <p class="text-sm text-green-600">Manage agent sessions</p>
         </a>
         <a href="/admin/health" class="block p-4 bg-purple-50 rounded-lg hover:bg-purple-100">
             <h2 class="font-semibold text-purple-800">Health</h2>

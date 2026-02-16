@@ -10,7 +10,7 @@
     <p class="text-gray-500">No messages logged yet. Messages will appear here as they are sent and received.</p>
     {% else %}
     <div class="mb-4 text-sm text-gray-600">
-        <p>Showing the {{ messages.len() }} most recent messages across all channels.</p>
+        <p>Showing the {{ messages.len() }} most recent messages across all sessions.</p>
     </div>
 
     <div class="overflow-x-auto">
@@ -18,7 +18,7 @@
             <thead class="bg-gray-50">
                 <tr>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Channel</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">Dir</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sender</th>
                     <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Content</th>

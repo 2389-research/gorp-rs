@@ -14,7 +14,7 @@
     <div class="health-stats grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div class="bg-blue-50 rounded-lg p-4">
             <div class="text-3xl font-bold text-blue-700">{{ total_channels }}</div>
-            <div class="text-sm text-blue-600">Total Channels</div>
+            <div class="text-sm text-blue-600">Total Sessions</div>
             <div class="text-xs text-blue-500 mt-1">{{ active_channels }} active</div>
         </div>
         <div class="bg-green-50 rounded-lg p-4">
@@ -50,8 +50,8 @@
 
             <div class="space-y-2">
                 <a href="/admin/channels" class="block p-3 bg-green-50 rounded-lg hover:bg-green-100">
-                    <div class="font-semibold text-green-800">Channels ({{ total_channels }})</div>
-                    <div class="text-sm text-green-600">View and manage channels</div>
+                    <div class="font-semibold text-green-800">Sessions ({{ total_channels }})</div>
+                    <div class="text-sm text-green-600">View and manage sessions</div>
                 </a>
                 <a href="/admin/schedules" class="block p-3 bg-blue-50 rounded-lg hover:bg-blue-100">
                     <div class="font-semibold text-blue-800">Schedules ({{ total_schedules }})</div>

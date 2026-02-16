@@ -5,19 +5,19 @@
 {% block content %}
 <div class="bg-white rounded-lg shadow p-6">
     <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Channels</h1>
+        <h1 class="text-2xl font-bold">Sessions</h1>
         <form hx-post="/admin/channels/create" hx-target="#toast" class="flex gap-2">
             <input type="text" name="name" placeholder="channel-name"
                    class="rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-2 border"
                    pattern="[a-zA-Z0-9_-]+" title="Alphanumeric, dashes, underscores only">
             <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
-                Create Channel
+                Create Session
             </button>
         </form>
     </div>
 
     {% if channels.is_empty() %}
-    <p class="text-gray-500">No channels registered yet. Create one using the form above or via a connected gateway.</p>
+    <p class="text-gray-500">No sessions registered yet. Create one using the form above or via a connected gateway.</p>
     {% else %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-gray-200">
@@ -71,7 +71,7 @@
                                 hx-target="#toast"
                                 hx-swap="innerHTML"
                                 hx-on::after-request="setTimeout(() => location.reload(), 1500)"
-                                hx-confirm="Are you sure you want to delete channel '{{ channel.name }}'? Files in {{ channel.directory }} will be kept."
+                                hx-confirm="Are you sure you want to delete session '{{ channel.name }}'? Files in {{ channel.directory }} will be kept."
                                 class="text-red-600 hover:text-red-800">
                             Delete
                         </button>

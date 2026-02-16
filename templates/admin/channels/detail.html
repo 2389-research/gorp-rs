@@ -6,7 +6,7 @@
 <div class="bg-white rounded-lg shadow p-6">
     <div class="flex justify-between items-center mb-6">
         <div>
-            <a href="/admin/channels" class="text-blue-600 hover:text-blue-800 text-sm">&larr; Back to Channels</a>
+            <a href="/admin/channels" class="text-blue-600 hover:text-blue-800 text-sm">&larr; Back to Sessions</a>
             <h1 class="text-2xl font-bold mt-2">{{ name }}</h1>
         </div>
         <div class="flex gap-2">
@@ -29,16 +29,16 @@
                     hx-target="#toast"
                     hx-swap="innerHTML"
                     hx-on::after-request="setTimeout(() => window.location.href='/admin/channels', 1500)"
-                    hx-confirm="Are you sure you want to delete channel '{{ name }}'? Files in {{ directory }} will be kept."
+                    hx-confirm="Are you sure you want to delete session '{{ name }}'? Files in {{ directory }} will be kept."
                     class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">
-                Delete Channel
+                Delete Session
             </button>
         </div>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div class="space-y-4">
-            <h2 class="text-lg font-semibold text-gray-700">Channel Info</h2>
+            <h2 class="text-lg font-semibold text-gray-700">Session Info</h2>
 
             <div>
                 <label class="block text-sm font-medium text-gray-500">Status</label>
