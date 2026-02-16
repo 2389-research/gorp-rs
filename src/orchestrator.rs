@@ -7,7 +7,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use tokio::sync::Mutex;
 
-use crate::bus::{BusMessage, BusResponse, MessageBus, ResponseContent, SessionTarget};
+use crate::bus::{BusMessage, BusResponse, MessageBus, MessageSource, ResponseContent, SessionTarget};
+use gorp_core::session::SessionStore;
+use gorp_core::warm_session::{prepare_session_async, send_prompt_with_handle, SharedWarmSessionManager};
 
 /// DISPATCH commands parsed from message bodies.
 ///
@@ -153,14 +155,23 @@ const DEDUP_CAP: usize = 10_000;
 pub struct Orchestrator {
     bus: Arc<MessageBus>,
     seen_ids: Arc<Mutex<HashSet<String>>>,
+    session_store: SessionStore,
+    warm_manager: Option<SharedWarmSessionManager>,
 }
 
 impl Orchestrator {
-    /// Create an Orchestrator wired to the given message bus.
-    pub fn new(bus: Arc<MessageBus>) -> Self {
+    /// Create an Orchestrator wired to the given message bus, session store,
+    /// and optional warm session manager for agent backends.
+    pub fn new(
+        bus: Arc<MessageBus>,
+        session_store: SessionStore,
+        warm_manager: Option<SharedWarmSessionManager>,
+    ) -> Self {
         Self {
             bus,
             seen_ids: Arc::new(Mutex::new(HashSet::new())),
+            session_store,
+            warm_manager,
         }
     }
 
@@ -222,24 +233,218 @@ impl Orchestrator {
         }
     }
 
+    /// Extract (platform_id, channel_id) from a MessageSource.
+    fn extract_source_ids(source: &MessageSource) -> (String, String) {
+        match source {
+            MessageSource::Platform {
+                platform_id,
+                channel_id,
+            } => (platform_id.clone(), channel_id.clone()),
+            MessageSource::Web { connection_id } => ("web".to_string(), connection_id.clone()),
+            MessageSource::Api { token_hint } => ("api".to_string(), token_hint.clone()),
+        }
+    }
+
     /// Handle a DISPATCH-targeted message by parsing and responding to the command.
     async fn handle_dispatch(&self, msg: BusMessage) {
         let cmd = DispatchCommand::parse(&msg.body);
 
         let response_text = match cmd {
             DispatchCommand::Help => self.help_text(),
-            DispatchCommand::List => {
-                // Stub — will be wired to SessionStore in Task 7
-                "No active sessions. (Session store not yet wired)".to_string()
+
+            DispatchCommand::Create { name, workspace: _ } => {
+                // workspace arg parsed but not yet plumbed — SessionStore::create_channel
+                // auto-generates directory from its workspace_path + channel_name
+                let room_id = format!("bus:{}", name);
+                match self.session_store.create_channel(&name, &room_id) {
+                    Ok(channel) => format!(
+                        "Session '{}' created (session_id: {})",
+                        channel.channel_name, channel.session_id
+                    ),
+                    Err(e) => format!("Failed to create session '{}': {}", name, e),
+                }
             }
+
+            DispatchCommand::Delete { name } => {
+                // Also unbind any channels bound to this session
+                if let Ok(bindings) = self.session_store.list_bindings_for_session(&name) {
+                    for (pid, cid) in bindings {
+                        let _ = self.session_store.unbind_channel(&pid, &cid);
+                        self.bus.unbind_channel_async(&pid, &cid).await;
+                    }
+                }
+                match self.session_store.delete_channel(&name) {
+                    Ok(()) => format!("Session '{}' deleted", name),
+                    Err(e) => format!("Failed to delete session '{}': {}", name, e),
+                }
+            }
+
+            DispatchCommand::List => {
+                match self.session_store.list_all() {
+                    Ok(channels) => {
+                        if channels.is_empty() {
+                            "No active sessions. Use !create <name> to create one.".to_string()
+                        } else {
+                            let mut lines = vec!["Active sessions:".to_string()];
+                            for ch in &channels {
+                                let started_marker = if ch.started { "*" } else { " " };
+                                lines.push(format!(
+                                    "  {} {} (session: {})",
+                                    started_marker,
+                                    ch.channel_name,
+                                    &ch.session_id[..8.min(ch.session_id.len())]
+                                ));
+                            }
+                            lines.push(format!(
+                                "\n{} session(s) total. (* = started)",
+                                channels.len()
+                            ));
+                            lines.join("\n")
+                        }
+                    }
+                    Err(e) => format!("Failed to list sessions: {}", e),
+                }
+            }
+
+            DispatchCommand::Status { name } => {
+                match self.session_store.get_by_name(&name) {
+                    Ok(Some(ch)) => {
+                        let bindings = self
+                            .session_store
+                            .list_bindings_for_session(&name)
+                            .unwrap_or_default();
+                        let binding_lines: Vec<String> = bindings
+                            .iter()
+                            .map(|(pid, cid)| format!("    {}:{}", pid, cid))
+                            .collect();
+                        format!(
+                            "Session '{}':\n  Session ID: {}\n  Directory: {}\n  Started: {}\n  Created: {}\n  Bindings:\n{}",
+                            ch.channel_name,
+                            ch.session_id,
+                            ch.directory,
+                            ch.started,
+                            ch.created_at,
+                            if binding_lines.is_empty() {
+                                "    (none)".to_string()
+                            } else {
+                                binding_lines.join("\n")
+                            }
+                        )
+                    }
+                    Ok(None) => format!("Session '{}' not found", name),
+                    Err(e) => format!("Failed to get status for '{}': {}", name, e),
+                }
+            }
+
+            DispatchCommand::Join { name } => {
+                match self.session_store.get_by_name(&name) {
+                    Ok(Some(_)) => {
+                        let (platform_id, channel_id) = Self::extract_source_ids(&msg.source);
+                        // Bind in both bus (in-memory) and store (persistent)
+                        self.bus
+                            .bind_channel_async(&platform_id, &channel_id, &name)
+                            .await;
+                        match self
+                            .session_store
+                            .bind_channel(&platform_id, &channel_id, &name)
+                        {
+                            Ok(()) => format!(
+                                "Channel bound to session '{}'. Messages here will now route to this agent.",
+                                name
+                            ),
+                            Err(e) => format!("Failed to bind channel: {}", e),
+                        }
+                    }
+                    Ok(None) => format!(
+                        "Session '{}' not found. Create it first with !create {}",
+                        name, name
+                    ),
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+
+            DispatchCommand::Leave => {
+                let (platform_id, channel_id) = Self::extract_source_ids(&msg.source);
+                self.bus
+                    .unbind_channel_async(&platform_id, &channel_id)
+                    .await;
+                match self
+                    .session_store
+                    .unbind_channel(&platform_id, &channel_id)
+                {
+                    Ok(()) => {
+                        "Channel unbound. Messages here will now route to DISPATCH.".to_string()
+                    }
+                    Err(e) => format!("Failed to unbind channel: {}", e),
+                }
+            }
+
+            DispatchCommand::Tell { session, message } => {
+                match self.session_store.get_by_name(&session) {
+                    Ok(Some(_)) => {
+                        // Publish a new BusMessage targeting the session
+                        self.bus.publish_inbound(BusMessage {
+                            id: format!("{}-tell", msg.id),
+                            source: msg.source.clone(),
+                            session_target: SessionTarget::Session {
+                                name: session.clone(),
+                            },
+                            sender: msg.sender.clone(),
+                            body: message,
+                            timestamp: Utc::now(),
+                        });
+                        format!("Message sent to session '{}'", session)
+                    }
+                    Ok(None) => format!("Session '{}' not found", session),
+                    Err(e) => format!("Error: {}", e),
+                }
+            }
+
+            DispatchCommand::Read {
+                session,
+                count: _,
+            } => match self.session_store.get_by_name(&session) {
+                Ok(Some(ch)) => {
+                    format!(
+                        "Session '{}': session_id={}, started={}, created_at={}\n(Message history not yet available)",
+                        ch.channel_name, ch.session_id, ch.started, ch.created_at
+                    )
+                }
+                Ok(None) => format!("Session '{}' not found", session),
+                Err(e) => format!("Error: {}", e),
+            },
+
+            DispatchCommand::Broadcast { message } => {
+                match self.session_store.list_all() {
+                    Ok(channels) => {
+                        let mut sent_count = 0;
+                        for ch in channels {
+                            if !ch.is_dispatch_room {
+                                self.bus.publish_inbound(BusMessage {
+                                    id: format!("{}-bc-{}", msg.id, ch.channel_name),
+                                    source: msg.source.clone(),
+                                    session_target: SessionTarget::Session {
+                                        name: ch.channel_name.clone(),
+                                    },
+                                    sender: msg.sender.clone(),
+                                    body: message.clone(),
+                                    timestamp: Utc::now(),
+                                });
+                                sent_count += 1;
+                            }
+                        }
+                        format!("Message broadcast to {} session(s)", sent_count)
+                    }
+                    Err(e) => format!("Failed to broadcast: {}", e),
+                }
+            }
+
             DispatchCommand::Unknown(text) => {
                 format!(
                     "Unknown command: \"{}\". Type !help for a list of available commands.",
                     text
                 )
             }
-            // All other recognized commands are not yet wired
-            _ => "Command recognized but not yet wired. (Will be connected in a future update.)".to_string(),
         };
 
         self.bus.publish_response(BusResponse {
@@ -249,19 +454,139 @@ impl Orchestrator {
         });
     }
 
-    /// Stub handler for messages targeting a named agent session.
+    /// Handle messages targeting a named agent session by routing to the WarmSessionManager.
     ///
-    /// Publishes a SystemNotice indicating the session is not yet wired.
-    /// Task 7 will replace this with actual WarmSessionManager integration.
+    /// If no WarmSessionManager is configured (warm_manager is None), publishes an error
+    /// response indicating no agent backend is available.
     async fn handle_agent_message(&self, session_name: String, msg: BusMessage) {
-        tracing::info!(session = %session_name, sender = %msg.sender, "Agent message (routing not yet wired)");
-        self.bus.publish_response(BusResponse {
-            session_name,
-            content: ResponseContent::SystemNotice(
-                "Agent session not yet wired. (Will be connected in a future update.)".to_string(),
-            ),
-            timestamp: Utc::now(),
-        });
+        tracing::info!(session = %session_name, sender = %msg.sender, "Routing to agent session");
+
+        let warm_manager = match &self.warm_manager {
+            Some(wm) => wm.clone(),
+            None => {
+                self.bus.publish_response(BusResponse {
+                    session_name,
+                    content: ResponseContent::Error(
+                        "No agent backend configured".to_string(),
+                    ),
+                    timestamp: Utc::now(),
+                });
+                return;
+            }
+        };
+
+        // Look up the channel in the session store
+        let channel = match self.session_store.get_by_name(&session_name) {
+            Ok(Some(ch)) => ch,
+            Ok(None) => {
+                let err_msg = format!("Session '{}' not found in store", session_name);
+                self.bus.publish_response(BusResponse {
+                    session_name,
+                    content: ResponseContent::Error(err_msg),
+                    timestamp: Utc::now(),
+                });
+                return;
+            }
+            Err(e) => {
+                let err_msg = format!("Store error: {}", e);
+                self.bus.publish_response(BusResponse {
+                    session_name,
+                    content: ResponseContent::Error(err_msg),
+                    timestamp: Utc::now(),
+                });
+                return;
+            }
+        };
+
+        // Prepare warm session
+        let (handle, session_id, is_new) = match prepare_session_async(&warm_manager, &channel).await {
+            Ok(result) => result,
+            Err(e) => {
+                self.bus.publish_response(BusResponse {
+                    session_name,
+                    content: ResponseContent::Error(format!(
+                        "Failed to prepare session: {}",
+                        e
+                    )),
+                    timestamp: Utc::now(),
+                });
+                return;
+            }
+        };
+
+        // Update session ID in store if it changed
+        if is_new {
+            if let Err(e) = self.session_store.update_session_id(&channel.room_id, &session_id) {
+                tracing::error!(error = %e, "Failed to update session ID in store");
+            }
+        }
+
+        // Send prompt and stream response
+        match send_prompt_with_handle(&handle, &session_id, &msg.body).await {
+            Ok(mut receiver) => {
+                let mut response_text = String::new();
+
+                while let Some(event) = receiver.recv().await {
+                    match event {
+                        gorp_agent::AgentEvent::Text(text) => {
+                            response_text.push_str(&text);
+                            self.bus.publish_response(BusResponse {
+                                session_name: session_name.clone(),
+                                content: ResponseContent::Chunk(text),
+                                timestamp: Utc::now(),
+                            });
+                        }
+                        gorp_agent::AgentEvent::Result { text, .. } => {
+                            if response_text.is_empty() {
+                                response_text = text.clone();
+                            }
+                            break;
+                        }
+                        gorp_agent::AgentEvent::Error { message, .. } => {
+                            self.bus.publish_response(BusResponse {
+                                session_name: session_name.clone(),
+                                content: ResponseContent::Error(message),
+                                timestamp: Utc::now(),
+                            });
+                            return;
+                        }
+                        gorp_agent::AgentEvent::SessionChanged { new_session_id } => {
+                            if let Err(e) = self.session_store.update_session_id(
+                                &channel.room_id,
+                                &new_session_id,
+                            ) {
+                                tracing::error!(error = %e, "Failed to update changed session ID");
+                            }
+                            let mut session = handle.lock().await;
+                            session.set_session_id(new_session_id);
+                        }
+                        _ => {} // Ignore tool events etc. for now
+                    }
+                }
+
+                // Publish complete response
+                self.bus.publish_response(BusResponse {
+                    session_name: session_name.clone(),
+                    content: ResponseContent::Complete(response_text),
+                    timestamp: Utc::now(),
+                });
+
+                // Mark session as started
+                if let Err(e) = self.session_store.mark_started(&channel.room_id) {
+                    tracing::error!(error = %e, "Failed to mark session started");
+                }
+            }
+            Err(e) => {
+                self.bus.publish_response(BusResponse {
+                    session_name,
+                    content: ResponseContent::Error(format!(
+                        "Failed to send prompt: {}",
+                        e
+                    )),
+                    timestamp: Utc::now(),
+                });
+            }
+        }
     }
 
     /// Build the help text listing all available DISPATCH commands.
