@@ -4,6 +4,9 @@
 pub mod registry;
 pub mod web;
 
+#[cfg(feature = "matrix")]
+pub mod matrix;
+
 use async_trait::async_trait;
 use std::sync::Arc;
 
