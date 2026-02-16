@@ -6,7 +6,10 @@ use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
 use gorp::{
     config::Config,
-    matrix_client, message_handler, paths,
+    gateway::{registry::GatewayRegistry, GatewayAdapter},
+    matrix_client, message_handler,
+    orchestrator::Orchestrator,
+    paths,
     platform::{MatrixPlatform, PlatformRegistry, SharedPlatformRegistry},
     scheduler::{start_scheduler, SchedulerStore},
     session::SessionStore,
@@ -1245,6 +1248,103 @@ async fn run_start() -> Result<()> {
     let warm_manager = server.warm_manager.clone();
     let matrix_client = server.matrix_client.clone();
     let sync_token = server.sync_token.clone();
+
+    // ── Message Bus Orchestrator ──────────────────────────────────
+    // The orchestrator consumes inbound bus messages and routes them to agent
+    // sessions or the DISPATCH command handler. Must start BEFORE webhook and
+    // scheduler so published messages have a consumer.
+    let orchestrator = Orchestrator::new(
+        Arc::clone(&server.bus),
+        session_store_arc.as_ref().clone(),
+        Some(warm_manager.clone()),
+    );
+    tokio::spawn(async move {
+        orchestrator.run().await;
+        tracing::error!("Message bus orchestrator exited unexpectedly");
+    });
+    tracing::info!("Message bus orchestrator started");
+
+    // ── Gateway Adapters (bus -> platform outbound delivery) ────
+    // Gateway adapters subscribe to bus responses and deliver them to their
+    // respective platforms. They run alongside the old PlatformRegistry which
+    // is still used by the webhook server and admin health checks.
+    let mut gateway_registry = GatewayRegistry::new();
+
+    #[cfg(feature = "matrix")]
+    if let Some(ref client) = matrix_client {
+        if let Some(ref matrix_cfg) = config_arc.matrix {
+            use gorp::gateway::matrix::MatrixAdapter;
+            let matrix_adapter = MatrixAdapter::new(client.clone(), matrix_cfg.clone());
+            if let Err(e) = matrix_adapter.start(Arc::clone(&server.bus)).await {
+                tracing::error!(error = %e, "Failed to start Matrix gateway adapter");
+            } else {
+                tracing::info!("Matrix gateway adapter started (outbound bus -> Matrix)");
+                gateway_registry.register(Box::new(matrix_adapter));
+            }
+        }
+    }
+
+    #[cfg(feature = "telegram")]
+    if let Some(ref tg_config) = config_arc.telegram {
+        use gorp::gateway::telegram::TelegramAdapter;
+        let bot = teloxide::Bot::new(&tg_config.bot_token);
+        let tg_adapter = TelegramAdapter::new(bot, tg_config.clone());
+        if let Err(e) = tg_adapter.start(Arc::clone(&server.bus)).await {
+            tracing::error!(error = %e, "Failed to start Telegram gateway adapter");
+        } else {
+            tracing::info!("Telegram gateway adapter started (outbound bus -> Telegram)");
+            gateway_registry.register(Box::new(tg_adapter));
+        }
+    }
+
+    #[cfg(feature = "slack")]
+    if let Some(ref slack_config) = config_arc.slack {
+        use gorp::gateway::slack::SlackAdapter;
+        match slack_morphism::prelude::SlackClientHyperConnector::new() {
+            Ok(connector) => {
+                let slack_client = Arc::new(
+                    slack_morphism::prelude::SlackClient::new(connector),
+                );
+                let bot_token = slack_morphism::prelude::SlackApiToken::new(
+                    slack_config.bot_token.clone().into(),
+                );
+                let slack_adapter = SlackAdapter::new(slack_client, bot_token, slack_config.clone());
+                if let Err(e) = slack_adapter.start(Arc::clone(&server.bus)).await {
+                    tracing::error!(error = %e, "Failed to start Slack gateway adapter");
+                } else {
+                    tracing::info!("Slack gateway adapter started (outbound bus -> Slack)");
+                    gateway_registry.register(Box::new(slack_adapter));
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to create Slack HTTP connector");
+            }
+        }
+    }
+
+    tracing::info!(
+        adapters = ?gateway_registry.platform_ids(),
+        count = gateway_registry.platform_ids().len(),
+        "Gateway adapter registry initialized"
+    );
+
+    // Wire graceful shutdown for gateway adapters
+    let shutdown_gw_registry = Arc::new(tokio::sync::RwLock::new(gateway_registry));
+    {
+        let gw_reg = Arc::clone(&shutdown_gw_registry);
+        tokio::spawn(async move {
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => {
+                    tracing::info!("Shutting down gateway adapters...");
+                    gw_reg.write().await.shutdown_all().await;
+                    tracing::info!("All gateway adapters shut down");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to listen for gateway shutdown signal");
+                }
+            }
+        });
+    }
 
     // ── Platform Registry ────────────────────────────────────────
     // Conditionally initialize platforms based on config and register them.

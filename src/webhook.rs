@@ -63,6 +63,7 @@ pub async fn start_webhook_server(
     let metrics_handle =
         metrics::init_metrics().context("Failed to initialize Prometheus metrics")?;
 
+    let admin_bus = Arc::clone(&bus);
     let state = WebhookState {
         session_store,
         bus,
@@ -121,7 +122,7 @@ pub async fn start_webhook_server(
         auth_config: std::sync::Arc::new(tokio::sync::RwLock::new(auth_config)),
         ws_hub: ws_hub.clone(),
         registry: Some(registry.clone()),
-        bus: None,
+        bus: Some(admin_bus),
     };
 
     // Spawn platform status monitor — polls registry every 5 seconds
