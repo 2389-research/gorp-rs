@@ -1,6 +1,14 @@
 // ABOUTME: Message bus orchestrator -- consumes inbound messages, routes to agent sessions or DISPATCH.
 // ABOUTME: DISPATCH is a built-in command handler for session lifecycle and supervisor operations.
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use chrono::Utc;
+use tokio::sync::Mutex;
+
+use crate::bus::{BusMessage, BusResponse, MessageBus, ResponseContent, SessionTarget};
+
 /// DISPATCH commands parsed from message bodies.
 ///
 /// These commands form the control plane for session management. Users send
@@ -129,5 +137,147 @@ impl DispatchCommand {
 
             _ => Self::Unknown(input.to_string()),
         }
+    }
+}
+
+/// Maximum size of the dedup set before it gets cleared to prevent unbounded growth.
+const DEDUP_CAP: usize = 10_000;
+
+/// Bus-based message orchestrator.
+///
+/// Subscribes to inbound messages on the `MessageBus`, deduplicates by message
+/// ID, and routes each message to either the DISPATCH command handler or a named
+/// agent session. One tokio task is spawned per message so sessions don't block
+/// each other.
+#[derive(Clone)]
+pub struct Orchestrator {
+    bus: Arc<MessageBus>,
+    seen_ids: Arc<Mutex<HashSet<String>>>,
+}
+
+impl Orchestrator {
+    /// Create an Orchestrator wired to the given message bus.
+    pub fn new(bus: Arc<MessageBus>) -> Self {
+        Self {
+            bus,
+            seen_ids: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Main run loop — subscribes to the bus and processes messages until the
+    /// bus closes.
+    pub async fn run(&self) {
+        let mut rx = self.bus.subscribe_inbound();
+
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    // Dedup: skip messages we've already seen
+                    let is_new = {
+                        let mut seen = self.seen_ids.lock().await;
+                        if seen.contains(&msg.id) {
+                            false
+                        } else {
+                            // Cap the dedup set to prevent unbounded growth
+                            if seen.len() >= DEDUP_CAP {
+                                seen.clear();
+                            }
+                            seen.insert(msg.id.clone());
+                            true
+                        }
+                    };
+
+                    if !is_new {
+                        tracing::debug!(msg_id = %msg.id, "Skipping duplicate message");
+                        continue;
+                    }
+
+                    // Spawn a task per message so sessions don't block each other
+                    let orch = self.clone();
+                    tokio::spawn(async move {
+                        orch.handle(msg).await;
+                    });
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "Orchestrator lagged on inbound bus, skipped messages");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::info!("Inbound bus closed, orchestrator shutting down");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Route a single message to the appropriate handler.
+    async fn handle(&self, msg: BusMessage) {
+        match &msg.session_target {
+            SessionTarget::Dispatch => {
+                self.handle_dispatch(msg).await;
+            }
+            SessionTarget::Session { name } => {
+                self.handle_agent_message(name.clone(), msg).await;
+            }
+        }
+    }
+
+    /// Handle a DISPATCH-targeted message by parsing and responding to the command.
+    async fn handle_dispatch(&self, msg: BusMessage) {
+        let cmd = DispatchCommand::parse(&msg.body);
+
+        let response_text = match cmd {
+            DispatchCommand::Help => self.help_text(),
+            DispatchCommand::List => {
+                // Stub — will be wired to SessionStore in Task 7
+                "No active sessions. (Session store not yet wired)".to_string()
+            }
+            DispatchCommand::Unknown(text) => {
+                format!(
+                    "Unknown command: \"{}\". Type !help for a list of available commands.",
+                    text
+                )
+            }
+            // All other recognized commands are not yet wired
+            _ => "Command recognized but not yet wired. (Will be connected in a future update.)".to_string(),
+        };
+
+        self.bus.publish_response(BusResponse {
+            session_name: "DISPATCH".to_string(),
+            content: ResponseContent::SystemNotice(response_text),
+            timestamp: Utc::now(),
+        });
+    }
+
+    /// Stub handler for messages targeting a named agent session.
+    ///
+    /// Publishes a SystemNotice indicating the session is not yet wired.
+    /// Task 7 will replace this with actual WarmSessionManager integration.
+    async fn handle_agent_message(&self, session_name: String, msg: BusMessage) {
+        tracing::info!(session = %session_name, sender = %msg.sender, "Agent message (routing not yet wired)");
+        self.bus.publish_response(BusResponse {
+            session_name,
+            content: ResponseContent::SystemNotice(
+                "Agent session not yet wired. (Will be connected in a future update.)".to_string(),
+            ),
+            timestamp: Utc::now(),
+        });
+    }
+
+    /// Build the help text listing all available DISPATCH commands.
+    fn help_text(&self) -> String {
+        "DISPATCH commands:\n\
+         \n\
+         !create <name> [workspace]  — Create a named agent session\n\
+         !delete <name>              — Delete an agent session\n\
+         !list                       — List all active sessions\n\
+         !status <name>              — Show session status details\n\
+         !join <name>                — Bind this channel to a session\n\
+         !leave                      — Unbind this channel from its session\n\
+         !tell <session> <message>   — Inject a message into another session\n\
+         !read <session> [count]     — Read recent messages from a session\n\
+         !broadcast <message>        — Send a message to all active sessions\n\
+         !help                       — Show this help"
+            .to_string()
     }
 }
