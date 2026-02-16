@@ -1,5 +1,5 @@
-// ABOUTME: Matrix-specific scheduler execution for gorp.
-// ABOUTME: Re-exports core scheduler types from gorp-core, adds Matrix SDK integration.
+// ABOUTME: Scheduler execution for gorp, publishing prompts to the message bus.
+// ABOUTME: Re-exports core scheduler types from gorp-core, publishes BusMessage when schedules fire.
 
 // Re-export all core scheduler types and functions from gorp-core
 // This ensures type consistency across the codebase
@@ -8,23 +8,19 @@ pub use gorp_core::scheduler::{
     ParsedSchedule, ScheduleStatus, ScheduledPrompt, SchedulerCallback, SchedulerStore,
 };
 
-// Matrix-specific scheduler execution implementation
 use anyhow::Result;
 use chrono::Utc;
-use gorp_agent::AgentEvent;
-use matrix_sdk::{ruma::events::room::message::RoomMessageEventContent, Client};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use tokio::time::interval;
 
 use crate::{
+    bus::{BusMessage, MessageBus, MessageSource, SessionTarget},
     config::Config,
     metrics,
     session::{Channel, SessionStore},
-    utils::{
-        chunk_message, expand_slash_command, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE,
-    },
+    utils::expand_slash_command,
     warm_session::{prepare_session_async, SharedWarmSessionManager},
 };
 
@@ -47,11 +43,15 @@ async fn write_context_file(channel: &Channel) -> Result<()> {
     Ok(())
 }
 
-/// Start the background scheduler task that checks for and executes due schedules
+/// Start the background scheduler task that checks for and executes due schedules.
+///
+/// When a schedule fires, the scheduler publishes a `BusMessage` to the message bus.
+/// The orchestrator handles routing the message to the appropriate agent session,
+/// and gateway adapters handle delivering responses to connected platforms.
 pub async fn start_scheduler(
     scheduler_store: SchedulerStore,
     session_store: SessionStore,
-    client: Option<Client>,
+    bus: Arc<MessageBus>,
     config: Arc<Config>,
     check_interval: StdDuration,
     warm_manager: SharedWarmSessionManager,
@@ -82,14 +82,13 @@ pub async fn start_scheduler(
                     // Clone what we need for the spawned task
                     let store = scheduler_store.clone();
                     let sess_store = session_store.clone();
-                    let cli = client.clone();
+                    let bus_clone = Arc::clone(&bus);
                     let cfg = Arc::clone(&config);
-                    let warm_mgr = warm_manager.clone();
 
                     // Execute each due schedule concurrently
-                    // Use spawn_local since ACP client futures are !Send
-                    tokio::task::spawn_local(async move {
-                        execute_schedule(schedule, store, sess_store, cli, cfg, warm_mgr).await;
+                    // Publishing to the bus is Send-safe, so tokio::spawn works
+                    tokio::spawn(async move {
+                        execute_schedule(schedule, store, sess_store, bus_clone, cfg).await;
                     });
                 }
             }
@@ -148,26 +147,28 @@ pub async fn start_scheduler(
     }
 }
 
-/// Execute a single scheduled prompt
+/// Execute a single scheduled prompt by publishing a BusMessage to the message bus.
+///
+/// The scheduler handles: channel lookup, context file writing, slash command expansion,
+/// and schedule lifecycle (marking executed/failed, computing next execution).
+/// The orchestrator handles: agent session management and response streaming.
+/// Gateway adapters handle: delivering responses to connected platforms.
 async fn execute_schedule(
     schedule: ScheduledPrompt,
     scheduler_store: SchedulerStore,
     session_store: SessionStore,
-    client: Option<Client>,
+    bus: Arc<MessageBus>,
     config: Arc<Config>,
-    warm_manager: SharedWarmSessionManager,
 ) {
     let prompt_preview: String = schedule.prompt.chars().take(50).collect();
-    let backend_type = warm_manager.read().await.backend_type().to_string();
     tracing::info!(
         schedule_id = %schedule.id,
         channel = %schedule.channel_name,
         prompt_preview = %prompt_preview,
-        backend = %backend_type,
-        "Executing scheduled prompt"
+        "Executing scheduled prompt via message bus"
     );
 
-    // Get channel info
+    // Get channel info (needed for directory, context file, slash command expansion)
     let channel = match session_store.get_by_name(&schedule.channel_name) {
         Ok(Some(c)) => c,
         Ok(None) => {
@@ -194,51 +195,7 @@ async fn execute_schedule(
         }
     };
 
-    // Get Matrix room (optional — scheduler still executes prompts without Matrix)
-    let room = if let Some(ref client) = client {
-        match schedule.room_id.parse::<matrix_sdk::ruma::OwnedRoomId>() {
-            Ok(room_id) => client.get_room(&room_id),
-            Err(e) => {
-                tracing::warn!(
-                    schedule_id = %schedule.id,
-                    room_id = %schedule.room_id,
-                    error = %e,
-                    "Invalid room ID, skipping Matrix delivery"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    if client.is_some() && room.is_none() {
-        tracing::warn!(
-            schedule_id = %schedule.id,
-            room_id = %schedule.room_id,
-            "Matrix room not found — execution continues but results won't be delivered to Matrix"
-        );
-    }
-
-    // Send notification that scheduled prompt is executing
-    if let Some(ref room) = room {
-        let notification = format!(
-            "⏰ **Scheduled Task**\n> {}",
-            schedule.prompt.chars().take(200).collect::<String>()
-        );
-        let notification_html = markdown_to_html(&notification);
-        if let Err(e) = room
-            .send(RoomMessageEventContent::text_html(
-                &notification,
-                &notification_html,
-            ))
-            .await
-        {
-            tracing::warn!(error = %e, "Failed to send schedule notification");
-        }
-    }
-
-    // Write context file for MCP tools before invoking Claude
+    // Write context file for MCP tools before publishing to the bus
     if let Err(e) = write_context_file(&channel).await {
         tracing::warn!(error = %e, "Failed to write context file for scheduled task");
         // Non-fatal - continue without context file
@@ -253,15 +210,6 @@ async fn execute_schedule(
                 error = %e,
                 "Failed to expand slash command"
             );
-            let error_msg = format!("⚠️ Scheduled task failed: {}", e);
-            if let Some(ref room) = room {
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain(&error_msg))
-                    .await
-                {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
-                }
-            }
             if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
             }
@@ -269,336 +217,31 @@ async fn execute_schedule(
         }
     };
 
-    // Start typing indicator
-    if let Some(ref room) = room {
-        if let Err(e) = room.typing_notice(true).await {
-            tracing::debug!(error = %e, schedule_id = %schedule.id, "Failed to send typing indicator");
-        }
-    }
-
-    // Prepare session (creates session if needed)
-    // Uses prepare_session_async which minimizes lock holding for concurrent access
-    let (session_handle, session_id, is_new_session) = match prepare_session_async(
-        &warm_manager,
-        &channel,
-    )
-    .await
-    {
-        Ok((handle, sid, is_new)) => (handle, sid, is_new),
-        Err(e) => {
-            tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to prepare session for scheduled task");
-            let error_msg = format!("⚠️ Failed to prepare session: {}", e);
-            if let Some(ref room) = room {
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain(&error_msg))
-                    .await
-                {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
-                }
-            }
-            if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-            }
-            return;
-        }
-    };
-
-    // Update session store if a new session was created
-    if is_new_session {
-        if let Err(e) = session_store.update_session_id(&channel.room_id, &session_id) {
-            tracing::warn!(error = %e, "Failed to update session ID in store");
-        }
-    }
-
-    // Send prompt and get event receiver directly
-    let mut rx = match crate::warm_session::send_prompt_with_handle(
-        &session_handle,
-        &session_id,
-        &prompt,
-    )
-    .await
-    {
-        Ok(receiver) => receiver,
-        Err(e) => {
-            tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send prompt for scheduled task");
-            let error_msg = format!("⚠️ Failed to send prompt: {}", e);
-            if let Some(ref room) = room {
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain(&error_msg))
-                    .await
-                {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
-                }
-            }
-            if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-            }
-            return;
-        }
-    };
-
-    // Collect response from stream
-    let mut response = String::new();
-    let mut had_error = false;
-    // Track session ID changes - only set when SessionChanged event is received
-    let mut session_id_from_event: Option<String> = None;
-
-    while let Some(event) = rx.recv().await {
-        match event {
-            AgentEvent::ToolStart { name, input, .. } => {
-                // Extract input preview from JSON input
-                let input_preview: String = input
-                    .as_object()
-                    .and_then(|o| o.get("command").or(o.get("file_path")).or(o.get("pattern")))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.chars().take(50).collect())
-                    .unwrap_or_default();
-                tracing::debug!(
-                    tool = %name,
-                    preview = %input_preview,
-                    schedule_id = %schedule.id,
-                    channel = %schedule.channel_name,
-                    "Scheduled task tool use"
-                );
-            }
-            AgentEvent::ToolEnd { .. } => {
-                // Tool completion - just log for now
-                tracing::debug!("Tool completed");
-            }
-            AgentEvent::Text(text) => {
-                // Accumulate text chunks
-                response.push_str(&text);
-            }
-            AgentEvent::Result { text, .. } => {
-                // If we haven't accumulated text, use the result text
-                if response.is_empty() {
-                    response = text;
-                }
-                tracing::info!(
-                    response_len = response.len(),
-                    "Scheduled task agent completed"
-                );
-            }
-            AgentEvent::Error { code, message, .. } => {
-                // Check for session orphaned error
-                // NOTE: The session reset logic below is duplicated in SessionInvalid handler
-                // This duplication is intentional to avoid complexity from extracting a helper
-                // function that would need to handle async borrows and early returns
-                if code == gorp_agent::ErrorCode::SessionOrphaned {
-                    tracing::warn!("Scheduled task hit orphaned session");
-                    // Reset the session so future executions start fresh
-                    if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
-                        tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
-                    }
-                    // Mark session as invalidated FIRST so concurrent users see it
-                    {
-                        let mut session = session_handle.lock().await;
-                        session.set_invalidated(true);
-                    }
-                    // Then evict from warm cache
-                    let evicted = {
-                        let mut mgr = warm_manager.write().await;
-                        mgr.evict(&channel.channel_name)
-                    };
-                    tracing::info!(
-                        channel = %channel.channel_name,
-                        evicted = evicted,
-                        "Evicted warm session after orphaned session in scheduler"
-                    );
-                    if let Some(ref room) = room {
-                        if let Err(e) = room
-                            .send(RoomMessageEventContent::text_plain(
-                                "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
-                            ))
-                            .await
-                        {
-                            tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send session reset message to room");
-                        }
-                    }
-                    if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Session was invalid")
-                    {
-                        tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-                    }
-                    return;
-                }
-                tracing::warn!(error = %message, "Scheduled task agent error");
-                had_error = true;
-                // Don't return yet - we might have captured text before the error
-            }
-            AgentEvent::SessionInvalid { reason } => {
-                tracing::warn!(reason = %reason, "Scheduled task hit invalid session");
-                // Reset the session so future executions start fresh
-                if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
-                    tracing::error!(error = %e, "Failed to reset invalid session in scheduler");
-                }
-                // Mark session as invalidated FIRST so concurrent users see it
-                {
-                    let mut session = session_handle.lock().await;
-                    session.set_invalidated(true);
-                }
-                // Then evict from warm cache
-                let evicted = {
-                    let mut mgr = warm_manager.write().await;
-                    mgr.evict(&channel.channel_name)
-                };
-                tracing::info!(
-                    channel = %channel.channel_name,
-                    evicted = evicted,
-                    "Evicted warm session after invalid session in scheduler"
-                );
-                if let Some(ref room) = room {
-                    if let Err(e) = room
-                        .send(RoomMessageEventContent::text_plain(
-                            "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
-                        ))
-                        .await
-                    {
-                        tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send session reset message to room");
-                    }
-                }
-                if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Session was invalid") {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-                }
-                return;
-            }
-            AgentEvent::SessionChanged { new_session_id } => {
-                // Track session ID changes during execution
-                session_id_from_event = Some(new_session_id);
-            }
-            AgentEvent::ToolProgress { .. } => {
-                tracing::debug!("Tool progress update");
-            }
-            AgentEvent::Custom { kind, .. } => {
-                tracing::debug!(kind = %kind, "Received custom event");
-            }
-        }
-    }
-
-    // Stop typing
-    if let Some(ref room) = room {
-        if let Err(e) = room.typing_notice(false).await {
-            tracing::debug!(error = %e, schedule_id = %schedule.id, "Failed to stop typing indicator");
-        }
-    }
-
-    // Check for empty response
-    if response.trim().is_empty() {
-        if had_error {
-            tracing::error!(
-                schedule_id = %schedule.id,
-                prompt = %schedule.prompt,
-                backend = %backend_type,
-                "Agent returned empty response with error for scheduled task"
-            );
-            let error_msg = format!(
-                "⚠️ Scheduled task failed: {} backend encountered an error and returned no response.",
-                backend_type
-            );
-            if let Some(ref room) = room {
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain(&error_msg))
-                    .await
-                {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
-                }
-            }
-            if let Err(e) = scheduler_store.mark_failed(
-                &schedule.id,
-                &format!("{} error with empty response", backend_type),
-            ) {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-            }
+    // Publish a BusMessage so the orchestrator routes it to the agent session
+    let msg = BusMessage {
+        id: format!("sched-{}-{}", schedule.id, schedule.execution_count),
+        source: MessageSource::Api {
+            token_hint: "scheduler".to_string(),
+        },
+        session_target: SessionTarget::Session {
+            name: schedule.channel_name.clone(),
+        },
+        sender: if schedule.created_by.is_empty() {
+            "scheduler".to_string()
         } else {
-            tracing::error!(
-                schedule_id = %schedule.id,
-                prompt = %schedule.prompt,
-                backend = %backend_type,
-                "Agent returned empty response for scheduled task"
-            );
-            let error_msg = format!(
-                "⚠️ Scheduled task failed: {} backend returned an empty response. This may indicate a session issue or prompt problem.",
-                backend_type
-            );
-            if let Some(ref room) = room {
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain(&error_msg))
-                    .await
-                {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
-                }
-            }
-            if let Err(e) = scheduler_store.mark_failed(
-                &schedule.id,
-                &format!("Empty response from {} backend", backend_type),
-            ) {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-            }
-        }
-        return;
-    }
+            schedule.created_by.clone()
+        },
+        body: prompt,
+        timestamp: Utc::now(),
+    };
 
-    // Send response to room with chunking (when Matrix room is available)
-    if let Some(ref room) = room {
-        let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
-        let chunk_count = chunks.len();
-
-        for (i, chunk) in chunks.into_iter().enumerate() {
-            let html = markdown_to_html(&chunk);
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_html(&chunk, &html))
-                .await
-            {
-                tracing::warn!(error = %e, chunk = i, "Failed to send response chunk");
-            }
-
-            // Log the Matrix message
-            log_matrix_message(
-                &channel.directory,
-                room.room_id().as_str(),
-                "scheduled_response",
-                &chunk,
-                Some(&html),
-                if chunk_count > 1 { Some(i) } else { None },
-                if chunk_count > 1 {
-                    Some(chunk_count)
-                } else {
-                    None
-                },
-            )
-            .await;
-
-            // Small delay between chunks
-            if i < chunk_count - 1 {
-                tokio::time::sleep(StdDuration::from_millis(100)).await;
-            }
-        }
-    } else {
-        tracing::info!(
-            schedule_id = %schedule.id,
-            response_len = response.len(),
-            "Matrix delivery skipped — no Matrix client"
-        );
-    }
-
-    // Update session ID if a new one was created
-    let final_session_id = session_id_from_event;
-    if let Some(ref sess_id) = final_session_id {
-        if let Err(e) = session_store.update_session_id(&channel.room_id, sess_id) {
-            tracing::error!(error = %e, "Failed to update session ID in scheduler");
-            // Non-fatal - continue
-        } else {
-            // CRITICAL: Also update the warm session cache to match the database
-            {
-                let mut session = session_handle.lock().await;
-                session.set_session_id(sess_id.clone());
-            }
-            tracing::debug!(
-                channel = %channel.channel_name,
-                new_session = %sess_id,
-                "Updated session ID in warm cache (scheduler)"
-            );
-        }
-    }
+    tracing::info!(
+        schedule_id = %schedule.id,
+        bus_msg_id = %msg.id,
+        channel = %schedule.channel_name,
+        "Publishing scheduled prompt to message bus"
+    );
+    bus.publish_inbound(msg);
 
     // Calculate next execution for recurring schedules
     let next_execution = if let Some(ref cron_expr) = schedule.cron_expression {
@@ -644,15 +287,6 @@ async fn execute_schedule(
             schedule_id = %schedule.id,
             status,
             "Schedule execution successful"
-        );
-    }
-
-    // Log warning if there was an error but we still got a response
-    if had_error {
-        tracing::warn!(
-            schedule_id = %schedule.id,
-            backend = %backend_type,
-            "Scheduled task completed with warnings (backend encountered non-fatal errors)"
         );
     }
 }

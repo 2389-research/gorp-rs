@@ -1,6 +1,7 @@
 // ABOUTME: Server state shared between GUI and headless modes
 // ABOUTME: Contains Matrix client, session store, scheduler, and warm session manager
 
+use crate::bus::MessageBus;
 use crate::config::Config;
 use crate::scheduler::SchedulerStore;
 use crate::session::SessionStore;
@@ -18,6 +19,8 @@ pub struct ServerState {
     pub session_store: Arc<SessionStore>,
     pub scheduler_store: SchedulerStore,
     pub warm_manager: SharedWarmSessionManager,
+    /// Shared message bus for platform-agnostic message routing
+    pub bus: Arc<MessageBus>,
     /// Sync token from initial sync - used by headless mode to continue syncing
     /// None when running without Matrix
     pub sync_token: Option<String>,
@@ -31,6 +34,7 @@ impl std::fmt::Debug for ServerState {
             .field("session_store", &"<SessionStore>")
             .field("scheduler_store", &"<SchedulerStore>")
             .field("warm_manager", &"<WarmSessionManager>")
+            .field("bus", &"<MessageBus>")
             .field("sync_token", &"<token>")
             .finish()
     }
@@ -113,6 +117,10 @@ impl ServerState {
             }
         });
 
+        // Initialize message bus for platform-agnostic message routing
+        let bus = Arc::new(MessageBus::new(256));
+        tracing::info!("Message bus initialized");
+
         // Initialize session store
         let session_store = SessionStore::new(&config.workspace.path)?;
         tracing::info!(workspace = %config.workspace.path, "Session store initialized");
@@ -164,6 +172,7 @@ impl ServerState {
             session_store: Arc::new(session_store),
             scheduler_store,
             warm_manager,
+            bus,
             sync_token,
         })
     }

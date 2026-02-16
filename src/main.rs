@@ -1389,29 +1389,21 @@ async fn run_start() -> Result<()> {
     let scheduler_store_for_handler = scheduler_store.clone();
 
     // Start scheduler background task (checks every 60 seconds)
-    // Note: Scheduler needs LocalSet because ACP client futures are !Send
+    // The scheduler publishes BusMessages to the bus; no longer needs LocalSet
     let scheduler_session_store = (*session_store_arc).clone();
-    let scheduler_client = matrix_client.clone();
+    let scheduler_bus = Arc::clone(&server.bus);
     let scheduler_config = Arc::clone(&config_arc);
     let scheduler_warm_manager = warm_manager.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create scheduler runtime");
-
-        let local = tokio::task::LocalSet::new();
-        local.block_on(&rt, async move {
-            start_scheduler(
-                scheduler_store,
-                scheduler_session_store,
-                scheduler_client,
-                scheduler_config,
-                Duration::from_secs(60),
-                scheduler_warm_manager,
-            )
-            .await;
-        });
+    tokio::spawn(async move {
+        start_scheduler(
+            scheduler_store,
+            scheduler_session_store,
+            scheduler_bus,
+            scheduler_config,
+            Duration::from_secs(60),
+            scheduler_warm_manager,
+        )
+        .await;
     });
 
     // Start task executor for dispatched work
