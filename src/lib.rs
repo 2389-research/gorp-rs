@@ -19,6 +19,9 @@ pub mod coven;
 // Core message bus types
 pub mod bus;
 
+// Gateway adapter abstraction layer
+pub mod gateway;
+
 // Platform abstraction layer
 pub mod platform;
 
