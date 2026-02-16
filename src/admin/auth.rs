@@ -168,8 +168,14 @@ pub async fn auth_middleware(
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    let path = request.uri().path().to_string();
+    tracing::debug!(path = %path, remote_addr = %addr, "auth_middleware: checking request");
+
+    // Snapshot auth config and release the lock before processing the request
+    let auth_config = state.auth_config.read().await.clone();
+
     // If auth config is loaded, check token or session
-    if let Some(ref auth_config) = state.auth_config {
+    if let Some(ref auth_config) = auth_config {
         // Check API token in X-API-Key header
         if let Some(token) = request
             .headers()
@@ -177,6 +183,7 @@ pub async fn auth_middleware(
             .and_then(|v| v.to_str().ok())
         {
             if auth_config.verify_token(token) {
+                tracing::debug!(path = %path, "auth_middleware: valid API token");
                 return Ok(next.run(request).await);
             }
             tracing::warn!(remote_addr = %addr, "Admin access denied: invalid API token");
@@ -189,9 +196,15 @@ pub async fn auth_middleware(
         if let Some(session) = request.extensions().get::<tower_sessions::Session>() {
             if let Ok(Some(username)) = session.get::<String>("user").await {
                 if username == auth_config.username {
+                    tracing::debug!(path = %path, username = %username, "auth_middleware: valid session");
                     return Ok(next.run(request).await);
                 }
+                tracing::warn!(remote_addr = %addr, expected = %auth_config.username, got = %username, "auth_middleware: session username mismatch");
+            } else {
+                tracing::debug!(path = %path, "auth_middleware: no user in session");
             }
+        } else {
+            tracing::debug!(path = %path, "auth_middleware: no session extension found");
         }
 
         // Fall back to legacy API key from webhook config
@@ -202,17 +215,19 @@ pub async fn auth_middleware(
                 .and_then(|v| v.to_str().ok())
             {
                 if header_key == api_key {
+                    tracing::debug!(path = %path, "auth_middleware: valid legacy API key");
                     return Ok(next.run(request).await);
                 }
             }
         }
 
         // No valid auth found
-        tracing::warn!(remote_addr = %addr, "Admin access denied: no valid credentials");
+        tracing::warn!(remote_addr = %addr, path = %path, "Admin access denied: no valid credentials");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
     // No auth config exists — fall back to legacy behavior (localhost or webhook API key)
+    tracing::debug!(path = %path, "auth_middleware: no auth config, falling back to legacy");
     let api_key = &state.config.webhook.api_key;
 
     if api_key.is_none() {
@@ -221,6 +236,7 @@ pub async fn auth_middleware(
             tracing::warn!(remote_addr = %addr, "Admin access denied: no API key and not localhost");
             return Err(StatusCode::FORBIDDEN);
         }
+        tracing::debug!(path = %path, "auth_middleware: localhost access granted (no auth config)");
         return Ok(next.run(request).await);
     }
 
@@ -251,26 +267,34 @@ pub async fn setup_guard_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    let path = request.uri().path().to_string();
+
     // Check whether setup has been completed
-    let setup_complete = state
-        .auth_config
+    let auth_config_guard = state.auth_config.read().await;
+    let setup_complete = auth_config_guard
         .as_ref()
         .map_or(false, |c| c.setup_complete);
+    let has_config = auth_config_guard.is_some();
+    drop(auth_config_guard);
+
+    tracing::debug!(
+        path = %path,
+        has_config = has_config,
+        setup_complete = setup_complete,
+        "setup_guard: evaluating request"
+    );
 
     if setup_complete {
         return next.run(request).await;
     }
 
-    // Setup is not complete — allow setup routes and health checks through
-    let path = request.uri().path();
-    if path.starts_with("/setup")
-        || path.starts_with("/admin/health")
-        || path.starts_with("/static")
-    {
+    // Setup is not complete — allow health checks and static assets through
+    if path.starts_with("/health") || path.starts_with("/static") {
         return next.run(request).await;
     }
 
     // Redirect everything else to setup
+    tracing::info!(path = %path, "setup_guard: setup not complete, redirecting to /setup");
     Redirect::temporary("/setup").into_response()
 }
 

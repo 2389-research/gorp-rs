@@ -36,21 +36,12 @@
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
         <div class="space-y-4">
-            <h2 class="text-lg font-semibold text-gray-700">Matrix Connection</h2>
-
-            <div class="bg-gray-50 rounded-lg p-4 space-y-3">
-                <div>
-                    <label class="block text-sm font-medium text-gray-500">Homeserver</label>
-                    <p class="font-mono text-sm">{{ homeserver }}</p>
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-500">Bot User ID</label>
-                    <p class="font-mono text-sm">{{ bot_user_id }}</p>
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-500">Device Name</label>
-                    <p class="font-mono text-sm">{{ device_name }}</p>
-                </div>
+            <h2 class="text-lg font-semibold text-gray-700">Platform Gateways</h2>
+            <div class="bg-gray-50 rounded-lg p-4">
+                <p class="text-sm text-gray-500">
+                    Platform connections are managed in
+                    <a href="/admin/gateways" class="text-blue-600 hover:text-blue-800 underline">Gateways</a>.
+                </p>
             </div>
         </div>
 
@@ -80,7 +71,7 @@
         {% if recent_errors.is_empty() %}
         <div class="bg-green-50 rounded-lg p-4 border-l-4 border-green-500">
             <div class="flex items-center">
-                <div class="text-2xl mr-3">✓</div>
+                <div class="text-2xl mr-3">&#10003;</div>
                 <div>
                     <div class="font-semibold text-green-800">No Recent Errors</div>
                     <div class="text-sm text-green-600">All systems operating normally</div>
@@ -93,7 +84,7 @@
                 {% for error in recent_errors %}
                 <div class="border-b border-red-200 pb-3 last:border-b-0 last:pb-0">
                     <div class="flex items-start">
-                        <div class="text-xl text-red-600 mr-3">⚠</div>
+                        <div class="text-xl text-red-600 mr-3">&#9888;</div>
                         <div class="flex-1">
                             <div class="flex justify-between items-start mb-1">
                                 <div class="font-semibold text-red-800 text-sm">{{ error.source }}</div>

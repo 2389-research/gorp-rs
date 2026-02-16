@@ -35,11 +35,13 @@ pub fn login_router() -> Router<AdminState> {
 
 async fn setup_step1_view(State(state): State<AdminState>) -> Response {
     // If setup is already complete, redirect to admin
-    if let Some(ref auth) = state.auth_config {
+    let auth_guard = state.auth_config.read().await;
+    if let Some(ref auth) = *auth_guard {
         if auth.setup_complete {
             return Redirect::temporary("/admin").into_response();
         }
     }
+    drop(auth_guard);
 
     SetupStep1Template {
         error_message: None,
@@ -60,9 +62,12 @@ async fn setup_step1_submit(
     Form(form): Form<SetupStep1Form>,
 ) -> Response {
     // If setup is already complete, redirect to admin
-    if let Some(ref auth) = state.auth_config {
-        if auth.setup_complete {
-            return Redirect::temporary("/admin").into_response();
+    {
+        let auth_guard = state.auth_config.read().await;
+        if let Some(ref auth) = *auth_guard {
+            if auth.setup_complete {
+                return Redirect::temporary("/admin").into_response();
+            }
         }
     }
 
@@ -134,7 +139,15 @@ async fn setup_step1_submit(
         .into_response();
     }
 
-    tracing::info!(username = username, "Admin account created during setup");
+    // Update in-memory state so middleware sees the change immediately
+    let mut guard = state.auth_config.write().await;
+    tracing::info!(
+        username = username,
+        setup_complete = true,
+        "Admin account created — updating in-memory auth state"
+    );
+    *guard = Some(auth_config);
+    drop(guard);
 
     // Redirect to step 2 to show the API token
     Redirect::to("/setup/step2").into_response()
@@ -180,7 +193,7 @@ async fn setup_step3_view(State(state): State<AdminState>) -> Response {
 // Setup Finish: Mark Complete
 // =============================================================================
 
-async fn setup_finish(State(_state): State<AdminState>) -> Response {
+async fn setup_finish(State(state): State<AdminState>) -> Response {
     let data_dir = crate::paths::data_dir();
     let data_dir_str = data_dir.to_string_lossy();
 
@@ -195,7 +208,12 @@ async fn setup_finish(State(_state): State<AdminState>) -> Response {
                 }
                 .into_response();
             }
-            tracing::info!("Setup wizard completed");
+
+            // Update in-memory state so middleware sees setup_complete immediately
+            let mut guard = state.auth_config.write().await;
+            tracing::info!(setup_complete = config.setup_complete, "Setup wizard completed — updating in-memory auth state");
+            *guard = Some(config);
+            drop(guard);
             Redirect::to("/login").into_response()
         }
         _ => Redirect::temporary("/setup").into_response(),
@@ -219,7 +237,7 @@ struct LoginForm {
 }
 
 async fn login_submit(
-    State(_state): State<AdminState>,
+    State(state): State<AdminState>,
     session: tower_sessions::Session,
     Form(form): Form<LoginForm>,
 ) -> Response {
@@ -255,7 +273,15 @@ async fn login_submit(
         .into_response();
     }
 
-    tracing::info!(username = username, "User logged in");
+    tracing::info!(username = username, "User logged in — session created, redirecting to /admin");
+
+    // Verify in-memory auth state is current (load from disk if stale)
+    {
+        let guard = state.auth_config.read().await;
+        let mem_complete = guard.as_ref().map_or(false, |c| c.setup_complete);
+        tracing::debug!(in_memory_setup_complete = mem_complete, "Login: auth state check before redirect");
+    }
+
     Redirect::to("/admin").into_response()
 }
 

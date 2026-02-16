@@ -2,6 +2,7 @@
 // ABOUTME: Defines the GatewayAdapter trait that all platform integrations implement.
 
 pub mod registry;
+pub mod web;
 
 use async_trait::async_trait;
 use std::sync::Arc;

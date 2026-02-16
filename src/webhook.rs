@@ -43,7 +43,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 #[derive(Clone)]
 struct WebhookState {
     session_store: SessionStore,
-    matrix_client: Client,
+    matrix_client: Option<Client>,
     config: Arc<Config>,
     job_tx: WebhookJobSender,
 }
@@ -81,7 +81,7 @@ struct WebhookWorkerResponse {
 pub async fn start_webhook_server(
     port: u16,
     session_store: SessionStore,
-    matrix_client: Client,
+    matrix_client: Option<Client>,
     config: Arc<Config>,
     warm_manager: SharedWarmSessionManager,
     registry: crate::platform::SharedPlatformRegistry,
@@ -149,9 +149,10 @@ pub async fn start_webhook_server(
         config: Arc::clone(&state.config),
         session_store: state.session_store.clone(),
         scheduler_store: scheduler_store.clone(),
-        auth_config,
+        auth_config: std::sync::Arc::new(tokio::sync::RwLock::new(auth_config)),
         ws_hub: ws_hub.clone(),
         registry: Some(registry.clone()),
+        bus: None,
     };
 
     // Spawn platform status monitor — polls registry every 5 seconds
@@ -430,56 +431,33 @@ async fn webhook_handler(
         }
     };
 
-    // Get Matrix room
-    let room_id: OwnedRoomId = match channel.room_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!(error = %e, room_id = %channel.room_id, "Invalid room ID");
-            metrics::record_webhook_request("error");
-            metrics::record_error("webhook_invalid_room_id");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(WebhookResponse {
-                    success: false,
-                    message: format!("Invalid room ID: {}", e),
-                }),
-            );
+    // Get Matrix room (optional — webhook still works without Matrix)
+    let room = if let Some(ref matrix_client) = state.matrix_client {
+        match channel.room_id.parse::<OwnedRoomId>() {
+            Ok(room_id) => matrix_client.get_room(&room_id),
+            Err(e) => {
+                tracing::warn!(error = %e, room_id = %channel.room_id, "Invalid room ID, skipping Matrix delivery");
+                None
+            }
         }
+    } else {
+        None
     };
 
-    let Some(room) = state.matrix_client.get_room(&room_id) else {
-        tracing::warn!(room_id = %channel.room_id, "Room not found");
-        metrics::record_webhook_request("not_found");
-        metrics::record_error("webhook_room_not_found");
-        return (
-            StatusCode::NOT_FOUND,
-            Json(WebhookResponse {
-                success: false,
-                message: format!("Room not found: {}", channel.room_id),
-            }),
-        );
-    };
-
-    // 1. Send webhook prompt to room for visibility
-    if let Err(e) = room
-        .send(RoomMessageEventContent::text_plain(format!(
-            "🤖 Webhook: {}",
-            prompt_text
-        )))
-        .await
-    {
-        tracing::error!(error = %e, "Failed to send webhook prompt to room");
-        metrics::record_webhook_request("error");
-        metrics::record_error("webhook_send_failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(WebhookResponse {
-                success: false,
-                message: format!("Failed to send message: {}", e),
-            }),
-        );
+    // Send webhook prompt to room for visibility (when Matrix room is available)
+    if let Some(ref room) = room {
+        if let Err(e) = room
+            .send(RoomMessageEventContent::text_plain(format!(
+                "🤖 Webhook: {}",
+                prompt_text
+            )))
+            .await
+        {
+            tracing::warn!(error = %e, "Failed to send webhook prompt to room (non-fatal)");
+        } else {
+            metrics::record_message_sent();
+        }
     }
-    metrics::record_message_sent();
 
     let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("webhook");
@@ -542,9 +520,11 @@ async fn webhook_handler(
             );
             let backend = &state.config.backend.backend_type;
             let error_msg = format!("⚠️ {} backend error: {}", backend, e);
-            let _ = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await;
+            if let Some(ref room) = room {
+                let _ = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await;
+            }
             metrics::record_webhook_request("error");
             metrics::record_error("webhook_warm_session");
             return (
@@ -561,43 +541,46 @@ async fn webhook_handler(
     metrics::record_claude_duration(claude_duration);
     metrics::record_claude_response_length(worker_response.response_len);
 
-    let chunks = chunk_message(&worker_response.response_text, MAX_CHUNK_SIZE);
-    let chunk_count = chunks.len();
-    for (i, chunk) in chunks.iter().enumerate() {
-        let html = markdown_to_html(chunk);
-        if let Err(e) = room
-            .send(RoomMessageEventContent::text_html(chunk, &html))
-            .await
-        {
-            tracing::error!(error = %e, chunk = i, "Failed to send Claude response chunk");
-            metrics::record_webhook_request("error");
-            metrics::record_error("webhook_response_send_failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(WebhookResponse {
-                    success: false,
-                    message: format!("Failed to send response chunk {}: {}", i, e),
-                }),
-            );
-        }
-        metrics::record_message_sent();
-        log_matrix_message(
-            &channel.directory,
-            &channel.room_id,
-            "webhook_response",
-            chunk,
-            Some(&html),
-            if chunk_count > 1 { Some(i) } else { None },
-            if chunk_count > 1 {
-                Some(chunk_count)
-            } else {
-                None
-            },
-        )
-        .await;
+    // Send response chunks to Matrix room (when available)
+    if let Some(ref room) = room {
+        let chunks = chunk_message(&worker_response.response_text, MAX_CHUNK_SIZE);
+        let chunk_count = chunks.len();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let html = markdown_to_html(chunk);
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_html(chunk, &html))
+                .await
+            {
+                tracing::error!(error = %e, chunk = i, "Failed to send Claude response chunk");
+                metrics::record_webhook_request("error");
+                metrics::record_error("webhook_response_send_failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(WebhookResponse {
+                        success: false,
+                        message: format!("Failed to send response chunk {}: {}", i, e),
+                    }),
+                );
+            }
+            metrics::record_message_sent();
+            log_matrix_message(
+                &channel.directory,
+                &channel.room_id,
+                "webhook_response",
+                chunk,
+                Some(&html),
+                if chunk_count > 1 { Some(i) } else { None },
+                if chunk_count > 1 {
+                    Some(chunk_count)
+                } else {
+                    None
+                },
+            )
+            .await;
 
-        if i < chunks.len() - 1 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if i < chunks.len() - 1 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
         }
     }
 

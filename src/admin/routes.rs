@@ -32,18 +32,14 @@ pub struct AdminState {
     pub config: Arc<Config>,
     pub session_store: SessionStore,
     pub scheduler_store: SchedulerStore,
-    pub auth_config: Option<super::auth::AuthConfig>,
+    pub auth_config: std::sync::Arc<tokio::sync::RwLock<Option<super::auth::AuthConfig>>>,
     pub ws_hub: super::websocket::WsHub,
     pub registry: Option<crate::platform::SharedPlatformRegistry>,
+    pub bus: Option<Arc<crate::bus::MessageBus>>,
 }
 
 #[derive(Deserialize)]
 pub struct ConfigForm {
-    pub home_server: String,
-    pub user_id: String,
-    pub device_name: String,
-    pub room_prefix: String,
-    pub allowed_users: String,
     pub webhook_port: u16,
     pub webhook_host: String,
     pub workspace_path: String,
@@ -144,22 +140,13 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
 
 async fn config_view(State(state): State<AdminState>) -> ConfigTemplate {
     let config = &state.config;
-    let matrix = config.matrix.as_ref();
     ConfigTemplate {
         title: "Configuration - gorp Admin".to_string(),
-        home_server: matrix.map(|m| m.home_server.clone()).unwrap_or_default(),
-        user_id: matrix.map(|m| m.user_id.clone()).unwrap_or_default(),
-        device_name: matrix.map(|m| m.device_name.clone()).unwrap_or_default(),
-        room_prefix: matrix.map(|m| m.room_prefix.clone()).unwrap_or_default(),
-        allowed_users: matrix.map(|m| m.allowed_users.join(", ")).unwrap_or_default(),
         webhook_port: config.webhook.port,
         webhook_host: config.webhook.host.clone(),
         webhook_api_key_set: config.webhook.api_key.is_some(),
         workspace_path: config.workspace.path.clone(),
         scheduler_timezone: config.scheduler.timezone.clone(),
-        password_set: matrix.and_then(|m| m.password.as_ref()).is_some(),
-        access_token_set: matrix.and_then(|m| m.access_token.as_ref()).is_some(),
-        recovery_key_set: matrix.and_then(|m| m.recovery_key.as_ref()).is_some(),
     }
 }
 
@@ -196,33 +183,9 @@ async fn config_save(
         };
     }
 
-    // Parse allowed_users from comma-separated string
-    let allowed_users: Vec<String> = form
-        .allowed_users
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    // Build new config preserving secrets from current config
+    // Build new config preserving existing values not on this form
     let mut new_config = (*state.config).clone();
-    let matrix = new_config.matrix.get_or_insert_with(|| {
-        gorp_core::config::MatrixConfig {
-            home_server: String::new(),
-            user_id: String::new(),
-            password: None,
-            access_token: None,
-            device_name: String::new(),
-            allowed_users: Vec::new(),
-            room_prefix: String::new(),
-            recovery_key: None,
-        }
-    });
-    matrix.home_server = form.home_server;
-    matrix.user_id = form.user_id;
-    matrix.device_name = form.device_name;
-    matrix.room_prefix = form.room_prefix;
-    matrix.allowed_users = allowed_users;
+
     new_config.webhook.port = form.webhook_port;
     new_config.webhook.host = form.webhook_host;
     new_config.workspace.path = form.workspace_path;
@@ -278,7 +241,7 @@ async fn channels_list(State(state): State<AdminState>) -> ChannelListTemplate {
             let debug_enabled = is_debug_enabled(ch);
             ChannelRow {
                 name: ch.channel_name.clone(),
-                room_id: ch.room_id.clone(),
+                platform_id: ch.room_id.clone(),
                 started: ch.started,
                 debug_enabled,
                 directory: ch.directory.clone(),
@@ -324,7 +287,7 @@ async fn channel_detail(
     Ok(ChannelDetailTemplate {
         title: format!("Channel: {} - gorp Admin", channel.channel_name),
         name: channel.channel_name,
-        room_id: channel.room_id,
+        platform_id: channel.room_id,
         session_id: channel.session_id,
         directory: channel.directory,
         started: channel.started,
@@ -833,12 +796,8 @@ async fn health_view(State(state): State<AdminState>) -> HealthTemplate {
     recent_errors.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent_errors.truncate(10);
 
-    let matrix = state.config.matrix.as_ref();
     HealthTemplate {
         title: "Health - gorp Admin".to_string(),
-        homeserver: matrix.map(|m| m.home_server.clone()).unwrap_or_default(),
-        bot_user_id: matrix.map(|m| m.user_id.clone()).unwrap_or_default(),
-        device_name: matrix.map(|m| m.device_name.clone()).unwrap_or_default(),
         webhook_port: state.config.webhook.port,
         webhook_host: state.config.webhook.host.clone(),
         timezone: state.config.scheduler.timezone.clone(),

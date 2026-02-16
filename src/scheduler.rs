@@ -51,7 +51,7 @@ async fn write_context_file(channel: &Channel) -> Result<()> {
 pub async fn start_scheduler(
     scheduler_store: SchedulerStore,
     session_store: SessionStore,
-    client: Client,
+    client: Option<Client>,
     config: Arc<Config>,
     check_interval: StdDuration,
     warm_manager: SharedWarmSessionManager,
@@ -153,7 +153,7 @@ async fn execute_schedule(
     schedule: ScheduledPrompt,
     scheduler_store: SchedulerStore,
     session_store: SessionStore,
-    client: Client,
+    client: Option<Client>,
     config: Arc<Config>,
     warm_manager: SharedWarmSessionManager,
 ) {
@@ -194,51 +194,48 @@ async fn execute_schedule(
         }
     };
 
-    // Get Matrix room
-    let room_id: matrix_sdk::ruma::OwnedRoomId = match schedule.room_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!(
-                schedule_id = %schedule.id,
-                room_id = %schedule.room_id,
-                error = %e,
-                "Invalid room ID"
-            );
-            if let Err(e) =
-                scheduler_store.mark_failed(&schedule.id, &format!("Invalid room ID: {}", e))
-            {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
+    // Get Matrix room (optional — scheduler still executes prompts without Matrix)
+    let room = if let Some(ref client) = client {
+        match schedule.room_id.parse::<matrix_sdk::ruma::OwnedRoomId>() {
+            Ok(room_id) => client.get_room(&room_id),
+            Err(e) => {
+                tracing::warn!(
+                    schedule_id = %schedule.id,
+                    room_id = %schedule.room_id,
+                    error = %e,
+                    "Invalid room ID, skipping Matrix delivery"
+                );
+                None
             }
-            return;
         }
+    } else {
+        None
     };
 
-    let Some(room) = client.get_room(&room_id) else {
-        tracing::error!(
+    if client.is_some() && room.is_none() {
+        tracing::warn!(
             schedule_id = %schedule.id,
             room_id = %schedule.room_id,
-            "Room not found"
+            "Matrix room not found — execution continues but results won't be delivered to Matrix"
         );
-        if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Room not found") {
-            tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
-        }
-        return;
-    };
+    }
 
     // Send notification that scheduled prompt is executing
-    let notification = format!(
-        "⏰ **Scheduled Task**\n> {}",
-        schedule.prompt.chars().take(200).collect::<String>()
-    );
-    let notification_html = markdown_to_html(&notification);
-    if let Err(e) = room
-        .send(RoomMessageEventContent::text_html(
-            &notification,
-            &notification_html,
-        ))
-        .await
-    {
-        tracing::warn!(error = %e, "Failed to send schedule notification");
+    if let Some(ref room) = room {
+        let notification = format!(
+            "⏰ **Scheduled Task**\n> {}",
+            schedule.prompt.chars().take(200).collect::<String>()
+        );
+        let notification_html = markdown_to_html(&notification);
+        if let Err(e) = room
+            .send(RoomMessageEventContent::text_html(
+                &notification,
+                &notification_html,
+            ))
+            .await
+        {
+            tracing::warn!(error = %e, "Failed to send schedule notification");
+        }
     }
 
     // Write context file for MCP tools before invoking Claude
@@ -257,11 +254,13 @@ async fn execute_schedule(
                 "Failed to expand slash command"
             );
             let error_msg = format!("⚠️ Scheduled task failed: {}", e);
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await
-            {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+            if let Some(ref room) = room {
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await
+                {
+                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+                }
             }
             if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
@@ -271,8 +270,10 @@ async fn execute_schedule(
     };
 
     // Start typing indicator
-    if let Err(e) = room.typing_notice(true).await {
-        tracing::debug!(error = %e, schedule_id = %schedule.id, "Failed to send typing indicator");
+    if let Some(ref room) = room {
+        if let Err(e) = room.typing_notice(true).await {
+            tracing::debug!(error = %e, schedule_id = %schedule.id, "Failed to send typing indicator");
+        }
     }
 
     // Prepare session (creates session if needed)
@@ -287,11 +288,13 @@ async fn execute_schedule(
         Err(e) => {
             tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to prepare session for scheduled task");
             let error_msg = format!("⚠️ Failed to prepare session: {}", e);
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await
-            {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+            if let Some(ref room) = room {
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await
+                {
+                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+                }
             }
             if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
@@ -319,11 +322,13 @@ async fn execute_schedule(
         Err(e) => {
             tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send prompt for scheduled task");
             let error_msg = format!("⚠️ Failed to send prompt: {}", e);
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await
-            {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+            if let Some(ref room) = room {
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await
+                {
+                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+                }
             }
             if let Err(e) = scheduler_store.mark_failed(&schedule.id, &e.to_string()) {
                 tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
@@ -400,13 +405,15 @@ async fn execute_schedule(
                         evicted = evicted,
                         "Evicted warm session after orphaned session in scheduler"
                     );
-                    if let Err(e) = room
-                        .send(RoomMessageEventContent::text_plain(
-                            "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
-                        ))
-                        .await
-                    {
-                        tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send session reset message to room");
+                    if let Some(ref room) = room {
+                        if let Err(e) = room
+                            .send(RoomMessageEventContent::text_plain(
+                                "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
+                            ))
+                            .await
+                        {
+                            tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send session reset message to room");
+                        }
                     }
                     if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Session was invalid")
                     {
@@ -439,13 +446,15 @@ async fn execute_schedule(
                     evicted = evicted,
                     "Evicted warm session after invalid session in scheduler"
                 );
-                if let Err(e) = room
-                    .send(RoomMessageEventContent::text_plain(
-                        "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
-                    ))
-                    .await
-                {
-                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send session reset message to room");
+                if let Some(ref room) = room {
+                    if let Err(e) = room
+                        .send(RoomMessageEventContent::text_plain(
+                            "🔄 Session was reset (conversation data was lost). Scheduled task will retry next time.",
+                        ))
+                        .await
+                    {
+                        tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send session reset message to room");
+                    }
                 }
                 if let Err(e) = scheduler_store.mark_failed(&schedule.id, "Session was invalid") {
                     tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to mark schedule failed");
@@ -466,8 +475,10 @@ async fn execute_schedule(
     }
 
     // Stop typing
-    if let Err(e) = room.typing_notice(false).await {
-        tracing::debug!(error = %e, schedule_id = %schedule.id, "Failed to stop typing indicator");
+    if let Some(ref room) = room {
+        if let Err(e) = room.typing_notice(false).await {
+            tracing::debug!(error = %e, schedule_id = %schedule.id, "Failed to stop typing indicator");
+        }
     }
 
     // Check for empty response
@@ -483,11 +494,13 @@ async fn execute_schedule(
                 "⚠️ Scheduled task failed: {} backend encountered an error and returned no response.",
                 backend_type
             );
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await
-            {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+            if let Some(ref room) = room {
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await
+                {
+                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+                }
             }
             if let Err(e) = scheduler_store.mark_failed(
                 &schedule.id,
@@ -506,11 +519,13 @@ async fn execute_schedule(
                 "⚠️ Scheduled task failed: {} backend returned an empty response. This may indicate a session issue or prompt problem.",
                 backend_type
             );
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_plain(&error_msg))
-                .await
-            {
-                tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+            if let Some(ref room) = room {
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_plain(&error_msg))
+                    .await
+                {
+                    tracing::error!(error = %e, schedule_id = %schedule.id, "Failed to send error message to room");
+                }
             }
             if let Err(e) = scheduler_store.mark_failed(
                 &schedule.id,
@@ -522,39 +537,47 @@ async fn execute_schedule(
         return;
     }
 
-    // Send response to room with chunking
-    let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
-    let chunk_count = chunks.len();
+    // Send response to room with chunking (when Matrix room is available)
+    if let Some(ref room) = room {
+        let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
+        let chunk_count = chunks.len();
 
-    for (i, chunk) in chunks.into_iter().enumerate() {
-        let html = markdown_to_html(&chunk);
-        if let Err(e) = room
-            .send(RoomMessageEventContent::text_html(&chunk, &html))
-            .await
-        {
-            tracing::warn!(error = %e, chunk = i, "Failed to send response chunk");
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let html = markdown_to_html(&chunk);
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_html(&chunk, &html))
+                .await
+            {
+                tracing::warn!(error = %e, chunk = i, "Failed to send response chunk");
+            }
+
+            // Log the Matrix message
+            log_matrix_message(
+                &channel.directory,
+                room.room_id().as_str(),
+                "scheduled_response",
+                &chunk,
+                Some(&html),
+                if chunk_count > 1 { Some(i) } else { None },
+                if chunk_count > 1 {
+                    Some(chunk_count)
+                } else {
+                    None
+                },
+            )
+            .await;
+
+            // Small delay between chunks
+            if i < chunk_count - 1 {
+                tokio::time::sleep(StdDuration::from_millis(100)).await;
+            }
         }
-
-        // Log the Matrix message
-        log_matrix_message(
-            &channel.directory,
-            room.room_id().as_str(),
-            "scheduled_response",
-            &chunk,
-            Some(&html),
-            if chunk_count > 1 { Some(i) } else { None },
-            if chunk_count > 1 {
-                Some(chunk_count)
-            } else {
-                None
-            },
-        )
-        .await;
-
-        // Small delay between chunks
-        if i < chunk_count - 1 {
-            tokio::time::sleep(StdDuration::from_millis(100)).await;
-        }
+    } else {
+        tracing::info!(
+            schedule_id = %schedule.id,
+            response_len = response.len(),
+            "Matrix delivery skipped — no Matrix client"
+        );
     }
 
     // Update session ID if a new one was created

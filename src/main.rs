@@ -1243,14 +1243,14 @@ async fn run_start() -> Result<()> {
     let session_store_arc = Arc::clone(&server.session_store);
     let scheduler_store = server.scheduler_store.clone();
     let warm_manager = server.warm_manager.clone();
-    let client = server.matrix_client.clone();
+    let matrix_client = server.matrix_client.clone();
     let sync_token = server.sync_token.clone();
 
     // ── Platform Registry ────────────────────────────────────────
     // Conditionally initialize platforms based on config and register them.
     let mut registry = PlatformRegistry::new();
 
-    if config_arc.matrix.is_some() {
+    if let Some(ref client) = matrix_client {
         let matrix_platform = MatrixPlatform::new(client.clone());
         registry.register(Box::new(matrix_platform));
         tracing::info!("Matrix platform registered");
@@ -1333,9 +1333,9 @@ async fn run_start() -> Result<()> {
     }
 
     if registry.is_empty() {
-        anyhow::bail!(
-            "No platforms configured. Add at least one platform section \
-             (e.g. [matrix], [telegram], [slack]) to config.toml"
+        tracing::warn!(
+            "No platforms configured — running in admin-only mode. \
+             Add a platform section (e.g. [matrix], [telegram], [slack]) to config.toml"
         );
     }
 
@@ -1366,7 +1366,7 @@ async fn run_start() -> Result<()> {
     // Start webhook server in background (can run before initial sync)
     let webhook_port = config_arc.webhook.port;
     let webhook_store = (*session_store_arc).clone();
-    let webhook_client = client.clone();
+    let webhook_client = matrix_client.clone();
     let webhook_config_arc = Arc::clone(&config_arc);
     let webhook_warm_manager = warm_manager.clone();
     let webhook_registry = Arc::clone(&registry);
@@ -1391,7 +1391,7 @@ async fn run_start() -> Result<()> {
     // Start scheduler background task (checks every 60 seconds)
     // Note: Scheduler needs LocalSet because ACP client futures are !Send
     let scheduler_session_store = (*session_store_arc).clone();
-    let scheduler_client = client.clone();
+    let scheduler_client = matrix_client.clone();
     let scheduler_config = Arc::clone(&config_arc);
     let scheduler_warm_manager = warm_manager.clone();
     std::thread::spawn(move || {
@@ -1414,216 +1414,226 @@ async fn run_start() -> Result<()> {
         });
     });
 
-    // Initial sync was performed by ServerState::initialize()
-    // Record startup time AFTER initial sync completes
-    // This filters out historical messages from the initial sync batch
-    let startup_time = chrono::Utc::now();
-    STARTUP_TIME
-        .set(startup_time)
-        .expect("STARTUP_TIME already set");
-    tracing::info!(startup_time = %startup_time, "Startup time recorded - will ignore messages before this");
-
-    // Set up cross-signing for device verification
-    // Only recover with valid recovery key - never auto-bootstrap (creates new keys silently)
-    let cross_signing_ready = if let Some(recovery_key) = config_arc.matrix.as_ref().and_then(|m| m.recovery_key.as_ref()) {
-        let cleaned_key = recovery_key.trim();
-
-        if cleaned_key.is_empty() {
-            tracing::warn!("Recovery key is empty - skipping cross-signing setup");
-            false
-        } else if !is_valid_recovery_key_format(cleaned_key) {
-            tracing::error!("Recovery key format appears invalid");
-            tracing::error!("Expected format: 'EsTR mwqJ JoXZ 8dKN ...' (4-letter groups)");
-            tracing::error!(
-                "Get the correct key from Element: Settings > Security > Secure Backup"
-            );
-            false
-        } else {
-            tracing::info!("Attempting to recover secrets using recovery key...");
-            match client.encryption().recovery().recover(cleaned_key).await {
-                Ok(()) => {
-                    tracing::info!("Successfully recovered cross-signing secrets");
-
-                    // Verify our own identity to complete self-signing
-                    if let Some(user_id) = client.user_id() {
-                        match client.encryption().get_user_identity(user_id).await {
-                            Ok(Some(identity)) => {
-                                if let Err(e) = identity.verify().await {
-                                    tracing::warn!(error = %e, "Failed to verify own identity");
-                                } else {
-                                    tracing::info!("Own identity verified - device is now trusted");
-                                }
-                            }
-                            Ok(None) => {
-                                tracing::warn!("Own user identity not found");
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Failed to get own identity");
-                            }
-                        }
-                    }
-
-                    // Check backup state
-                    let backup_state = client.encryption().backups().state();
-                    tracing::info!(state = ?backup_state, "Backup state after recovery");
-
-                    true
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Recovery key was rejected by server");
-                    tracing::error!("This usually means the key is incorrect or was reset");
-                    tracing::error!(
-                        "Get the correct key from Element: Settings > Security > Secure Backup"
-                    );
-                    false
-                }
-            }
-        }
-    } else {
-        tracing::info!("No recovery key configured - device will be unverified");
-        tracing::info!("To verify this device, either:");
-        tracing::info!(
-            "  1. Add recovery_key to config.toml (from Element > Security > Secure Backup)"
-        );
-        tracing::info!("  2. Or manually verify from Element's Security settings");
-        false
-    };
-
-    if !cross_signing_ready {
-        tracing::warn!("Device is UNVERIFIED - other users will see security warnings");
-        tracing::warn!("Encrypted messaging will still work, but messages show as unverified");
-    }
-
-    // Check if room prefix changed and rename rooms if needed
-    check_and_rename_rooms_for_prefix_change(&client, &config_arc, &session_store_arc).await;
-
-    // Create a channel for message events - handlers will send events here
-    // A LocalSet task will receive and process them, ensuring spawn_local works
-    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<(
-        Room,
-        matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
-        Client,
-        Arc<Config>,
-        Arc<SessionStore>,
-        SchedulerStore,
-        SharedWarmSessionManager,
-    )>(256);
-
-    // NOW register event handlers after encryption is established
-    // This prevents handlers from firing before the client is ready
-    register_event_handlers(
-        &client,
-        &config_arc,
-        &session_store_arc,
-        scheduler_store_for_handler,
-        warm_manager.clone(),
-        msg_tx, // Pass the sender to the handler
-    );
-    tracing::info!("Event handlers registered");
-
-    tracing::info!("Bot ready - DM me to create Claude rooms!");
-
-    // Announce startup to management room
-    announce_startup_to_management(&client).await;
-
-    // Notify allowed users that the bot is ready
-    notify_ready(&client, &config_arc).await;
-
-    // Notify DISPATCH channels with contextual status
-    dispatch_startup_notification(&client, &session_store_arc).await;
-
     // Start task executor for dispatched work
     start_task_executor(
-        client.clone(),
+        matrix_client.clone(),
         (*session_store_arc).clone(),
         Arc::clone(&config_arc),
         warm_manager.clone(),
     );
 
-    // Start continuous sync loop with the sync token from initial sync
-    // Use LocalSet because message handlers with ACP client futures are !Send
-    let settings = SyncSettings::default().token(sync_token);
-    tracing::info!("Starting continuous sync loop with LocalSet");
+    // ── Matrix-specific startup (cross-signing, event handlers, sync loop) ──
+    if let Some(ref client) = matrix_client {
+        // Record startup time AFTER initial sync completes
+        // This filters out historical messages from the initial sync batch
+        let startup_time = chrono::Utc::now();
+        STARTUP_TIME
+            .set(startup_time)
+            .expect("STARTUP_TIME already set");
+        tracing::info!(startup_time = %startup_time, "Startup time recorded - will ignore messages before this");
 
-    let local = tokio::task::LocalSet::new();
-    local.run_until(async move {
-        // Spawn the message handler task inside the LocalSet
-        // This ensures spawn_local works correctly
-        let mut handler_task = tokio::task::spawn_local(async move {
-            tracing::info!("Message handler LocalSet task started");
+        // Set up cross-signing for device verification
+        // Only recover with valid recovery key - never auto-bootstrap (creates new keys silently)
+        let cross_signing_ready = if let Some(recovery_key) = config_arc.matrix.as_ref().and_then(|m| m.recovery_key.as_ref()) {
+            let cleaned_key = recovery_key.trim();
 
-            // Event deduplication: track recently seen event IDs to prevent
-            // processing the same Matrix event multiple times (can happen during
-            // sync reconnections or SDK event delivery quirks)
-            let mut deduplicator = EventDeduplicator::new(10000);
+            if cleaned_key.is_empty() {
+                tracing::warn!("Recovery key is empty - skipping cross-signing setup");
+                false
+            } else if !is_valid_recovery_key_format(cleaned_key) {
+                tracing::error!("Recovery key format appears invalid");
+                tracing::error!("Expected format: 'EsTR mwqJ JoXZ 8dKN ...' (4-letter groups)");
+                tracing::error!(
+                    "Get the correct key from Element: Settings > Security > Secure Backup"
+                );
+                false
+            } else {
+                tracing::info!("Attempting to recover secrets using recovery key...");
+                match client.encryption().recovery().recover(cleaned_key).await {
+                    Ok(()) => {
+                        tracing::info!("Successfully recovered cross-signing secrets");
 
-            while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
-                // Deduplicate by event_id - skip if we've already processed this event
-                let event_id = event.event_id.to_string();
-                if !deduplicator.check_and_mark(&event_id) {
-                    tracing::debug!(
-                        event_id = %event_id,
-                        room_id = %room.room_id(),
-                        "Skipping duplicate event - already processed"
-                    );
-                    continue;
-                }
+                        // Verify our own identity to complete self-signing
+                        if let Some(user_id) = client.user_id() {
+                            match client.encryption().get_user_identity(user_id).await {
+                                Ok(Some(identity)) => {
+                                    if let Err(e) = identity.verify().await {
+                                        tracing::warn!(error = %e, "Failed to verify own identity");
+                                    } else {
+                                        tracing::info!("Own identity verified - device is now trusted");
+                                    }
+                                }
+                                Ok(None) => {
+                                    tracing::warn!("Own user identity not found");
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "Failed to get own identity");
+                                }
+                            }
+                        }
 
-                let room_id = room.room_id().to_owned();
-                tracing::info!(room_id = %room_id, event_id = %event_id, "Spawning concurrent message handler");
-                // Spawn each message handler concurrently instead of awaiting sequentially
-                tokio::task::spawn_local(async move {
-                    tracing::info!(room_id = %room_id, "Processing message concurrently");
-                    if let Err(e) = message_handler::handle_message(
-                        room,
-                        event,
-                        client,
-                        (*config).clone(),
-                        (*session_store).clone(),
-                        scheduler,
-                        warm_mgr,
-                    )
-                    .await
-                    {
-                        tracing::error!(room_id = %room_id, error = %e, "Error handling message");
-                    }
-                });
-            }
-            tracing::warn!("Message handler channel closed");
-        });
+                        // Check backup state
+                        let backup_state = client.encryption().backups().state();
+                        tracing::info!(state = ?backup_state, "Backup state after recovery");
 
-        // Yield to let the handler task start before sync
-        tokio::task::yield_now().await;
-        tracing::info!("Handler task spawned, starting sync");
-
-        // Run sync - let the SDK handle reconnection internally
-        // The SDK's sync() is designed to run forever with built-in retry logic.
-        // Previously we wrapped this in a 90-second timeout, but that can cause
-        // state corruption when cancelled mid-operation, leading to duplicate events.
-        // If the handler task exits, we'll exit too.
-        tokio::select! {
-            sync_result = client.sync(settings.clone()) => {
-                match sync_result {
-                    Ok(_) => {
-                        // Sync completed normally (shouldn't happen, sync is infinite)
-                        tracing::warn!("Matrix sync returned unexpectedly");
-                        Ok(())
+                        true
                     }
                     Err(e) => {
-                        // Sync error - this is fatal, let it propagate
-                        tracing::error!(error = %e, "Matrix sync failed");
-                        Err(e)
+                        tracing::error!(error = %e, "Recovery key was rejected by server");
+                        tracing::error!("This usually means the key is incorrect or was reset");
+                        tracing::error!(
+                            "Get the correct key from Element: Settings > Security > Secure Backup"
+                        );
+                        false
                     }
                 }
             }
-            _ = &mut handler_task => {
-                tracing::error!("Message handler task exited unexpectedly");
-                Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::other(
-                    "Message handler exited"
-                ))))
-            }
+        } else {
+            tracing::info!("No recovery key configured - device will be unverified");
+            tracing::info!("To verify this device, either:");
+            tracing::info!(
+                "  1. Add recovery_key to config.toml (from Element > Security > Secure Backup)"
+            );
+            tracing::info!("  2. Or manually verify from Element's Security settings");
+            false
+        };
+
+        if !cross_signing_ready {
+            tracing::warn!("Device is UNVERIFIED - other users will see security warnings");
+            tracing::warn!("Encrypted messaging will still work, but messages show as unverified");
         }
-    }).await?;
+
+        // Check if room prefix changed and rename rooms if needed
+        check_and_rename_rooms_for_prefix_change(client, &config_arc, &session_store_arc).await;
+
+        // Create a channel for message events - handlers will send events here
+        // A LocalSet task will receive and process them, ensuring spawn_local works
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<(
+            Room,
+            matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent,
+            Client,
+            Arc<Config>,
+            Arc<SessionStore>,
+            SchedulerStore,
+            SharedWarmSessionManager,
+        )>(256);
+
+        // NOW register event handlers after encryption is established
+        // This prevents handlers from firing before the client is ready
+        register_event_handlers(
+            client,
+            &config_arc,
+            &session_store_arc,
+            scheduler_store_for_handler,
+            warm_manager.clone(),
+            msg_tx, // Pass the sender to the handler
+        );
+        tracing::info!("Event handlers registered");
+
+        tracing::info!("Bot ready - DM me to create Claude rooms!");
+
+        // Announce startup to management room
+        announce_startup_to_management(client).await;
+
+        // Notify allowed users that the bot is ready
+        notify_ready(client, &config_arc).await;
+
+        // Notify DISPATCH channels with contextual status
+        dispatch_startup_notification(client, &session_store_arc).await;
+
+        // Start continuous sync loop with the sync token from initial sync
+        // Use LocalSet because message handlers with ACP client futures are !Send
+        let sync_token = sync_token.expect("sync_token must be Some when Matrix client is present");
+        let settings = SyncSettings::default().token(sync_token);
+        let client = client.clone();
+        tracing::info!("Starting continuous sync loop with LocalSet");
+
+        let local = tokio::task::LocalSet::new();
+        local.run_until(async move {
+            // Spawn the message handler task inside the LocalSet
+            // This ensures spawn_local works correctly
+            let mut handler_task = tokio::task::spawn_local(async move {
+                tracing::info!("Message handler LocalSet task started");
+
+                // Event deduplication: track recently seen event IDs to prevent
+                // processing the same Matrix event multiple times (can happen during
+                // sync reconnections or SDK event delivery quirks)
+                let mut deduplicator = EventDeduplicator::new(10000);
+
+                while let Some((room, event, client, config, session_store, scheduler, warm_mgr)) = msg_rx.recv().await {
+                    // Deduplicate by event_id - skip if we've already processed this event
+                    let event_id = event.event_id.to_string();
+                    if !deduplicator.check_and_mark(&event_id) {
+                        tracing::debug!(
+                            event_id = %event_id,
+                            room_id = %room.room_id(),
+                            "Skipping duplicate event - already processed"
+                        );
+                        continue;
+                    }
+
+                    let room_id = room.room_id().to_owned();
+                    tracing::info!(room_id = %room_id, event_id = %event_id, "Spawning concurrent message handler");
+                    // Spawn each message handler concurrently instead of awaiting sequentially
+                    tokio::task::spawn_local(async move {
+                        tracing::info!(room_id = %room_id, "Processing message concurrently");
+                        if let Err(e) = message_handler::handle_message(
+                            room,
+                            event,
+                            client,
+                            (*config).clone(),
+                            (*session_store).clone(),
+                            scheduler,
+                            warm_mgr,
+                        )
+                        .await
+                        {
+                            tracing::error!(room_id = %room_id, error = %e, "Error handling message");
+                        }
+                    });
+                }
+                tracing::warn!("Message handler channel closed");
+            });
+
+            // Yield to let the handler task start before sync
+            tokio::task::yield_now().await;
+            tracing::info!("Handler task spawned, starting sync");
+
+            // Run sync - let the SDK handle reconnection internally
+            // The SDK's sync() is designed to run forever with built-in retry logic.
+            // Previously we wrapped this in a 90-second timeout, but that can cause
+            // state corruption when cancelled mid-operation, leading to duplicate events.
+            // If the handler task exits, we'll exit too.
+            tokio::select! {
+                sync_result = client.sync(settings.clone()) => {
+                    match sync_result {
+                        Ok(_) => {
+                            // Sync completed normally (shouldn't happen, sync is infinite)
+                            tracing::warn!("Matrix sync returned unexpectedly");
+                            Ok(())
+                        }
+                        Err(e) => {
+                            // Sync error - this is fatal, let it propagate
+                            tracing::error!(error = %e, "Matrix sync failed");
+                            Err(e)
+                        }
+                    }
+                }
+                _ = &mut handler_task => {
+                    tracing::error!("Message handler task exited unexpectedly");
+                    Err(matrix_sdk::Error::UnknownError(Box::new(std::io::Error::other(
+                        "Message handler exited"
+                    ))))
+                }
+            }
+        }).await?;
+    } else {
+        // ── No Matrix — run headless with webhook/admin only ──
+        tracing::info!("No Matrix sync loop — waiting for shutdown signal");
+        tracing::info!("Admin panel available at http://localhost:{}/admin", webhook_port);
+        tokio::signal::ctrl_c().await?;
+        tracing::info!("Shutdown signal received");
+    }
 
     Ok(())
 }

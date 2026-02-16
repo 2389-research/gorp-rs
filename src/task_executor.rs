@@ -19,7 +19,7 @@ use crate::{
 /// This runs in a loop, polling for pending dispatch tasks and executing them
 /// by sending prompts to target workspace rooms.
 pub fn start_task_executor(
-    client: Client,
+    client: Option<Client>,
     session_store: SessionStore,
     config: Arc<Config>,
     warm_manager: SharedWarmSessionManager,
@@ -32,7 +32,7 @@ pub fn start_task_executor(
 
 /// Main executor loop - polls for pending tasks every 5 seconds
 async fn run_executor_loop(
-    client: Client,
+    client: Option<Client>,
     session_store: SessionStore,
     config: Arc<Config>,
     warm_manager: SharedWarmSessionManager,
@@ -187,13 +187,17 @@ async fn run_executor_loop(
 
 /// Notify all DISPATCH rooms about task completion/failure
 async fn notify_dispatch_rooms(
-    client: &Client,
+    client: &Option<Client>,
     session_store: &SessionStore,
     target_room_id: &str,
     task_id: &str,
     success: bool,
     message: &str,
 ) {
+    let Some(ref client) = client else {
+        tracing::debug!(task_id = %task_id, "Skipping DISPATCH notification — no Matrix client");
+        return;
+    };
     // Get channel name for the target room
     let channel_name = session_store
         .get_by_room(target_room_id)
@@ -269,7 +273,7 @@ async fn execute_task(
     task_id: &str,
     target_room_id: &str,
     prompt: &str,
-    client: &Client,
+    client: &Option<Client>,
     session_store: &SessionStore,
     _config: Arc<Config>,
     warm_manager: SharedWarmSessionManager,
@@ -279,34 +283,39 @@ async fn execute_task(
         .get_by_room(target_room_id)?
         .ok_or_else(|| anyhow::anyhow!("Target room not found: {}", target_room_id))?;
 
-    // Get the Matrix room
-    let room_id: matrix_sdk::ruma::OwnedRoomId = target_room_id
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Invalid room ID: {}", e))?;
-
-    let room = client
-        .get_room(&room_id)
-        .ok_or_else(|| anyhow::anyhow!("Room not accessible: {}", target_room_id))?;
+    // Get the Matrix room (optional — task executor works without Matrix)
+    let room = if let Some(ref client) = client {
+        let room_id: matrix_sdk::ruma::OwnedRoomId = target_room_id
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Invalid room ID: {}", e))?;
+        client.get_room(&room_id)
+    } else {
+        None
+    };
 
     // Send notification that a dispatched task is starting
-    let notification = format!(
-        "📋 **Dispatched Task**\n> {}",
-        prompt.chars().take(200).collect::<String>()
-    );
-    let notification_html = markdown_to_html(&notification);
-    if let Err(e) = room
-        .send(RoomMessageEventContent::text_html(
-            &notification,
-            &notification_html,
-        ))
-        .await
-    {
-        tracing::warn!(task_id = %task_id, error = %e, "Failed to send task notification");
+    if let Some(ref room) = room {
+        let notification = format!(
+            "📋 **Dispatched Task**\n> {}",
+            prompt.chars().take(200).collect::<String>()
+        );
+        let notification_html = markdown_to_html(&notification);
+        if let Err(e) = room
+            .send(RoomMessageEventContent::text_html(
+                &notification,
+                &notification_html,
+            ))
+            .await
+        {
+            tracing::warn!(task_id = %task_id, error = %e, "Failed to send task notification");
+        }
     }
 
     // Start typing indicator
-    if let Err(e) = room.typing_notice(true).await {
-        tracing::debug!(task_id = %task_id, error = %e, "Failed to send typing indicator");
+    if let Some(ref room) = room {
+        if let Err(e) = room.typing_notice(true).await {
+            tracing::debug!(task_id = %task_id, error = %e, "Failed to send typing indicator");
+        }
     }
 
     // Prepare session (creates session if needed)
@@ -355,30 +364,36 @@ async fn execute_task(
     }
 
     // Stop typing indicator
-    let _ = room.typing_notice(false).await;
+    if let Some(ref room) = room {
+        let _ = room.typing_notice(false).await;
+    }
 
     if had_error {
         // Send error to room
-        let error_msg = format!("⚠️ **Task Error**\n{}", error_message);
-        if let Err(e) = room
-            .send(RoomMessageEventContent::text_plain(&error_msg))
-            .await
-        {
-            tracing::error!(task_id = %task_id, error = %e, "Failed to send error message to room");
+        if let Some(ref room) = room {
+            let error_msg = format!("⚠️ **Task Error**\n{}", error_message);
+            if let Err(e) = room
+                .send(RoomMessageEventContent::text_plain(&error_msg))
+                .await
+            {
+                tracing::error!(task_id = %task_id, error = %e, "Failed to send error message to room");
+            }
         }
         return Err(anyhow::anyhow!("{}", error_message));
     }
 
-    // Send response to room (chunk if needed)
-    if !response.is_empty() {
-        let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
-        for chunk in chunks {
-            let html = markdown_to_html(&chunk);
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_html(&chunk, &html))
-                .await
-            {
-                tracing::error!(task_id = %task_id, error = %e, "Failed to send response chunk");
+    // Send response to room (chunk if needed, when Matrix is available)
+    if let Some(ref room) = room {
+        if !response.is_empty() {
+            let chunks = chunk_message(&response, MAX_CHUNK_SIZE);
+            for chunk in chunks {
+                let html = markdown_to_html(&chunk);
+                if let Err(e) = room
+                    .send(RoomMessageEventContent::text_html(&chunk, &html))
+                    .await
+                {
+                    tracing::error!(task_id = %task_id, error = %e, "Failed to send response chunk");
+                }
             }
         }
     }

@@ -19,7 +19,7 @@ use crate::session::SessionStore;
 pub struct McpState {
     pub session_store: SessionStore,
     pub scheduler_store: SchedulerStore,
-    pub matrix_client: Client,
+    pub matrix_client: Option<Client>,
     pub timezone: String,
     pub workspace_path: String,
     pub room_prefix: String,
@@ -598,9 +598,10 @@ async fn handle_send_attachment(state: &McpState, args: &Value) -> Result<String
         .parse()
         .map_err(|e| format!("Invalid room_id: {}", e))?;
 
-    // Get the room
-    let room = state
-        .matrix_client
+    // Get the room (requires Matrix)
+    let matrix_client = state.matrix_client.as_ref()
+        .ok_or("Matrix not configured — cannot attach files to rooms")?;
+    let room = matrix_client
         .get_room(&room_id)
         .ok_or_else(|| format!("Room not found: {}", room_id_str))?;
 
@@ -660,9 +661,8 @@ async fn handle_send_attachment(state: &McpState, args: &Value) -> Result<String
 
     let is_image = mime_type.type_() == "image";
 
-    // Upload to Matrix
-    let upload_response = state
-        .matrix_client
+    // Upload to Matrix (client already extracted above)
+    let upload_response = matrix_client
         .media()
         .upload(&mime_type, file_data, None) // None = default RequestConfig
         .await
@@ -979,15 +979,14 @@ async fn handle_leave_room(state: &McpState, args: &Value) -> Result<String, Str
         .parse()
         .map_err(|e| format!("Invalid room ID: {}", e))?;
 
-    let room = state
-        .matrix_client
-        .get_room(&room_id)
-        .ok_or_else(|| format!("Room not found: {}", channel.room_id))?;
-
-    // Leave the room
-    room.leave()
-        .await
-        .map_err(|e| format!("Failed to leave room: {}", e))?;
+    // Leave the Matrix room (if Matrix is available)
+    if let Some(ref matrix_client) = state.matrix_client {
+        if let Some(room) = matrix_client.get_room(&room_id) {
+            room.leave()
+                .await
+                .map_err(|e| format!("Failed to leave Matrix room: {}", e))?;
+        }
+    }
 
     Ok(format!(
         "Left room '{}'. Workspace at '{}' is preserved.",
@@ -1004,11 +1003,17 @@ async fn handle_create_channel(state: &McpState, args: &Value) -> Result<String,
 
     let invite_user = args.get("invite_user").and_then(|v| v.as_str());
 
-    // Create Matrix room first
-    let room_name = format!("{}: {}", state.room_prefix, channel_name);
-    let room_id = matrix_client::create_room(&state.matrix_client, &room_name)
-        .await
-        .map_err(|e| format!("Failed to create Matrix room: {}", e))?;
+    // Create Matrix room if Matrix is available, otherwise use a placeholder room ID
+    let room_id = if let Some(ref matrix_client) = state.matrix_client {
+        let room_name = format!("{}: {}", state.room_prefix, channel_name);
+        matrix_client::create_room(matrix_client, &room_name)
+            .await
+            .map_err(|e| format!("Failed to create Matrix room: {}", e))?
+    } else {
+        // Generate a placeholder room ID for non-Matrix operation
+        format!("!local-{}", uuid::Uuid::new_v4()).parse()
+            .map_err(|e| format!("Failed to create placeholder room ID: {}", e))?
+    };
 
     // Create channel in session store (handles directory creation, templates, validation)
     let channel = state
@@ -1016,11 +1021,15 @@ async fn handle_create_channel(state: &McpState, args: &Value) -> Result<String,
         .create_channel(channel_name, room_id.as_ref())
         .map_err(|e| format!("Failed to create channel: {}", e))?;
 
-    // Invite user if specified
+    // Invite user if specified (only when Matrix is available)
     if let Some(user_id) = invite_user {
-        matrix_client::invite_user(&state.matrix_client, &room_id, user_id)
-            .await
-            .map_err(|e| format!("Room created but failed to invite user: {}", e))?;
+        if let Some(ref matrix_client) = state.matrix_client {
+            matrix_client::invite_user(matrix_client, &room_id, user_id)
+                .await
+                .map_err(|e| format!("Room created but failed to invite user: {}", e))?;
+        } else {
+            tracing::warn!(user = %user_id, "Cannot invite user — Matrix not configured");
+        }
 
         Ok(format!(
             "Created channel '{}'\nRoom ID: {}\nWorkspace: {}\nInvited: {}",
@@ -1072,8 +1081,10 @@ async fn handle_invite_to_channel(state: &McpState, args: &Value) -> Result<Stri
         .parse()
         .map_err(|e| format!("Invalid room ID: {}", e))?;
 
-    // Invite the user
-    matrix_client::invite_user(&state.matrix_client, &room_id, user_id)
+    // Invite the user (requires Matrix)
+    let matrix_client = state.matrix_client.as_ref()
+        .ok_or("Matrix not configured — cannot invite users")?;
+    matrix_client::invite_user(matrix_client, &room_id, user_id)
         .await
         .map_err(|e| format!("Failed to invite user: {}", e))?;
 
@@ -1119,8 +1130,9 @@ async fn handle_set_room_avatar(state: &McpState, args: &Value) -> Result<String
         .parse()
         .map_err(|e| format!("Invalid room ID: {}", e))?;
 
-    let room = state
-        .matrix_client
+    let matrix_client = state.matrix_client.as_ref()
+        .ok_or("Matrix not configured — cannot send images to rooms")?;
+    let room = matrix_client
         .get_room(&room_id)
         .ok_or_else(|| format!("Room not found: {}", channel.room_id))?;
 
@@ -1176,9 +1188,8 @@ async fn handle_set_room_avatar(state: &McpState, args: &Value) -> Result<String
         return Err(format!("File is not an image: {}", image_path));
     }
 
-    // Upload image to Matrix
-    let upload_response = state
-        .matrix_client
+    // Upload image to Matrix (client already extracted above)
+    let upload_response = matrix_client
         .media()
         .upload(&mime_type, image_data, None)
         .await
@@ -1237,8 +1248,9 @@ async fn handle_set_room_topic(state: &McpState, args: &Value) -> Result<String,
         .parse()
         .map_err(|e| format!("Invalid room ID: {}", e))?;
 
-    let room = state
-        .matrix_client
+    let matrix_client = state.matrix_client.as_ref()
+        .ok_or("Matrix not configured — cannot set room topic")?;
+    let room = matrix_client
         .get_room(&room_id)
         .ok_or_else(|| format!("Room not found: {}", channel.room_id))?;
 
@@ -1293,15 +1305,16 @@ async fn handle_report_to_management(state: &McpState, args: &Value) -> Result<S
         .parse()
         .map_err(|e| format!("Invalid management room ID: {}", e))?;
 
-    // Try to get the room - if we're not in it, try to join
-    let room = match state.matrix_client.get_room(&room_id) {
+    // Try to get the room - if we're not in it, try to join (requires Matrix)
+    let matrix_client = state.matrix_client.as_ref()
+        .ok_or("Matrix not configured — cannot send management alerts")?;
+    let room = match matrix_client.get_room(&room_id) {
         Some(r) => r,
         None => {
             // Try to join the room
             tracing::info!("Attempting to join management room: {}", MANAGEMENT_ROOM_ID);
             let room_id_ref: &RoomId = room_id.as_ref();
-            state
-                .matrix_client
+            matrix_client
                 .join_room_by_id(room_id_ref)
                 .await
                 .map_err(|e| {
@@ -1312,8 +1325,7 @@ async fn handle_report_to_management(state: &McpState, args: &Value) -> Result<S
                 })?;
 
             // Get the room after joining
-            state
-                .matrix_client
+            matrix_client
                 .get_room(&room_id)
                 .ok_or_else(|| "Failed to access management room after joining".to_string())?
         }

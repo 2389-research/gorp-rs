@@ -349,13 +349,17 @@ impl GorpApp {
                         self.rooms = server.get_rooms();
                         tracing::info!(room_count = self.rooms.len(), "Fetched room list");
 
-                        // Start Matrix sync loop
-                        let sync_rx = sync::start_sync(
-                            server.matrix_client.clone(),
-                            server.sync_token.clone(),
-                        );
-                        self.sync_rx = Some(sync_rx);
-                        tracing::info!("Started Matrix sync for GUI");
+                        // Start Matrix sync loop (only when Matrix is configured)
+                        if let (Some(ref client), Some(ref token)) = (&server.matrix_client, &server.sync_token) {
+                            let sync_rx = sync::start_sync(
+                                client.clone(),
+                                token.clone(),
+                            );
+                            self.sync_rx = Some(sync_rx);
+                            tracing::info!("Started Matrix sync for GUI");
+                        } else {
+                            tracing::info!("No Matrix client — GUI running without sync");
+                        }
 
                         self.server = Some(server);
                         self.status = "Connected".to_string();
@@ -404,9 +408,14 @@ impl GorpApp {
 
                     tracing::info!(room_id = %room_id, room_name = %self.current_room_name, "Navigated to room");
 
-                    // Load room messages
+                    // Load room messages (requires Matrix client)
                     if let Some(ref server) = self.server {
-                        let client = server.matrix_client.clone();
+                        let Some(ref client) = server.matrix_client else {
+                            tracing::warn!("Cannot load room messages — no Matrix client");
+                            self.view = view;
+                            return Task::none();
+                        };
+                        let client = client.clone();
                         let room_id = room_id.clone();
                         self.view = view;
                         return Task::perform(
@@ -604,9 +613,13 @@ impl GorpApp {
                 let scroll_task =
                     scrollable::snap_to(chat_scroll_id(), scrollable::RelativeOffset::END);
 
-                // Send message asynchronously
+                // Send message asynchronously (requires Matrix client)
                 if let Some(ref server) = self.server {
-                    let client = server.matrix_client.clone();
+                    let Some(ref client) = server.matrix_client else {
+                        tracing::warn!("Cannot send message — no Matrix client");
+                        return scroll_task;
+                    };
+                    let client = client.clone();
                     let room_id_owned = room_id.clone();
                     let msg = message_text;
 
@@ -1103,7 +1116,11 @@ impl GorpApp {
                 }
 
                 if let Some(ref server) = self.server {
-                    let client = server.matrix_client.clone();
+                    let Some(ref client) = server.matrix_client else {
+                        self.room_creation_error = Some("Matrix not configured — cannot create rooms".to_string());
+                        return Task::none();
+                    };
+                    let client = client.clone();
                     let session_store = server.session_store.clone();
                     let room_name = name.clone();
 

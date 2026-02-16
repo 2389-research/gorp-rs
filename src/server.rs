@@ -14,12 +14,13 @@ use std::sync::Arc;
 /// The GUI is a view layer over this state - it doesn't reinvent the server.
 pub struct ServerState {
     pub config: Arc<Config>,
-    pub matrix_client: Client,
+    pub matrix_client: Option<Client>,
     pub session_store: Arc<SessionStore>,
     pub scheduler_store: SchedulerStore,
     pub warm_manager: SharedWarmSessionManager,
     /// Sync token from initial sync - used by headless mode to continue syncing
-    pub sync_token: String,
+    /// None when running without Matrix
+    pub sync_token: Option<String>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -46,8 +47,12 @@ pub struct RoomInfo {
 
 impl ServerState {
     /// Get list of joined rooms for display
+    /// Returns empty Vec when running without Matrix
     pub fn get_rooms(&self) -> Vec<RoomInfo> {
-        self.matrix_client
+        let Some(ref client) = self.matrix_client else {
+            return Vec::new();
+        };
+        client
             .joined_rooms()
             .iter()
             .map(|room| {
@@ -117,46 +122,49 @@ impl ServerState {
         scheduler_store.initialize_schema()?;
         tracing::info!("Scheduler store initialized");
 
-        // Create Matrix client
-        let matrix_config = config
-            .matrix
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Matrix configuration is required"))?;
-        let client = matrix_client::create_client(
-            &matrix_config.home_server,
-            &matrix_config.user_id,
-            &matrix_config.device_name,
-        )
-        .await?;
+        // Conditionally create Matrix client
+        let (matrix_client, sync_token) = if let Some(matrix_config) = config.matrix.as_ref() {
+            let client = matrix_client::create_client(
+                &matrix_config.home_server,
+                &matrix_config.user_id,
+                &matrix_config.device_name,
+            )
+            .await?;
 
-        // Login
-        matrix_client::login(
-            &client,
-            &matrix_config.user_id,
-            matrix_config.password.as_deref(),
-            matrix_config.access_token.as_deref(),
-            &matrix_config.device_name,
-        )
-        .await?;
+            // Login
+            matrix_client::login(
+                &client,
+                &matrix_config.user_id,
+                matrix_config.password.as_deref(),
+                matrix_config.access_token.as_deref(),
+                &matrix_config.device_name,
+            )
+            .await?;
 
-        // Initial sync to establish encryption
-        tracing::info!("Performing initial sync...");
-        let sync_response = tokio::time::timeout(
-            Duration::from_secs(60),
-            client.sync_once(SyncSettings::default()),
-        )
-        .await
-        .context("Initial sync timed out")?
-        .context("Initial sync failed")?;
-        tracing::info!("Initial sync complete");
+            // Initial sync to establish encryption
+            tracing::info!("Performing initial sync...");
+            let sync_response = tokio::time::timeout(
+                Duration::from_secs(60),
+                client.sync_once(SyncSettings::default()),
+            )
+            .await
+            .context("Initial sync timed out")?
+            .context("Initial sync failed")?;
+            tracing::info!("Initial sync complete");
+
+            (Some(client), Some(sync_response.next_batch))
+        } else {
+            tracing::info!("No Matrix config — running without Matrix platform");
+            (None, None)
+        };
 
         Ok(Self {
             config: Arc::new(config),
-            matrix_client: client,
+            matrix_client,
             session_store: Arc::new(session_store),
             scheduler_store,
             warm_manager,
-            sync_token: sync_response.next_batch,
+            sync_token,
         })
     }
 }

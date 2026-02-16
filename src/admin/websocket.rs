@@ -215,6 +215,8 @@ async fn handle_ws(socket: WebSocket, state: AdminState) {
 
     // Reader task: reads messages from the client
     let subs = Arc::clone(&subscriptions);
+    let reader_bus = state.bus.clone();
+    let ws_connection_id = format!("ws-{}", uuid::Uuid::new_v4());
     let reader_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_stream.next().await {
             match msg {
@@ -248,7 +250,22 @@ async fn handle_ws(socket: WebSocket, state: AdminState) {
                                 body_len = body.len(),
                                 "Chat message received via WebSocket"
                             );
-                            // Chat integration will be wired in the web-chat-page task
+                            if let Some(ref bus) = reader_bus {
+                                let session_target = bus.resolve_target_async("web", &workspace).await;
+                                let msg = crate::bus::BusMessage {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    source: crate::bus::MessageSource::Web {
+                                        connection_id: ws_connection_id.clone(),
+                                    },
+                                    session_target,
+                                    sender: "admin".to_string(),
+                                    body,
+                                    timestamp: chrono::Utc::now(),
+                                };
+                                bus.publish_inbound(msg);
+                            } else {
+                                tracing::warn!("Chat message received but no message bus configured");
+                            }
                         }
                         ClientMessage::ChatCancel { workspace } => {
                             tracing::info!(
