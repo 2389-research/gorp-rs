@@ -1,7 +1,7 @@
 // ABOUTME: Message bus orchestrator -- consumes inbound messages, routes to agent sessions or DISPATCH.
 // ABOUTME: DISPATCH is a built-in command handler for session lifecycle and supervisor operations.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -142,7 +142,7 @@ impl DispatchCommand {
     }
 }
 
-/// Maximum size of the dedup set before it gets cleared to prevent unbounded growth.
+/// Maximum size of the dedup set before the oldest half is evicted.
 const DEDUP_CAP: usize = 10_000;
 
 /// Bus-based message orchestrator.
@@ -154,7 +154,7 @@ const DEDUP_CAP: usize = 10_000;
 #[derive(Clone)]
 pub struct Orchestrator {
     bus: Arc<MessageBus>,
-    seen_ids: Arc<Mutex<HashSet<String>>>,
+    seen_ids: Arc<Mutex<(HashSet<String>, VecDeque<String>)>>,
     session_store: SessionStore,
     warm_manager: Option<SharedWarmSessionManager>,
 }
@@ -169,7 +169,7 @@ impl Orchestrator {
     ) -> Self {
         Self {
             bus,
-            seen_ids: Arc::new(Mutex::new(HashSet::new())),
+            seen_ids: Arc::new(Mutex::new((HashSet::new(), VecDeque::new()))),
             session_store,
             warm_manager,
         }
@@ -185,15 +185,22 @@ impl Orchestrator {
                 Ok(msg) => {
                     // Dedup: skip messages we've already seen
                     let is_new = {
-                        let mut seen = self.seen_ids.lock().await;
-                        if seen.contains(&msg.id) {
+                        let mut guard = self.seen_ids.lock().await;
+                        let (ref mut set, ref mut order) = *guard;
+                        if set.contains(&msg.id) {
                             false
                         } else {
-                            // Cap the dedup set to prevent unbounded growth
-                            if seen.len() >= DEDUP_CAP {
-                                seen.clear();
+                            // Evict the oldest half when we hit the cap
+                            if set.len() >= DEDUP_CAP {
+                                let evict_count = DEDUP_CAP / 2;
+                                for _ in 0..evict_count {
+                                    if let Some(old_id) = order.pop_front() {
+                                        set.remove(&old_id);
+                                    }
+                                }
                             }
-                            seen.insert(msg.id.clone());
+                            set.insert(msg.id.clone());
+                            order.push_back(msg.id.clone());
                             true
                         }
                     };

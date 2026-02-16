@@ -125,6 +125,20 @@ impl ServerState {
         let session_store = SessionStore::new(&config.workspace.path)?;
         tracing::info!(workspace = %config.workspace.path, "Session store initialized");
 
+        // Load persisted channel bindings into the in-memory bus
+        match session_store.list_all_bindings() {
+            Ok(bindings) => {
+                let count = bindings.len();
+                bus.load_bindings(bindings).await;
+                if count > 0 {
+                    tracing::info!(count, "Loaded channel bindings into message bus");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load channel bindings — starting with empty bindings");
+            }
+        }
+
         // Initialize scheduler store
         let scheduler_store = SchedulerStore::new(session_store.db_connection());
         scheduler_store.initialize_schema()?;
