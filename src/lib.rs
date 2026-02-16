@@ -53,9 +53,11 @@ pub use gorp_core::session;
 pub use gorp_core::utils;
 pub use gorp_core::warm_session;
 
+// Message bus orchestrator (local, DISPATCH command parser + routing)
+pub mod orchestrator;
+
 // Re-export gorp-core traits and types
 pub use gorp_core::commands;
-pub use gorp_core::orchestrator;
 pub use gorp_core::traits;
 
 // Re-export gorp-agent types for convenience
