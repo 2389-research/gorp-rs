@@ -1366,17 +1366,15 @@ async fn run_start() -> Result<()> {
     // Start webhook server in background (can run before initial sync)
     let webhook_port = config_arc.webhook.port;
     let webhook_store = (*session_store_arc).clone();
-    let webhook_client = matrix_client.clone();
     let webhook_config_arc = Arc::clone(&config_arc);
-    let webhook_warm_manager = warm_manager.clone();
     let webhook_registry = Arc::clone(&registry);
+    let webhook_bus = Arc::clone(&server.bus);
     tokio::spawn(async move {
         if let Err(e) = webhook::start_webhook_server(
             webhook_port,
             webhook_store,
-            webhook_client,
+            webhook_bus,
             webhook_config_arc,
-            webhook_warm_manager,
             webhook_registry,
         )
         .await

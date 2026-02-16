@@ -11,16 +11,9 @@ use axum::{
 };
 #[cfg(feature = "admin")]
 use axum::{middleware, response::Redirect};
-use matrix_sdk::{
-    ruma::{events::room::message::RoomMessageEventContent, OwnedRoomId},
-    Client,
-};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::LocalSet,
-};
 use tower_http::trace::TraceLayer;
 
 #[cfg(feature = "admin")]
@@ -29,23 +22,20 @@ use crate::admin::{
     AdminState, WsHub,
 };
 use crate::{
+    bus::{BusMessage, MessageBus, MessageSource, ResponseContent, SessionTarget},
     config::Config,
     mcp::{mcp_handler, McpState},
     metrics,
     scheduler::SchedulerStore,
-    session::{Channel, SessionStore},
-    utils::{chunk_message, log_matrix_message, markdown_to_html, MAX_CHUNK_SIZE},
-    warm_session::{prepare_session_async, send_prompt_with_handle, SharedWarmSessionManager},
+    session::SessionStore,
 };
-use gorp_agent::AgentEvent;
 use metrics_exporter_prometheus::PrometheusHandle;
 
 #[derive(Clone)]
 struct WebhookState {
     session_store: SessionStore,
-    matrix_client: Option<Client>,
+    bus: Arc<MessageBus>,
     config: Arc<Config>,
-    job_tx: WebhookJobSender,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,43 +51,22 @@ pub struct WebhookResponse {
     pub message: String,
 }
 
-/// Channel sender used to queue webhook jobs onto the warm session worker.
-type WebhookJobSender = mpsc::Sender<WebhookJob>;
-
-/// Job sent from HTTP handlers to the LocalSet worker.
-struct WebhookJob {
-    channel: Channel,
-    prompt: String,
-    responder: oneshot::Sender<anyhow::Result<WebhookWorkerResponse>>,
-}
-
-/// Response returned by the worker after completing a prompt.
-struct WebhookWorkerResponse {
-    response_text: String,
-    response_len: usize,
-}
-
 /// Start the webhook HTTP server
 pub async fn start_webhook_server(
     port: u16,
     session_store: SessionStore,
-    matrix_client: Option<Client>,
+    bus: Arc<MessageBus>,
     config: Arc<Config>,
-    warm_manager: SharedWarmSessionManager,
     registry: crate::platform::SharedPlatformRegistry,
 ) -> Result<()> {
-    let worker_session_store = session_store.clone();
-    let job_tx = spawn_webhook_worker(worker_session_store, warm_manager);
-
     // Initialize Prometheus metrics
     let metrics_handle =
         metrics::init_metrics().context("Failed to initialize Prometheus metrics")?;
 
     let state = WebhookState {
         session_store,
-        matrix_client,
+        bus,
         config,
-        job_tx,
     };
 
     let webhook_routes = Router::new()
@@ -212,11 +181,11 @@ pub async fn start_webhook_server(
         ))
         .with_state(admin_state.clone());
 
-    // Create MCP state with scheduler store and Matrix client
+    // Create MCP state with scheduler store (Matrix client not available in webhook context)
     let mcp_state = McpState {
         session_store: state.session_store.clone(),
         scheduler_store,
-        matrix_client: state.matrix_client.clone(),
+        matrix_client: None,
         timezone: state.config.scheduler.timezone.clone(),
         workspace_path: state.config.workspace.path.clone(),
         room_prefix: state.config.matrix.as_ref().map(|m| m.room_prefix.clone()).unwrap_or_else(|| "Claude".to_string()),
@@ -431,421 +400,102 @@ async fn webhook_handler(
         }
     };
 
-    // Get Matrix room (optional — webhook still works without Matrix)
-    let room = if let Some(ref matrix_client) = state.matrix_client {
-        match channel.room_id.parse::<OwnedRoomId>() {
-            Ok(room_id) => matrix_client.get_room(&room_id),
-            Err(e) => {
-                tracing::warn!(error = %e, room_id = %channel.room_id, "Invalid room ID, skipping Matrix delivery");
-                None
-            }
-        }
-    } else {
-        None
+    // Publish to the message bus
+    let msg = BusMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        source: MessageSource::Api { token_hint: "webhook".to_string() },
+        session_target: SessionTarget::Session { name: channel.channel_name.clone() },
+        sender: "webhook".to_string(),
+        body: prompt_text,
+        timestamp: Utc::now(),
     };
 
-    // Send webhook prompt to room for visibility (when Matrix room is available)
-    if let Some(ref room) = room {
-        if let Err(e) = room
-            .send(RoomMessageEventContent::text_plain(format!(
-                "🤖 Webhook: {}",
-                prompt_text
-            )))
-            .await
-        {
-            tracing::warn!(error = %e, "Failed to send webhook prompt to room (non-fatal)");
-        } else {
-            metrics::record_message_sent();
-        }
-    }
-
-    let claude_start = std::time::Instant::now();
     metrics::record_claude_invocation("webhook");
 
-    let room_id_for_log = channel.room_id.clone();
-    let channel_name_for_log = channel.channel_name.clone();
+    // Subscribe to responses BEFORE publishing to avoid races
+    let mut response_rx = state.bus.subscribe_responses();
+    let target_session = channel.channel_name.clone();
 
-    let (responder_tx, responder_rx) = oneshot::channel();
-    if let Err(e) = state
-        .job_tx
-        .send(WebhookJob {
-            channel: channel.clone(),
-            prompt: prompt_text,
-            responder: responder_tx,
-        })
-        .await
-    {
-        tracing::error!(error = %e, "Warm session worker channel closed");
-        metrics::record_webhook_request("error");
-        metrics::record_error("webhook_worker_unavailable");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(WebhookResponse {
-                success: false,
-                message: "Warm session worker unavailable".to_string(),
-            }),
-        );
-    }
+    state.bus.publish_inbound(msg);
 
-    let worker_result = match responder_rx.await {
-        Ok(result) => result,
+    // Wait for the complete response from the orchestrator
+    let timeout = std::time::Duration::from_secs(300); // 5 minute timeout
+    let response_text = match tokio::time::timeout(timeout, async {
+        let mut accumulated = String::new();
+        loop {
+            match response_rx.recv().await {
+                Ok(resp) if resp.session_name == target_session => {
+                    match resp.content {
+                        ResponseContent::Chunk(text) => {
+                            accumulated.push_str(&text);
+                        }
+                        ResponseContent::Complete(text) => {
+                            // If we accumulated chunks, use those; otherwise use the complete text
+                            if accumulated.is_empty() {
+                                break Ok(text);
+                            } else {
+                                break Ok(accumulated);
+                            }
+                        }
+                        ResponseContent::Error(err) => {
+                            break Err(anyhow::anyhow!(err));
+                        }
+                        ResponseContent::SystemNotice(_) => {
+                            // Ignore system notices
+                        }
+                    }
+                }
+                Ok(_) => {
+                    // Response for a different session, ignore
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "Webhook response listener lagged");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break Err(anyhow::anyhow!("Message bus closed"));
+                }
+            }
+        }
+    }).await {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => {
+            // Agent/bus error
+            metrics::record_webhook_request("error");
+            metrics::record_error("webhook_agent");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(WebhookResponse {
+                    success: false,
+                    message: format!("Agent error: {}", e),
+                }),
+            );
+        }
         Err(_) => {
-            tracing::error!(
-                session_id = %session_id,
-                room_id = %channel.room_id,
-                channel = %channel.channel_name,
-                "Warm session worker dropped response channel"
-            );
+            // Timeout
             metrics::record_webhook_request("error");
-            metrics::record_error("webhook_worker_dropped");
-            let backend = &state.config.backend.backend_type;
+            metrics::record_error("webhook_timeout");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(WebhookResponse {
                     success: false,
-                    message: format!("{} backend worker failed to respond", backend),
+                    message: "Request timed out after 5 minutes".to_string(),
                 }),
             );
         }
     };
-
-    let worker_response = match worker_result {
-        Ok(response) => response,
-        Err(e) => {
-            tracing::error!(
-                room_id = %room_id_for_log,
-                channel = %channel_name_for_log,
-                error = %e,
-                "Warm session worker returned error"
-            );
-            let backend = &state.config.backend.backend_type;
-            let error_msg = format!("⚠️ {} backend error: {}", backend, e);
-            if let Some(ref room) = room {
-                let _ = room
-                    .send(RoomMessageEventContent::text_plain(&error_msg))
-                    .await;
-            }
-            metrics::record_webhook_request("error");
-            metrics::record_error("webhook_warm_session");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(WebhookResponse {
-                    success: false,
-                    message: format!("{} backend error: {}", backend, e),
-                }),
-            );
-        }
-    };
-
-    let claude_duration = claude_start.elapsed().as_secs_f64();
-    metrics::record_claude_duration(claude_duration);
-    metrics::record_claude_response_length(worker_response.response_len);
-
-    // Send response chunks to Matrix room (when available)
-    if let Some(ref room) = room {
-        let chunks = chunk_message(&worker_response.response_text, MAX_CHUNK_SIZE);
-        let chunk_count = chunks.len();
-        for (i, chunk) in chunks.iter().enumerate() {
-            let html = markdown_to_html(chunk);
-            if let Err(e) = room
-                .send(RoomMessageEventContent::text_html(chunk, &html))
-                .await
-            {
-                tracing::error!(error = %e, chunk = i, "Failed to send Claude response chunk");
-                metrics::record_webhook_request("error");
-                metrics::record_error("webhook_response_send_failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(WebhookResponse {
-                        success: false,
-                        message: format!("Failed to send response chunk {}: {}", i, e),
-                    }),
-                );
-            }
-            metrics::record_message_sent();
-            log_matrix_message(
-                &channel.directory,
-                &channel.room_id,
-                "webhook_response",
-                chunk,
-                Some(&html),
-                if chunk_count > 1 { Some(i) } else { None },
-                if chunk_count > 1 {
-                    Some(chunk_count)
-                } else {
-                    None
-                },
-            )
-            .await;
-
-            if i < chunks.len() - 1 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        }
-    }
-
-    tracing::info!(
-        room_id = %room_id_for_log,
-        channel = %channel_name_for_log,
-        duration = claude_duration,
-        "Webhook processed successfully"
-    );
 
     let total_duration = start_time.elapsed().as_secs_f64();
     metrics::record_webhook_request("success");
     metrics::record_webhook_duration(total_duration);
+    metrics::record_claude_response_length(response_text.len());
 
     (
         StatusCode::OK,
         Json(WebhookResponse {
             success: true,
-            message: "Message sent and Claude responded successfully".to_string(),
+            message: response_text,
         }),
     )
-}
-
-fn spawn_webhook_worker(
-    session_store: SessionStore,
-    warm_manager: SharedWarmSessionManager,
-) -> WebhookJobSender {
-    let (tx, mut rx) = mpsc::channel::<WebhookJob>(32);
-
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create webhook worker runtime");
-        let local = LocalSet::new();
-
-        local.block_on(&rt, async move {
-            while let Some(job) = rx.recv().await {
-                let session_store = session_store.clone();
-                let warm_manager = warm_manager.clone();
-                let WebhookJob {
-                    channel,
-                    prompt,
-                    responder,
-                } = job;
-
-                let result =
-                    process_webhook_job(channel, prompt, session_store, warm_manager).await;
-                if responder.send(result).is_err() {
-                    tracing::warn!(
-                        "Webhook handler dropped before worker response could be delivered"
-                    );
-                }
-            }
-        });
-    });
-
-    tx
-}
-
-async fn process_webhook_job(
-    channel: Channel,
-    prompt: String,
-    session_store: SessionStore,
-    warm_manager: SharedWarmSessionManager,
-) -> Result<WebhookWorkerResponse> {
-    let (session_handle, session_id, is_new_session) =
-        prepare_session_async(&warm_manager, &channel).await?;
-
-    if is_new_session {
-        if let Err(e) = session_store.update_session_id(&channel.room_id, &session_id) {
-            tracing::warn!(
-                error = %e,
-                room_id = %channel.room_id,
-                "Failed to persist new session ID during webhook prep"
-            );
-        }
-    }
-
-    tracing::info!(
-        channel = %channel.channel_name,
-        session_id = %session_id,
-        "Webhook worker sending prompt"
-    );
-
-    // Send prompt and get event receiver directly
-    let mut event_rx = send_prompt_with_handle(&session_handle, &session_id, &prompt).await?;
-
-    tracing::info!(
-        channel = %channel.channel_name,
-        session_id = %session_id,
-        "Webhook worker prompt started, processing events"
-    );
-
-    let mut response = String::new();
-    let mut session_id_from_event: Option<String> = None;
-
-    // Add timeout to prevent indefinite waiting
-    let timeout_duration = std::time::Duration::from_secs(300); // 5 minutes
-    let start = std::time::Instant::now();
-
-    while let Some(event) = event_rx.recv().await {
-        // Check for timeout
-        if start.elapsed() > timeout_duration {
-            tracing::warn!(
-                channel = %channel.channel_name,
-                session_id = %session_id,
-                "Webhook event processing timed out after 5 minutes"
-            );
-            metrics::record_error("webhook_timeout");
-            return Err(anyhow::anyhow!("Request timed out after 5 minutes"));
-        }
-
-        match event {
-            AgentEvent::ToolStart { name, input, .. } => {
-                // Extract input preview from JSON input
-                let input_preview: String = input
-                    .as_object()
-                    .and_then(|o| o.get("command").or(o.get("file_path")).or(o.get("pattern")))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.chars().take(50).collect())
-                    .unwrap_or_default();
-                tracing::debug!(
-                    channel = %channel.channel_name,
-                    tool = %name,
-                    preview = %input_preview,
-                    "Webhook tool invocation"
-                );
-            }
-            AgentEvent::ToolEnd { .. } => {
-                // Tool completion - just log for now
-                tracing::debug!("Tool completed");
-            }
-            AgentEvent::Text(text) => {
-                response.push_str(&text);
-            }
-            AgentEvent::Result { text, .. } => {
-                if response.is_empty() {
-                    response = text;
-                }
-                break;
-            }
-            AgentEvent::Error { code, message, .. } => {
-                // Check for session orphaned error
-                if code == gorp_agent::ErrorCode::SessionOrphaned {
-                    if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
-                        tracing::error!(
-                            error = %e,
-                            room_id = %channel.room_id,
-                            "Failed to reset invalid session from webhook"
-                        );
-                    }
-                    // Mark session as invalidated FIRST so concurrent users see it
-                    {
-                        let mut session = session_handle.lock().await;
-                        session.set_invalidated(true);
-                    }
-                    // Evict from warm cache so next request creates fresh session
-                    let evicted = {
-                        let mut mgr = warm_manager.write().await;
-                        mgr.evict(&channel.channel_name)
-                    };
-                    tracing::info!(
-                        channel = %channel.channel_name,
-                        evicted = evicted,
-                        "Evicted warm session after orphaned session in webhook"
-                    );
-                    metrics::record_error("invalid_session");
-                    return Err(anyhow::anyhow!(
-                        "Session was reset (conversation data was lost). Please trigger the webhook again."
-                    ));
-                }
-                metrics::record_error("agent_streaming");
-                return Err(anyhow::anyhow!(message));
-            }
-            AgentEvent::SessionInvalid { reason } => {
-                tracing::warn!(reason = %reason, "Session invalid");
-                if let Err(e) = session_store.reset_orphaned_session(&channel.room_id) {
-                    tracing::error!(
-                        error = %e,
-                        room_id = %channel.room_id,
-                        "Failed to reset invalid session from webhook"
-                    );
-                }
-                // Mark session as invalidated FIRST so concurrent users see it
-                {
-                    let mut session = session_handle.lock().await;
-                    session.set_invalidated(true);
-                }
-                // Evict from warm cache so next request creates fresh session
-                let evicted = {
-                    let mut mgr = warm_manager.write().await;
-                    mgr.evict(&channel.channel_name)
-                };
-                tracing::info!(
-                    channel = %channel.channel_name,
-                    evicted = evicted,
-                    "Evicted warm session after invalid session in webhook"
-                );
-                metrics::record_error("invalid_session");
-                return Err(anyhow::anyhow!(
-                    "Session was reset (conversation data was lost). Please trigger the webhook again."
-                ));
-            }
-            AgentEvent::SessionChanged { new_session_id } => {
-                session_id_from_event = Some(new_session_id);
-            }
-            AgentEvent::ToolProgress { .. } => {
-                tracing::debug!("Tool progress update");
-            }
-            AgentEvent::Custom { kind, .. } => {
-                tracing::debug!(kind = %kind, "Received custom event");
-            }
-        }
-    }
-
-    if response.trim().is_empty() {
-        let backend_type = warm_manager.read().await.backend_type().to_string();
-        metrics::record_error("agent_no_response");
-        return Err(anyhow::anyhow!(
-            "{} backend finished without a response",
-            backend_type
-        ));
-    }
-
-    // Update session ID if Claude CLI reported a new one
-    if let Some(ref new_sess_id) = session_id_from_event {
-        if let Err(e) = session_store.update_session_id(&channel.room_id, new_sess_id) {
-            tracing::error!(
-                error = %e,
-                room_id = %channel.room_id,
-                "Failed to update session ID after webhook prompt"
-            );
-        } else {
-            // CRITICAL: Also update the warm session cache to match the database
-            {
-                let mut session = session_handle.lock().await;
-                session.set_session_id(new_sess_id.clone());
-            }
-            tracing::debug!(
-                channel = %channel.channel_name,
-                new_session = %new_sess_id,
-                "Updated session ID in warm cache (webhook)"
-            );
-        }
-    }
-    if let Err(e) = session_store.mark_started(&channel.room_id) {
-        tracing::error!(
-            error = %e,
-            room_id = %channel.room_id,
-            "Failed to mark session as started after webhook"
-        );
-    }
-
-    let response_len = response.len();
-    tracing::info!(
-        channel = %channel.channel_name,
-        response_len,
-        "Webhook worker completed prompt"
-    );
-
-    Ok(WebhookWorkerResponse {
-        response_text: response,
-        response_len,
-    })
 }
 
 /// Handle GET /metrics - returns Prometheus text format
