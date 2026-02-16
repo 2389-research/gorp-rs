@@ -1,7 +1,7 @@
 // ABOUTME: Persistent session storage for Matrix room conversations using SQLite database.
 // ABOUTME: Maps channel names to Claude sessions backed by workspace directories.
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -213,6 +213,19 @@ impl SessionStore {
                 created_at TEXT NOT NULL,
                 completed_at TEXT,
                 result_summary TEXT
+            )",
+            [],
+        )?;
+
+        // Create channel_bindings table for mapping (platform_id, channel_id) to session names.
+        // Supports message bus routing by resolving which session owns a given platform channel.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS channel_bindings (
+                platform_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                session_name TEXT NOT NULL,
+                bound_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (platform_id, channel_id)
             )",
             [],
         )?;
@@ -1157,5 +1170,201 @@ impl SessionStore {
         };
 
         Ok(tasks)
+    }
+
+    // =========================================================================
+    // Channel Binding Methods (Message Bus Routing)
+    // =========================================================================
+
+    /// Bind a platform channel to a session name.
+    /// If a binding already exists for this (platform_id, channel_id) pair, it is replaced.
+    pub fn bind_channel(
+        &self,
+        platform_id: &str,
+        channel_id: &str,
+        session_name: &str,
+    ) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        db.execute(
+            "INSERT OR REPLACE INTO channel_bindings (platform_id, channel_id, session_name) VALUES (?1, ?2, ?3)",
+            params![platform_id, channel_id, session_name],
+        )?;
+        Ok(())
+    }
+
+    /// Remove the binding for a platform channel.
+    pub fn unbind_channel(&self, platform_id: &str, channel_id: &str) -> Result<()> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        db.execute(
+            "DELETE FROM channel_bindings WHERE platform_id = ?1 AND channel_id = ?2",
+            params![platform_id, channel_id],
+        )?;
+        Ok(())
+    }
+
+    /// Look up which session name a platform channel is bound to.
+    /// Returns None if no binding exists.
+    pub fn resolve_binding(
+        &self,
+        platform_id: &str,
+        channel_id: &str,
+    ) -> Result<Option<String>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = db.prepare(
+            "SELECT session_name FROM channel_bindings WHERE platform_id = ?1 AND channel_id = ?2",
+        )?;
+        let result = stmt
+            .query_row(params![platform_id, channel_id], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?;
+        Ok(result)
+    }
+
+    /// List all (platform_id, channel_id) pairs bound to a given session name.
+    pub fn list_bindings_for_session(
+        &self,
+        session_name: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = db.prepare(
+            "SELECT platform_id, channel_id FROM channel_bindings WHERE session_name = ?1",
+        )?;
+        let rows = stmt.query_map(params![session_name], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut bindings = Vec::new();
+        for row in rows {
+            bindings.push(row?);
+        }
+        Ok(bindings)
+    }
+
+    /// List all channel bindings across all sessions.
+    /// Returns (platform_id, channel_id, session_name) triples.
+    pub fn list_all_bindings(&self) -> Result<Vec<(String, String, String)>> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = db.prepare(
+            "SELECT platform_id, channel_id, session_name FROM channel_bindings",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut bindings = Vec::new();
+        for row in rows {
+            bindings.push(row?);
+        }
+        Ok(bindings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Create a SessionStore backed by a temporary directory for testing.
+    /// Returns both the store and the TempDir handle -- the TempDir must be kept
+    /// alive for the duration of the test so the SQLite database file persists.
+    fn create_test_store() -> (SessionStore, TempDir) {
+        let dir = TempDir::new().expect("Failed to create temp directory");
+        let store = SessionStore::new(dir.path()).expect("Failed to create session store");
+        (store, dir)
+    }
+
+    #[test]
+    fn test_create_and_list_channel_bindings() {
+        let (store, _dir) = create_test_store();
+        store
+            .bind_channel("matrix", "!room1:m.org", "research")
+            .unwrap();
+        store
+            .bind_channel("slack", "C12345", "research")
+            .unwrap();
+        let bindings = store.list_bindings_for_session("research").unwrap();
+        assert_eq!(bindings.len(), 2);
+    }
+
+    #[test]
+    fn test_resolve_binding() {
+        let (store, _dir) = create_test_store();
+        store
+            .bind_channel("matrix", "!room1:m.org", "research")
+            .unwrap();
+        let session = store.resolve_binding("matrix", "!room1:m.org").unwrap();
+        assert_eq!(session, Some("research".to_string()));
+        let none = store.resolve_binding("matrix", "!unknown:m.org").unwrap();
+        assert_eq!(none, None);
+    }
+
+    #[test]
+    fn test_unbind_channel() {
+        let (store, _dir) = create_test_store();
+        store
+            .bind_channel("matrix", "!room1:m.org", "research")
+            .unwrap();
+        store.unbind_channel("matrix", "!room1:m.org").unwrap();
+        let session = store.resolve_binding("matrix", "!room1:m.org").unwrap();
+        assert_eq!(session, None);
+    }
+
+    #[test]
+    fn test_list_all_bindings() {
+        let (store, _dir) = create_test_store();
+        store
+            .bind_channel("matrix", "!r1:m.org", "research")
+            .unwrap();
+        store.bind_channel("slack", "C1", "ops").unwrap();
+        let all = store.list_all_bindings().unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_bind_channel_replaces_existing() {
+        let (store, _dir) = create_test_store();
+        store
+            .bind_channel("matrix", "!room1:m.org", "research")
+            .unwrap();
+        store
+            .bind_channel("matrix", "!room1:m.org", "operations")
+            .unwrap();
+        let session = store.resolve_binding("matrix", "!room1:m.org").unwrap();
+        assert_eq!(session, Some("operations".to_string()));
+        // Should only have one binding, not two
+        let all = store.list_all_bindings().unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn test_list_bindings_for_session_empty() {
+        let (store, _dir) = create_test_store();
+        let bindings = store.list_bindings_for_session("nonexistent").unwrap();
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn test_unbind_nonexistent_channel() {
+        let (store, _dir) = create_test_store();
+        // Should not error when unbinding a channel that doesn't exist
+        store.unbind_channel("matrix", "!noroom:m.org").unwrap();
     }
 }
