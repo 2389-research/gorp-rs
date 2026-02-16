@@ -7,6 +7,12 @@ pub mod web;
 #[cfg(feature = "matrix")]
 pub mod matrix;
 
+#[cfg(feature = "slack")]
+pub mod slack;
+
+#[cfg(feature = "telegram")]
+pub mod telegram;
+
 use async_trait::async_trait;
 use std::sync::Arc;
 
