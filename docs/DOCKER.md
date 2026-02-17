@@ -17,7 +17,7 @@ MATRIX_HOME_SERVER=https://matrix.org
 MATRIX_USER_ID=@yourbot:matrix.org
 MATRIX_PASSWORD=your_password
 ALLOWED_USERS=@youruser:matrix.org
-CLAUDE_BINARY_PATH=/usr/local/bin/claude
+BACKEND_BINARY=/usr/local/bin/claude
 ```
 
 ### 3. Run the container
@@ -36,39 +36,26 @@ docker-compose logs -f
 
 The bot needs access to the Claude CLI binary. You have two options:
 
-### Option 1: Mount Claude from host (Recommended)
+### Claude Code Installation
 
-Uncomment this line in `docker-compose.yml`:
-
-```yaml
-volumes:
-  - /usr/local/bin/claude:/usr/local/bin/claude:ro
-```
-
-Replace `/usr/local/bin/claude` with your actual claude binary path.
-
-Find your claude path:
-```bash
-which claude
-```
-
-### Option 2: Install Claude in the container
-
-Add this to the Dockerfile after the `FROM debian:bookworm-slim` line:
+Claude Code is installed inside the container via npm during the Docker build.
+The Dockerfile installs Node.js 22.x and then runs:
 
 ```dockerfile
-# Install Node.js (if claude needs it)
-RUN apt-get update && apt-get install -y curl && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g @anthropic-ai/claude-cli
+npm install -g @anthropic-ai/claude-code
+npm install -g @zed-industries/claude-code-acp
 ```
+
+No host mount is needed for the Claude binary.
 
 ## Persistent Data
 
-The following directories are persisted as volumes:
-- `./sessions_db` - Claude session data
-- `./crypto_store` - Matrix encryption keys
+The following directories are persisted as volumes under `./app-data/`:
+- `./app-data/config` - gorp configuration (config.toml)
+- `./app-data/data` - crypto store, logs, scheduled prompts db
+- `./app-data/workspace` - Claude session workspace directories
+- `./app-data/claude-config` - Claude Code auth config
+- `./app-data/claude-settings` - Claude CLI settings
 
 ## Useful Commands
 
@@ -83,7 +70,7 @@ docker-compose up -d --build
 docker-compose ps
 
 # Execute commands in container
-docker-compose exec matrix-bridge /bin/bash
+docker-compose exec gorp /bin/bash
 
 # Remove everything (including volumes)
 docker-compose down -v
@@ -95,14 +82,14 @@ docker-compose down -v
 
 Check if claude is mounted correctly:
 ```bash
-docker-compose exec matrix-bridge which claude
+docker-compose exec gorp which claude
 ```
 
 ### Permission errors with volumes
 
-The container runs as the `claude` user (UID 1000). If you have permission issues:
+The container runs as the `gorp` user (UID 1000). If you have permission issues:
 ```bash
-sudo chown -R 1000:1000 sessions_db crypto_store
+sudo chown -R 1000:1000 app-data
 ```
 
 ### View detailed logs

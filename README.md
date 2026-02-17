@@ -47,9 +47,10 @@ password = "your-password"  # or use access_token
 device_name = "claude-matrix-bridge"
 allowed_users = ["@you:matrix.org"]
 
-[acp]
-# agent_binary = "codex-acp"  # optional, defaults to codex-acp (or "claude-code-acp")
-# timeout_secs = 300          # optional, defaults to 300
+[backend]
+type = "acp"
+binary = "claude-code-acp"
+timeout_secs = 300
 
 [webhook]
 port = 13000
@@ -138,8 +139,8 @@ Configuration is loaded from `config.toml` with optional environment variable ov
 - `matrix.allowed_users` - Array of authorized user IDs
 
 **ACP Settings:**
-- `acp.agent_binary` - ACP agent binary: "codex-acp" (default) or "claude-code-acp"
-- `acp.timeout_secs` - Timeout for ACP operations (default: 300)
+- `backend.binary` - ACP agent binary (depends on backend type)
+- `backend.timeout_secs` - Timeout for ACP operations (default: 300)
 
 **Webhook Settings:**
 - `webhook.port` - HTTP server port (default: 13000)
@@ -177,12 +178,12 @@ workspace/
 ```
 
 **Code Structure:**
-- `src/config.rs` - TOML config loading with env var overrides
-- `src/session.rs` - SQLite-backed channel management
+- `gorp-core/src/config.rs` - TOML config loading with env var overrides
+- `gorp-core/src/session.rs` - SQLite-backed channel management
 - `src/webhook.rs` - HTTP server for external triggers
-- `src/acp_client.rs` - ACP (Agent Client Protocol) client for Claude Code
-- `src/matrix_client.rs` - Matrix login and crypto setup
-- `src/message_handler.rs` - Auth checks, channel commands, orchestration
+- `gorp-agent/src/backends/acp.rs` - ACP protocol backend
+- `src/platform/matrix/client.rs` - Matrix login and crypto setup
+- `src/message_handler/` - Auth checks, channel commands, orchestration
 - `src/main.rs` - Entry point, sync loop, webhook server spawn
 
 ## License

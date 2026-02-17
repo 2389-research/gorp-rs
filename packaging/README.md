@@ -56,7 +56,7 @@ launchctl load ~/Library/LaunchAgents/com.2389.gorp.plist
 
 ## Homebrew
 
-Formula at `homebrew/gorp.rb`. To use:
+Formula at `packaging/homebrew/gorp.rb`. To use:
 
 1. Create a tap repository (e.g., `2389-research/homebrew-tap`)
 2. Copy `gorp.rb` to the tap

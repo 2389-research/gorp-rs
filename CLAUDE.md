@@ -27,4 +27,5 @@ BuildKit needs SSH agent for private git dependencies (mux-rs). If SSH fails:
 - `gorp-agent/` - Pluggable agent backend abstraction
   - `backends/acp.rs` - Claude Code CLI backend (agent-client-protocol)
   - `backends/mux.rs` - Native Rust backend using mux-rs
+- `gorp-core/` - Shared core library (config, session store, paths, metrics)
 - `src/` - Main gorp application (Matrix client, scheduler, web UI)

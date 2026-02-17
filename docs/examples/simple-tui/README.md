@@ -15,7 +15,7 @@ in-place chat log, and demonstrates how to pass through extra flags such as
 
 ```bash
 # install deps
-cd examples/simple-tui
+cd docs/examples/simple-tui
 npm install
 
 # run the demo
@@ -39,7 +39,7 @@ Controls:
 Prefer Python? Run:
 
 ```bash
-cd examples/simple-tui
+cd docs/examples/simple-tui
 python3 tui.py
 
 # With remote SDK server
@@ -52,11 +52,11 @@ so you can switch between them freely.
 Under the hood this script spawns the CLI with:
 
 ```
-claude --print --input-format text --output-format json \
+claude --print --output-format json \
        --session-id/--resume ... [--sdk-url ...]
 ```
 
-and pipes user messages through stdin so you do not have to worry about shell
-escaping. Because it uses the CLI exactly how a Matrix bridge or other bot
+and passes user messages as CLI arguments. Shell escaping is handled by the
+subprocess API since no shell is involved. Because it uses the CLI exactly how a Matrix bridge or other bot
 integration would, you can use it as a reference implementation for wiring
 Claude Code into any other text-based frontend.***

@@ -11,8 +11,7 @@ This project uses a multi-layered testing approach combining unit tests, integra
 Located in `tests/` directory, these test individual modules in isolation:
 
 - `tests/config_tests.rs` - Configuration parsing and validation
-- `tests/session_tests.rs` - Session persistence with sled database
-- `tests/claude_tests.rs` - Claude CLI response parsing
+- `tests/session_tests.rs` - Session persistence with SQLite database
 
 **Run unit tests:**
 ```bash
@@ -21,7 +20,7 @@ cargo test
 
 **Run specific test:**
 ```bash
-cargo test config_loads_from_env
+cargo test test_config_loads_from_toml_file
 ```
 
 **Run with output:**
@@ -31,29 +30,13 @@ cargo test -- --nocapture
 
 ### 2. Scenario Tests (Real Dependencies)
 
-Located in `.scratch/` directory (gitignored), these test real system integration:
-
-- `test_session_persistence.sh` - Real sled database operations
-- `test_config_parsing.sh` - Real environment variable parsing
-- `test_claude_json_parsing.sh` - Real JSON parsing with sample responses
-- `test_file_operations.sh` - Real filesystem I/O and directory creation
-- `test_cli_args_generation.sh` - CLI argument generation validation
+The `.scratch/` directory (gitignored) can be used for ad-hoc scenario tests that exercise real system integration. Any shell scripts placed there will not be committed to version control.
 
 **Key principles:**
-- **NO MOCKS** - All tests use real dependencies (real sled DB, real files, real env vars)
+- **NO MOCKS** - All tests use real dependencies (real SQLite DB, real files, real env vars)
 - **Observable outcomes** - Tests verify actual system behavior
 - **Independent** - Scenarios can run in any order
 - **Self-cleaning** - Tests clean up after themselves
-
-**Run all scenarios:**
-```bash
-.scratch/run_all_scenarios.sh
-```
-
-**Run individual scenario:**
-```bash
-.scratch/test_session_persistence.sh
-```
 
 ### 3. Integration Tests (Manual)
 
@@ -142,74 +125,10 @@ On first run, the bot creates a new device. You must verify it:
 
 ## Scenario Test Details
 
-### Session Persistence (`test_session_persistence.sh`)
-
-**What it tests:**
-- Session creation with real sled database
-- Session retrieval from disk
-- Session state updates (marking as started)
-- Persistence across process restarts
-- Real database files on disk
-
-**Real dependencies used:**
-- Sled database (on-disk key-value store)
-- Filesystem operations
-- Process spawning
-
-### Config Parsing (`test_config_parsing.sh`)
-
-**What it tests:**
-- Environment variable parsing
-- Required field validation
-- Default value application
-- CSV parsing with whitespace
-- Empty string filtering
-
-**Real dependencies used:**
-- Real environment variables
-- Shell process environment
-
-### Claude JSON Parsing (`test_claude_json_parsing.sh`)
-
-**What it tests:**
-- Multi-block text responses
-- Single block responses
-- Empty content arrays
-- Mixed content types (filtering non-text)
-- Invalid JSON rejection
-- Multiline responses
-- Unicode character handling
-
-**Real dependencies used:**
-- Real JSON samples from Claude API
-- serde_json parser
-
-### File Operations (`test_file_operations.sh`)
-
-**What it tests:**
-- Sled database directory creation
-- File writing and persistence
-- Read/write consistency
-- Multiple rooms in same database
-- Directory permissions
-- Concurrent database access
-
-**Real dependencies used:**
-- Real filesystem
-- Real sled database
-- Real concurrent processes
-
-### CLI Args Generation (`test_cli_args_generation.sh`)
-
-**What it tests:**
-- First message args (`--session-id <uuid>`)
-- Continuation args (`--resume <uuid>`)
-- Command line construction
-- Different rooms have different session IDs
-
-**Real dependencies used:**
-- Real session store
-- Real command line construction
+Scenario tests can be added to the `.scratch/` directory as shell scripts. They should
+exercise real dependencies (SQLite database, filesystem, environment variables) and
+verify observable outcomes. See the "Adding New Tests" section below for the recommended
+structure.
 
 ## Debugging Tests
 
@@ -220,15 +139,15 @@ RUST_LOG=debug cargo test -- --nocapture
 
 ### Run single test with backtrace:
 ```bash
-RUST_BACKTRACE=1 cargo test session_create_and_load
+RUST_BACKTRACE=1 cargo test test_channel_create_and_load
 ```
 
 ### Inspect scenario test intermediate files:
-Scenario tests create temporary directories. To inspect:
-1. Edit scenario script
-2. Comment out `rm -rf "$TEST_DIR"` in cleanup function
-3. Run test
-4. Inspect files in printed temp directory
+If scenario tests create temporary directories, inspect them by:
+1. Editing the scenario script
+2. Commenting out cleanup in the trap function
+3. Running the test
+4. Inspecting files in the printed temp directory
 
 ## Continuous Integration
 
@@ -237,9 +156,6 @@ All tests should pass before merging:
 ```bash
 # Unit tests
 cargo test
-
-# Scenario tests
-.scratch/run_all_scenarios.sh
 
 # Linting
 cargo clippy
@@ -252,7 +168,7 @@ cargo fmt --check
 
 Current coverage areas:
 - ✅ Configuration parsing and validation
-- ✅ Session persistence with sled
+- ✅ Session persistence with SQLite
 - ✅ Claude JSON response parsing
 - ✅ File I/O and directory operations
 - ✅ CLI argument generation
@@ -275,7 +191,6 @@ Current coverage areas:
 3. Verify observable outcomes
 4. Clean up resources in trap
 5. Make script executable
-6. Add to `run_all_scenarios.sh`
 
 **Example scenario test structure:**
 ```bash
@@ -293,8 +208,8 @@ trap cleanup EXIT
 
 ## Troubleshooting
 
-**Tests fail with sled errors:**
-- Ensure `/tmp` has write permissions
+**Tests fail with SQLite errors:**
+- Ensure the workspace directory is writable
 - Check disk space
 - Clean old test databases: `cargo clean`
 
@@ -311,7 +226,7 @@ trap cleanup EXIT
 
 ### Why No Mocks?
 
-**Mocks hide bugs.** When you mock a database, you test your mock, not your code. Scenario tests use real sled databases, real files, and real processes to catch integration issues that mocks would miss.
+**Mocks hide bugs.** When you mock a database, you test your mock, not your code. Scenario tests use real SQLite databases, real files, and real processes to catch integration issues that mocks would miss.
 
 ### Scenario vs Unit
 
@@ -326,6 +241,6 @@ Tests verify what the system actually does (files created, data persisted, proce
 ## Resources
 
 - [Cargo Test Documentation](https://doc.rust-lang.org/cargo/commands/cargo-test.html)
-- [Sled Database](https://github.com/spacejam/sled)
+- [rusqlite (SQLite for Rust)](https://github.com/rusqlite/rusqlite)
 - [Matrix SDK Testing](https://matrix-org.github.io/matrix-rust-sdk/)
 - [Scenario Testing Philosophy](https://www.hillelwayne.com/post/cross-branch-testing/)

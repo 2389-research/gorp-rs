@@ -1,6 +1,6 @@
 # gorp Help
 
-gorp is a Matrix-Claude bridge that creates persistent AI assistant channels.
+gorp is a multi-platform Claude bridge that creates persistent AI assistant channels.
 
 ## Quick Start
 
@@ -135,5 +135,5 @@ workspace/<channel>/
 
 ## More Info
 
-- GitHub: https://github.com/2389-research/gorp
-- Issues: https://github.com/2389-research/gorp/issues
+- GitHub: https://github.com/2389-research/gorp-rs
+- Issues: https://github.com/2389-research/gorp-rs/issues

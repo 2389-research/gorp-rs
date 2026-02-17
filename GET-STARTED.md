@@ -120,8 +120,9 @@ Now you have everything needed to set up gorp.
    # The recovery key from Step 3 (keeps the spaces)
    recovery_key = "EsTR mwqJ JoXZ 8dKN F8hP 9tPq ..."
 
-   [claude]
-   binary_path = "claude"
+   [backend]
+   type = "acp"
+   binary = "claude-code-acp"
 
    [workspace]
    path = "~/gorp-workspace"
@@ -172,7 +173,7 @@ docker-compose up -d
    - gorp will respond as Claude
 
 4. **Create topic rooms** (optional):
-   - Message the bot: `!join projectname`
+   - Message the bot: `!create projectname`
    - This creates a room called "Claude: projectname"
    - Each room has its own conversation context
 
@@ -188,7 +189,7 @@ Once chatting with gorp, you can use these commands:
 | `!join roomname` | Create/join a topic room |
 | `!schedule every day at 9am: Good morning!` | Schedule a recurring prompt |
 | `!schedule list` | Show scheduled prompts |
-| `!clear` | Clear conversation history |
+| `!reset` | Reset conversation history |
 
 ---
 

@@ -1,14 +1,13 @@
 # Matrix ↔︎ Claude Code Bridge (Python)
 
 This example shows how to connect a Matrix room to Claude Code by spawning the
-`claude` CLI for every inbound message. It uses[`matrix-nio`](https://github.com/poljar/matrix-nio)
+`claude` CLI for messages prefixed with `!claude`. It uses[`matrix-nio`](https://github.com/poljar/matrix-nio)
 and mirrors the same CLI flags as the terminal demos, so you can optionally
 tunnel through `--sdk-url`.
 
 ## Features
 
-- Listens to a single room and responds when a message starts with `!claude`
-  (or when the bot is mentioned).
+- Optionally filters to a single room (listens to all rooms by default) and responds when a message starts with `!claude`.
 - Keeps a long-lived Claude session per Matrix room so follow-ups share context.
 - Supports `/reset` and `/end` commands inside Matrix to drop the session.
 - Pipes replies back to the room as Markdown/plain text.
@@ -22,7 +21,7 @@ tunnel through `--sdk-url`.
 Install dependencies:
 
 ```bash
-cd examples/matrix-bridge
+cd docs/examples/matrix-bridge
 uv sync
 ```
 
@@ -49,7 +48,7 @@ Edit `.env` with your values:
 ## Usage
 
 ```bash
-cd examples/matrix-bridge
+cd docs/examples/matrix-bridge
 uv run python main.py
 ```
 
