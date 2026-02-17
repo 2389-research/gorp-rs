@@ -94,7 +94,7 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
     let total_channels = channels.len();
     let active_channels = channels.iter().filter(|c| c.started).count();
 
-    // Get schedule count
+    // Get schedule data
     let schedules = match state.scheduler_store.list_all() {
         Ok(s) => s,
         Err(e) => {
@@ -103,14 +103,67 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
         }
     };
     let total_schedules = schedules.len();
+    let active_schedules = schedules
+        .iter()
+        .filter(|s| s.status == ScheduleStatus::Active)
+        .count();
+
+    // Get recent errors from failed schedules (last 5 for dashboard)
+    let mut recent_errors: Vec<ErrorEntry> = schedules
+        .iter()
+        .filter(|s| s.status == ScheduleStatus::Failed && s.error_message.is_some())
+        .map(|s| {
+            let timestamp = s
+                .last_executed_at
+                .as_ref()
+                .unwrap_or(&s.created_at)
+                .chars()
+                .take(19)
+                .collect();
+            let source = format!("Schedule: {}", s.channel_name);
+            let message = s.error_message.clone().unwrap_or_default();
+            ErrorEntry {
+                timestamp,
+                source,
+                message,
+            }
+        })
+        .collect();
+    recent_errors.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    recent_errors.truncate(5);
+
+    // Get gateway status
+    let live_health = if let Some(ref reg) = state.registry {
+        let reg = reg.read().await;
+        reg.health()
+    } else {
+        vec![]
+    };
+    let gateways: Vec<GatewayRow> = PLATFORM_IDS
+        .iter()
+        .map(|id| {
+            let (configured, config_summary) = platform_config_summary(&state.config, id);
+            let connected = live_health.iter().any(|h| {
+                h.platform_id == *id
+                    && matches!(
+                        h.state,
+                        gorp_core::PlatformConnectionState::Connected
+                    )
+            });
+            GatewayRow {
+                platform_id: id.to_string(),
+                configured,
+                connected,
+                config_summary,
+            }
+        })
+        .collect();
 
     // Count recent messages from today across all channels
-    // Uses efficient tail reading - only reads last 1000 lines per channel
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let messages_today: usize = channels
         .iter()
         .map(|channel| {
-            // Validate directory path for security
             if let Err(e) = channel.validate_directory() {
                 tracing::warn!(
                     channel = %channel.channel_name,
@@ -124,7 +177,6 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
                 .join(".gorp")
                 .join("matrix_messages.log");
 
-            // Use efficient tail reading with pattern matching
             count_recent_lines_matching(&log_path, &today)
         })
         .sum();
@@ -134,7 +186,12 @@ async fn dashboard(State(state): State<AdminState>) -> DashboardTemplate {
         total_channels,
         active_channels,
         total_schedules,
+        active_schedules,
         messages_today,
+        gateways,
+        recent_errors,
+        webhook_port: state.config.webhook.port,
+        webhook_host: state.config.webhook.host.clone(),
     }
 }
 

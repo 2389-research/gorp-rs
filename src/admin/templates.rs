@@ -34,7 +34,12 @@ pub struct DashboardTemplate {
     pub total_channels: usize,
     pub active_channels: usize,
     pub total_schedules: usize,
+    pub active_schedules: usize,
     pub messages_today: usize,
+    pub gateways: Vec<GatewayRow>,
+    pub recent_errors: Vec<ErrorEntry>,
+    pub webhook_port: u16,
+    pub webhook_host: String,
 }
 
 #[derive(Template)]
@@ -421,18 +426,38 @@ mod tests {
             total_channels: 5,
             active_channels: 3,
             total_schedules: 10,
+            active_schedules: 7,
             messages_today: 42,
+            gateways: vec![
+                GatewayRow {
+                    platform_id: "matrix".to_string(),
+                    configured: true,
+                    connected: true,
+                    config_summary: "@bot:matrix.org".to_string(),
+                },
+                GatewayRow {
+                    platform_id: "telegram".to_string(),
+                    configured: false,
+                    connected: false,
+                    config_summary: String::new(),
+                },
+            ],
+            recent_errors: vec![],
+            webhook_port: 13000,
+            webhook_host: "localhost".to_string(),
         };
         let rendered = template
             .render()
             .expect("Dashboard template should render successfully");
         assert!(rendered.contains("Test Dashboard"));
         assert!(rendered.contains("gorp"));
-        assert!(rendered.contains("Configuration"));
-        assert!(rendered.contains("Total Sessions"));
-        assert!(rendered.contains("Active Sessions"));
-        assert!(rendered.contains("Total Schedules"));
+        assert!(rendered.contains("Sessions"));
+        assert!(rendered.contains("Schedules"));
         assert!(rendered.contains("Messages Today"));
+        assert!(rendered.contains("Platform Gateways"));
+        assert!(rendered.contains("Connected"));
+        assert!(rendered.contains("Not configured"));
+        assert!(rendered.contains("All systems operating normally"));
     }
 
     #[test]
