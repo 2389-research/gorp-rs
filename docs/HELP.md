@@ -19,6 +19,7 @@ These commands work in direct messages to the bot:
 - `!delete <name>` - Remove channel (keeps workspace files)
 - `!cleanup` - Leave orphaned rooms
 - `!restore-rooms` - Restore channels from workspace directories
+- `!reset <name>` - Reset a channel session remotely
 - `!list` - Show all your channels
 - `!help` - Show this help
 
@@ -31,8 +32,8 @@ These commands work in channel rooms:
 - `!debug on/off` - Toggle tool usage display
 - `!reset` - Reset Claude session (reloads MCP tools)
 - `!leave` - Bot leaves room (preserves workspace)
-- `!changelog` - Show recent changes
-- `!motd` - Show message of the day
+- `!changelog` - Show recent changes (not shown in !help output)
+- `!motd` - Show message of the day (not shown in !help output)
 
 ### Scheduling Commands
 
@@ -118,8 +119,8 @@ Each channel creates:
 ```
 workspace/<channel>/
 ├── CLAUDE.md           # Channel instructions
-├── .mcp.json           # MCP server config
-├── .claude/            # Claude settings
+├── .mcp.json           # MCP server config (copied from workspace/template/ if it exists)
+├── .claude/            # Claude settings (copied from workspace/template/ if it exists)
 │   └── settings.json   # Hooks configuration
 └── .gorp/              # gorp data
     ├── context.json    # Session context

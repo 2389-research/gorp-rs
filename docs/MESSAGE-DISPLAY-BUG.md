@@ -9,7 +9,7 @@ Users report that long messages from the bot sometimes don't appear until they s
 ### How Messages Flow
 
 1. **ACP Streaming**: Claude streams response chunks via ACP protocol
-2. **Local Buffering**: All chunks are accumulated in a `final_response` string (`message_handler.rs:441-443`)
+2. **Local Buffering**: All chunks are accumulated in a `final_response` string (`src/message_handler/chat.rs`)
 3. **Chunking**: Once complete, the response is split into 8000-char chunks (`utils.rs:18-70`)
 4. **Sending**: Chunks are sent via `room.send()` with 100ms delays between them
 
@@ -184,7 +184,7 @@ If Claude processing fails:
 
 ## Files to Modify
 
-- `src/message_handler.rs` - Main implementation in `handle_message()` and response sending logic
+- `src/message_handler/mod.rs` - Main implementation in `handle_message()` and response sending logic
 - Potentially `src/utils.rs` - If chunking logic needs adjustment
 
 ## References

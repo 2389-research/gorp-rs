@@ -75,11 +75,11 @@ gorp handles this gracefully with a fallback mechanism:
 
 ```rust
 // From warm_session.rs (simplified)
-match acp_client.load_session(&session_id).await {
+match agent_handle.load_session(&session_id).await {
     Ok(_) => { /* Resume succeeded */ }
     Err(_) => {
         // Fallback: create new session
-        let new_id = acp_client.new_session().await?;
+        let new_id = agent_handle.new_session().await?;
         // Update stored session ID
     }
 }
@@ -179,19 +179,11 @@ The `acp-session-resume` scenario in `scenarios.jsonl` documents this expected b
 }
 ```
 
-**Update needed**: This scenario's "then" clause is aspirational, not current behavior. Should be updated to:
-```json
-{
-  "then": "fallback to new session if LoadSession fails, context may be lost",
-  "validates": "graceful degradation when ACP session not found"
-}
-```
-
 ## Files Involved
 
-- `src/warm_session.rs` - Session resume logic and fallback
-- `src/acp_client.rs` - ACP protocol client (LoadSession, NewSession)
-- `src/session.rs` - SessionStore for persisting session IDs
+- `gorp-core/src/warm_session.rs` - Session resume logic and fallback
+- `gorp-agent/src/backends/acp.rs` - ACP protocol client (LoadSession, NewSession)
+- `gorp-core/src/session.rs` - SessionStore for persisting session IDs
 - `workspace/sessions.db` - SQLite storage for channel→session mappings
 
 ## Tested On

@@ -2,7 +2,7 @@
 
 **Date:** 2025-12-10
 **Test Environment:** matrix.org homeserver
-**Matrix SDK Version:** 0.7 (Rust)
+**Matrix SDK Version:** 0.16 (Rust)
 **Encryption Algorithm:** Megolm v1 AES-SHA2
 
 ## Executive Summary
@@ -95,17 +95,17 @@ The Matrix-Claude bridge successfully implements end-to-end encryption (E2EE) wi
 
 ### Critical Implementation Details
 
-#### Initial Sync Requirement (src/main.rs:268-279)
+#### Initial Sync Requirement (src/server.rs)
 
 ```rust
 // Perform initial sync to upload device keys and establish encryption
-tracing::info!("Performing initial sync to set up encryption...");
+tracing::info!("Performing initial sync...");
 let response = client
     .sync_once(SyncSettings::default())
     .await
     .context("Initial sync failed")?;
 
-tracing::info!("Initial sync complete - encryption keys exchanged");
+tracing::info!("Initial sync complete");
 
 // Start continuous sync loop with the sync token from initial sync
 let settings = SyncSettings::default().token(response.next_batch);
@@ -118,7 +118,7 @@ client.sync(settings).await?;
 - Room encryption keys cannot be received
 - Encrypted messages appear as undecryptable ciphertext
 
-#### Auto-Join Handler (src/main.rs:101-126)
+#### Auto-Join Handler (src/main.rs)
 
 ```rust
 if allowed_users.contains(inviter) {

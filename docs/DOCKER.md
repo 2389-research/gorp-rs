@@ -17,7 +17,7 @@ MATRIX_HOME_SERVER=https://matrix.org
 MATRIX_USER_ID=@yourbot:matrix.org
 MATRIX_PASSWORD=your_password
 ALLOWED_USERS=@youruser:matrix.org
-BACKEND_BINARY=/usr/local/bin/claude
+BACKEND_BINARY=/usr/local/bin/claude  # optional
 ```
 
 ### 3. Run the container
@@ -52,7 +52,7 @@ No host mount is needed for the Claude binary.
 
 The following directories are persisted as volumes under `./app-data/`:
 - `./app-data/config` - gorp configuration (config.toml)
-- `./app-data/data` - crypto store, logs, scheduled prompts db
+- `./app-data/data` - crypto store, logs
 - `./app-data/workspace` - Claude session workspace directories
 - `./app-data/claude-config` - Claude Code auth config
 - `./app-data/claude-settings` - Claude CLI settings
@@ -80,14 +80,14 @@ docker-compose down -v
 
 ### Container can't find claude binary
 
-Check if claude is mounted correctly:
+Check if claude is installed correctly:
 ```bash
 docker-compose exec gorp which claude
 ```
 
 ### Permission errors with volumes
 
-The container runs as the `gorp` user (UID 1000). If you have permission issues:
+The container runs as the `gorp` user. If you have permission issues:
 ```bash
 sudo chown -R 1000:1000 app-data
 ```

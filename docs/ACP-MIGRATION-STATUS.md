@@ -8,17 +8,17 @@ gorp has been migrated from direct Claude Code CLI invocation to using the Agent
 
 ### What Works
 
-1. **ACP Protocol Integration** - Full ACP client implementation in `src/acp_client.rs`
-2. **Warm Session Management** - Sessions are kept alive per-channel to avoid cold start latency (`src/warm_session.rs`)
-3. **Matrix Integration** - Messages flow from Matrix -> ACP -> AI -> Matrix responses
+1. **ACP Protocol Integration** - Full ACP client implementation in `gorp-agent/src/backends/acp.rs`
+2. **Warm Session Management** - Sessions are kept alive per-channel to avoid cold start latency (`gorp-core/src/warm_session.rs`)
+3. **Matrix Integration** - Messages flow through the message bus to the orchestrator, which routes to the appropriate agent backend
 4. **Configurable Backend** - Switch between Claude and Codex via `config.toml`
 
 ### Configuration
 
 ```toml
-[acp]
-# Options: "codex-acp" (default) or "claude-code-acp"
-agent_binary = "codex-acp"
+[backend]
+type = "acp"
+binary = "claude-code-acp"
 timeout_secs = 300
 ```
 
@@ -43,7 +43,7 @@ Matrix Message
      │
      ▼
 ┌─────────────────┐
-│  message_handler │  (src/message_handler.rs)
+│  message_handler │  (src/message_handler/)
 └────────┬────────┘
          │
          ▼
@@ -54,8 +54,8 @@ Matrix Message
          │
          ▼
 ┌─────────────────┐
-│   AcpClient     │  ACP protocol implementation
-│                 │  (src/acp_client.rs)
+│  AcpBackend /   │  ACP protocol implementation
+│ PersistentAcp   │  (gorp-agent/src/backends/acp.rs)
 └────────┬────────┘
          │
          ▼
@@ -103,33 +103,16 @@ local.run_until(async move {
 - Some prompts that require tool calls may not complete
 
 ### General
-- `load_session` method not supported by either backend (falls back to `new_session`)
-
-## Test Scripts
-
-Located in `.scratch/`:
-
-| Script | Purpose |
-|--------|---------|
-| `test_acp_direct.rs` | Direct ACP protocol test |
-| `test_warm_session.rs` | Warm session pattern test |
-| `test_timing.rs` | Compare MCP vs no-MCP overhead |
-| `test_rapid_prompts.rs` | Back-to-back prompt timing (supports `--codex` flag) |
-
-Run with:
-```bash
-cargo run --bin test_rapid_prompts          # Claude
-cargo run --bin test_rapid_prompts -- --codex  # Codex
-```
+- LoadSession is supported by the ACP backend. Falls back to NewSession when the remote session no longer exists.
 
 ## Files Changed in Migration
 
-- `src/acp_client.rs` - New ACP protocol client
-- `src/warm_session.rs` - Warm session management
-- `src/message_handler.rs` - Updated for ACP event handling
+- `gorp-agent/src/backends/acp.rs` - ACP protocol client (`AcpBackend`, `PersistentAcpClient`)
+- `gorp-core/src/warm_session.rs` - Warm session management
+- `src/message_handler/` - Message handler module, updated for ACP event handling
 - `src/main.rs` - LocalSet integration, channel-based message routing
-- `src/webhook.rs` - MCP endpoint at `/mcp`
-- `config.toml` - Added `[acp]` section
+- `src/mcp.rs` - MCP handler
+- `config.toml` - `[backend]` section
 
 ## Next Steps
 

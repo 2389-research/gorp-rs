@@ -56,12 +56,11 @@ cargo run --release
 
 Expected output:
 ```
-INFO Starting Matrix-Claude Bridge
+INFO Starting gorp - Matrix-Claude Bridge
 INFO Configuration loaded
 INFO Session store initialized
 INFO Logged in successfully
-INFO Joined room
-INFO Message handler registered, starting sync loop
+INFO Starting continuous sync loop with LocalSet
 ```
 
 ## Test Scenarios
@@ -120,7 +119,7 @@ On first run, the bot creates a new device. You must verify it:
 **Action 2:** Send from unverified device
 
 **Expected:**
-- Bot logs decryption failure
+- Bot logs decryption failure (depends on Matrix SDK internals)
 - Sends error message to room
 
 ## Scenario Test Details
@@ -214,7 +213,7 @@ trap cleanup EXIT
 - Clean old test databases: `cargo clean`
 
 **Scenario tests fail to compile:**
-- Tests fallback to `cargo test` automatically
+- If scenario tests aren't available, run `cargo test` for unit tests instead
 - Check that `cargo build --release` succeeds first
 
 **Unit tests pass but integration fails:**

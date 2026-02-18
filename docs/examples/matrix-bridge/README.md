@@ -10,7 +10,7 @@ tunnel through `--sdk-url`.
 - Optionally filters to a single room (listens to all rooms by default) and responds when a message starts with `!claude`.
 - Keeps a long-lived Claude session per Matrix room so follow-ups share context.
 - Supports `/reset` and `/end` commands inside Matrix to drop the session.
-- Pipes replies back to the room as Markdown/plain text.
+- Pipes replies back to the room as plain text.
 
 ## Prerequisites
 

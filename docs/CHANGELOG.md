@@ -17,7 +17,7 @@ All notable changes to gorp are documented here.
   - .claude/settings.json with session hooks
   - .gorp/schedule.yaml with example schedules
 - **MCP tools in Docker**: chronicle, memory, toki, pagen pre-installed
-- **Help system**: `!help` and `!changelog` commands with docs
+- **Help system**: `!help` command with docs
 
 ### Changed
 - Renamed `.matrix` directory to `.gorp` throughout codebase
@@ -33,7 +33,7 @@ All notable changes to gorp are documented here.
 ## [0.2.0] - 2025-12-11
 
 ### Added
-- **`!reset` command**: Reset Claude session and reload MCP tools
+- **`!reset` command**: Reset Claude session (new session created)
 - **`set_room_avatar` MCP tool**: Set room avatars programmatically
 - **`gorp rooms sync` command**: Rename all rooms to match prefix
 - **Auto-rename rooms**: Rooms update when `room_prefix` config changes

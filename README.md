@@ -14,8 +14,8 @@ Rust bot that creates dedicated Claude Code channels via Matrix, each backed by 
 ## Prerequisites
 
 - Rust 1.70+ (`rustup` recommended)
-- Claude Code CLI installed and authenticated (`claude auth status` to verify)
-- ACP adapter installed (one of):
+- Claude Code CLI installed and authenticated (`claude auth status` to verify) — only needed if using the `acp` backend
+- ACP adapter installed (only needed for `backend.type = "acp"`):
   ```bash
   # Codex (default, faster responses)
   npm install -g @zed-industries/codex-acp@latest
@@ -23,6 +23,7 @@ Rust bot that creates dedicated Claude Code channels via Matrix, each backed by 
   # Claude Code (alternative)
   npm install -g @zed-industries/claude-code-acp@latest
   ```
+  *Note: The `mux` backend requires no npm install — it uses native Rust via mux-rs.*
 - Matrix account for the bot
 - Matrix room with E2E encryption enabled
 
@@ -48,7 +49,7 @@ device_name = "claude-matrix-bridge"
 allowed_users = ["@you:matrix.org"]
 
 [backend]
-type = "acp"
+type = "acp"       # or "mux" for the native Rust backend (ships as default in config.toml.example)
 binary = "claude-code-acp"
 timeout_secs = 300
 
@@ -139,7 +140,7 @@ Configuration is loaded from `config.toml` with optional environment variable ov
 - `matrix.allowed_users` - Array of authorized user IDs
 
 **ACP Settings:**
-- `backend.binary` - ACP agent binary (depends on backend type)
+- `backend.binary` - Agent binary path (used by acp and direct backends)
 - `backend.timeout_secs` - Timeout for ACP operations (default: 300)
 
 **Webhook Settings:**
@@ -160,7 +161,7 @@ Environment variables override config file values:
 
 **Decryption failures:**
 - Verify the bot's device from another client
-- Check `crypto_store/` exists and has correct permissions
+- Check `~/.local/share/gorp/crypto_store/` exists and has correct permissions
 
 **Claude/ACP errors:**
 - Verify Claude CLI is authenticated: `claude auth status`

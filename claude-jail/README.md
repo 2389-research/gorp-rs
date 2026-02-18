@@ -1,8 +1,8 @@
-<!-- ABOUTME: Claude jail configuration for sandboxed execution -->
-<!-- ABOUTME: Contains security policies and resource constraints -->
+<!-- ABOUTME: WebSocket server wrapping Claude Agent SDK for gorp-rs -->
+<!-- ABOUTME: Manages per-channel Claude sessions with WebSocket protocol -->
 
 # claude-jail
 
-Configuration for sandboxed Claude execution environments. This directory
-contains security policies and resource constraints used to isolate Claude
-sessions from the host system.
+WebSocket server that wraps the Claude Agent SDK for gorp-rs. Manages
+per-channel Claude sessions, streams responses over WebSocket, and loads
+MCP server configuration from workspace directories.

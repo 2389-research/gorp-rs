@@ -153,6 +153,11 @@ ALLOWED_USERS=@yourname:matrix.org
 gorp start
 ```
 
+### From source:
+```bash
+cargo run --release -- start
+```
+
 ### Using Docker:
 ```bash
 docker-compose up -d
@@ -186,10 +191,10 @@ Once chatting with gorp, you can use these commands:
 | Command | What it does |
 |---------|--------------|
 | `!help` | Show available commands |
-| `!join roomname` | Create/join a topic room |
-| `!schedule every day at 9am: Good morning!` | Schedule a recurring prompt |
+| `!join roomname` | Get invited to an existing channel room |
+| `!schedule every day at 9am Good morning!` | Schedule a recurring prompt |
 | `!schedule list` | Show scheduled prompts |
-| `!reset` | Reset conversation history |
+| `!reset` | Reset Claude session (starts fresh) |
 
 ---
 
@@ -201,7 +206,7 @@ Once chatting with gorp, you can use these commands:
 - Try logging out and back in to Element
 
 ### Bot doesn't respond
-- Check that gorp is running: `gorp start`
+- Make sure gorp is running (start with `cargo run --release -- start`)
 - Verify your Matrix ID is in `allowed_users`
 - Look at the logs for errors
 

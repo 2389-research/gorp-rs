@@ -7,7 +7,7 @@
 #
 # Data directories:
 #   - Crypto store: ~/.local/share/gorp/crypto_store/
-#   - Sessions DB: <workspace>/channels.db
+#   - Sessions DB: <workspace>/sessions.db
 #   - Logs: ~/.local/share/gorp/logs/
 #
 # Docker paths (when using docker-compose):

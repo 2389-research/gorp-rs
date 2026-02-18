@@ -23,7 +23,7 @@ Outputs:
 - `Info.plist` - App bundle metadata
 - `build-app.sh` - Creates .app bundle from release binary
 - `build-dmg.sh` - Creates DMG with Applications symlink
-- `generate-icon.sh` - Creates placeholder icon (needs Python/Pillow)
+- `generate-icon.sh` - Creates .icns from source PNG (uses sips/iconutil; falls back to Python/Pillow if no source image)
 - `com.2389.gorp.plist` - LaunchAgent for auto-start at login
 
 ### Code Signing & Notarization
@@ -67,7 +67,7 @@ Formula at `packaging/homebrew/gorp.rb`. To use:
 4. Users can then install with:
    ```bash
    brew tap 2389-research/tap
-   brew install --cask gorp
+   brew install gorp
    ```
 
 ## Icon

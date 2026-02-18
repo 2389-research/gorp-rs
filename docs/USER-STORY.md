@@ -234,12 +234,12 @@ gorp schedule list
 ```
 
 ```
-Channel    | Prompt                              | Schedule
------------+-------------------------------------+------------------
-weather    | weather forecast                    | Daily 7:00 AM
-pa         | check on the build                  | In 1h 43m
-research   | summarize what we learned           | Fridays 4:00 PM
-research   | check HN for AI news                | Weekdays 9:00 AM
+ID       Status     Next Execution       Prompt
+----------------------------------------------------------------------
+a1b2c3d4 Active     2025-01-06T07:00 weather forecast
+e5f6a7b8 Active     2025-01-05T14:43 check on the build
+c9d0e1f2 Active     2025-01-10T16:00 summarize what we learned
+f3a4b5c6 Active     2025-01-06T09:00 check HN for AI news
 ```
 
 ---
