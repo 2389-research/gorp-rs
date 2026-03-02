@@ -87,7 +87,7 @@ jobs:
         run: cp target/${{ matrix.target }}/release/gorp ${{ matrix.artifact_name }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
