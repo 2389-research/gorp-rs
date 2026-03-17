@@ -159,7 +159,7 @@ pub async fn handle_incoming(
             .send(
                 &msg.channel_id,
                 MessageContent::plain(
-                    "No Claude channel attached to this room. DM me to create one with: !create <name>",
+                    "No Claude channel attached to this room. Use !create <name> to create one.",
                 ),
             )
             .await?;
@@ -580,7 +580,7 @@ pub async fn handle_message(
             .await;
         } else {
             let help_msg = "No Claude channel attached to this room.\n\n\
-                💡 DM me to create a channel with: !create <name>\n\n\
+                💡 Use !create <name> to create a channel.\n\n\
                 Need help? Send: !help";
             let help_html = markdown_to_html(help_msg);
             room.send(RoomMessageEventContent::text_html(help_msg, &help_html))

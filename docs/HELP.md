@@ -4,7 +4,7 @@ gorp is a multi-platform Claude bridge that creates persistent AI assistant chan
 
 ## Quick Start
 
-1. DM the bot: `!create mychannel`
+1. Send `!create mychannel`
 2. Join the created room
 3. Start chatting with Claude!
 
@@ -14,7 +14,6 @@ gorp is a multi-platform Claude bridge that creates persistent AI assistant chan
 
 These commands work in direct messages to the bot:
 
-- `!create <name>` - Create a new channel with workspace
 - `!join <name>` - Get invited to an existing channel
 - `!delete <name>` - Remove channel (keeps workspace files)
 - `!cleanup` - Leave orphaned rooms
@@ -27,6 +26,7 @@ These commands work in direct messages to the bot:
 
 These commands work in channel rooms:
 
+- `!create <name>` - Create a new channel with workspace
 - `!help` - Show this help
 - `!status` - Show channel info (session, directory, debug state)
 - `!debug on/off` - Toggle tool usage display

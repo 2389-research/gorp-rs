@@ -79,7 +79,7 @@ The bot creates a new Matrix device on first login. Verify it from another clien
 
 ### Creating a Channel
 
-1. DM the bot: `!create PA` (creates a "PA" channel)
+1. Send `!create PA` from any Matrix room the bot can access
 2. Bot creates:
    - `workspace/PA/` directory
    - Matrix room "Claude: PA"
@@ -111,6 +111,7 @@ When you create a new channel, all template contents are automatically copied to
 - `!help` - Show help
 
 **Room Commands:**
+- `!create <name>` - Create a new channel
 - `!status` - Show channel info (includes webhook URL and session ID)
 - `!help` - Show help
 

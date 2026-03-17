@@ -553,7 +553,7 @@ async fn channel_create(
     // Direct users to proper creation methods
     ToastTemplate {
         message: format!(
-            "To create channel '{}': DM the bot with !create {} or use the MCP create_channel tool from a Claude session.",
+            "To create channel '{}': send !create {} from any Matrix room or use the MCP create_channel tool from a Claude session.",
             name, name
         ),
         is_error: false, // Info message, not an error

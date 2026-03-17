@@ -51,14 +51,6 @@ pub async fn handle_matrix_command(
             onboarding::reset_and_start(room, session_store, sender).await?;
         }
         "create" => {
-            if !is_dm {
-                room.send(RoomMessageEventContent::text_plain(
-                    "❌ The !create command only works in DMs.\n\nDM me to create a new channel!",
-                ))
-                .await?;
-                return Ok(());
-            }
-
             if command_parts.len() < 2 {
                 room.send(RoomMessageEventContent::text_plain(
                     "Usage: !create <channel-name>\n\n\

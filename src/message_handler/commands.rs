@@ -54,6 +54,7 @@ pub async fn handle_command<C: ChatChannel>(
             !help - Show detailed help"
         } else {
             "Available commands:\n\
+            !create <name> - Create new channel\n\
             !help - Show detailed help\n\
             !status - Show current channel info\n\
             !backend - View/change backend for this channel\n\
@@ -127,7 +128,7 @@ pub async fn handle_command<C: ChatChannel>(
                     .send(MessageContent::plain(
                         "📊 Channel Status\n\n\
                     No channel attached.\n\n\
-                    DM me to create one: !create <name>",
+                    Use !create <name> to create one.",
                     ))
                     .await?;
             }
@@ -375,6 +376,7 @@ pub async fn handle_command<C: ChatChannel>(
                 !help - Show detailed help"
             } else {
                 "Unknown command. Available commands:\n\
+                !create <name> - Create new channel\n\
                 !status - Show channel info\n\
                 !debug - Toggle tool usage display\n\
                 !reset - Reset Claude session (reload MCP tools)\n\
@@ -536,6 +538,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(room.has_message_containing("Available commands"));
         assert!(room.has_message_containing("!help"));
+        assert!(room.has_message_containing("!create <name>"));
     }
 
     // =========================================================================
@@ -663,6 +666,8 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(room.has_message_containing("No channel attached"));
+        assert!(room.has_message_containing("Use !create <name>"));
+        assert!(!room.has_message_containing("DM me to create one"));
     }
 
     // =========================================================================
